@@ -266,6 +266,77 @@ public:
             assert(iword_idx_ == inst_->ilen);
             assert(inst_->nea == 0 || (ea_calced_[0] && (inst_->nea == 1 || ea_calced_[1])));
         } catch (const address_error_exception&) {
+            // HACK: Undo post-increment if that was the cause of the address error
+            // and adjust the program counter to point to the correct instruction word
+            assert(inst_->size != opsize::b);
+            for (int i = inst_->nea; i--;) {
+                if (!ea_calced_[i])
+                    continue;
+                switch (inst_->ea[i] >> ea_m_shift) {
+                case ea_m_Dn:
+                case ea_m_An:
+                    break;
+                case ea_m_A_ind:
+                    if (ea_data_[i] == invalid_access_address_)
+                        goto found;
+                    break;
+                case ea_m_A_ind_post:
+                    if (ea_data_[i] == invalid_access_address_) {
+                        state_.A(inst_->ea[i] & ea_xn_mask) -= inst_->size == opsize::l ? 4 : 2;
+                        goto found;
+                    }
+                    break;
+                case ea_m_A_ind_pre:
+                    if (ea_data_[i] == invalid_access_address_)
+                        goto found;
+                    break;
+                case ea_m_A_ind_disp16:
+                    state_.pc -= 2;
+                    if (ea_data_[i] == invalid_access_address_)
+                        goto found;
+                    break;
+                case ea_m_A_ind_index:
+                    state_.pc -= 2;
+                    if (ea_data_[i] == invalid_access_address_)
+                        goto found;
+                    break;
+                case ea_m_Other:
+                    switch (inst_->ea[i] & ea_xn_mask) {
+                    case ea_other_abs_w:
+                        if (ea_data_[i] == invalid_access_address_)
+                            goto found;
+                        state_.pc -= 2;
+                        break;
+                    case ea_other_abs_l:
+                        if (ea_data_[i] == invalid_access_address_)
+                            goto found;
+                        state_.pc -= 4;
+                        break;
+                    case ea_other_pc_disp16:
+                        state_.pc -= 2;
+                        if (ea_data_[i] == invalid_access_address_) {
+                            // Function code should specify "program" instead of data
+                            invalid_access_info_ &= ~1;
+                            invalid_access_info_ |= 2;
+                            goto found;
+                        }
+                        break;
+                    case ea_other_pc_index:
+                        state_.pc -= 2;
+                        if (ea_data_[i] == invalid_access_address_) {
+                            // Function code should specify "program" instead of data
+                            invalid_access_info_ &= ~1;
+                            invalid_access_info_ |= 2;
+                            goto found;
+                        }
+                        break;
+                    case ea_other_imm:
+                        break;
+                    }
+                }
+                break;
+            }
+found:
             trace_active = false;
             if (state_.sr & srm_s)
                 invalid_access_info_ |= 4;
