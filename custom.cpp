@@ -772,6 +772,62 @@ public:
         s_.bltw = s_.blth = 0;
     }
 
+    void do_copper()
+    {
+        // TODO: Comparisons are different for copper $ffdf wait should work for asm as well...
+        // Each copper command takes 8 cycles (4 raster pos increments) to execute
+        // TODO: Wait actually uses an extra cycle (?)
+
+        if (s_.copper_inst[0] == 0xFFFF && s_.copper_inst[1] == 0xFFFE) {
+            return;
+        }
+
+        if (s_.copper_inst[0] == 0 && s_.copper_inst[1] == 0) {
+            // This hack can probably be removed if the copper is paused after writing to a "dangerous" register without COPPERDANG enabled
+#ifdef COPPER_DEBUG
+            std::cout << "Hack, halting copper after reading 0,0\n";
+#endif
+            pause_copper();
+            return;
+        }
+
+
+        if (s_.copper_inst[0] & 1) {
+            // Wait/skip
+            const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
+            const auto hp = s_.copper_inst[0] & 0xfe;
+            const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
+            const auto he = s_.copper_inst[1] & 0xfe;
+
+            if (!(s_.copper_inst[1] & 0x8000) && !(s_.dmacon & DMAF_BLTDONE)) {
+                // Blitter wait
+            } else if ((s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he))) {
+#ifdef COPPER_DEBUG
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos>>1,4) << ") Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
+#endif
+                s_.copper_inst_ofs = 0; // Fetch next instruction
+                if (s_.copper_inst[1] & 1) {
+                    // SKIP instruction. Actually reads next instruction, but does nothing?
+#ifdef COPPER_DEBUG
+                    std::cout << "Warning: SKIP processed\n";
+#endif
+                    assert(0);
+                }
+            }
+
+        } else {
+            // TODO: Check which register is accessed ($20+ is ok, $10+ ok only with copper danger)
+            const auto reg = s_.copper_inst[0] & 0x1ff;
+            if (reg != 0 || s_.copper_inst[1] != 0) // Seems to be used as a kind of NOP in the kickstart copper list?
+                write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+#ifdef COPPER_DEBUG
+            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos>>1,4) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
+#endif
+            s_.copper_inst_ofs = 0; // Fetch next instruction
+        }
+
+    }
+
     void step()
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
@@ -953,6 +1009,10 @@ public:
             }
         }
 
+        if (s_.copper_inst_ofs == 2) {
+            do_copper();
+        }
+
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
             auto do_dma = [&mem = this->mem_](uint32_t& pt) {
                 const auto val = mem.read_u16(pt);
@@ -961,8 +1021,12 @@ public:
             };
 
             do {
+                // Only 226 slots are usable
+                if (colclock == 0xE3)
+                    break;
+
                 // Refresh
-                if (colclock == 0xE3 || colclock == 1 || colclock == 3 || colclock == 5)
+                if (colclock == 0xE2 || colclock == 1 || colclock == 3 || colclock == 5)
                     break;
 
                 // Disk
@@ -1060,68 +1124,30 @@ public:
                     }
                 }
 
-                // Copper (uses only odd cycles)
-                // Hack: 0xE1 is not available for copper?
-                if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2 && (colclock & 1) && colclock != 0xE1) {
+                // Copper (uses only odd-numbered cycles)
+                if ((s_.dmacon & (DMAF_MASTER | DMAF_COPPER)) == (DMAF_MASTER | DMAF_COPPER) && s_.copper_inst_ofs < 2 && !(colclock & 1)) {
+                    if (colclock == 0xe0) {
+#ifdef COPPER_DEBUG
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Wasting cycle (HACK)\n";
+#endif
+                        break; // $E0 not usable by copper?
+                    }
+
                     s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
 #ifdef COPPER_DEBUG
                     std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Read copper instruction word $" << hexfmt(s_.copper_inst[s_.copper_inst_ofs-1]) << " from $" << hexfmt(s_.copper_pt-2) << "\n";
-#endif
-                    if (s_.copper_inst_ofs == 2 && s_.copper_inst[0] == 0 && s_.copper_inst[1] == 0) {
-                        // This hack can probably be removed if the copper is paused after writing to a "dangerous" register without COPPERDANG enabled
-#ifdef COPPER_DEBUG
-                        std::cout << "Hack, halting copper after reading 0,0\n";
-#endif
-                        pause_copper();
+                    if (s_.copper_inst_ofs == 2 && s_.copper_inst[0] == 0xFFFF && s_.copper_inst[1] == 0xFFFE) {
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " End of copper list.\n";
                     }
+#endif
                     break;
                 }
                 
-                // TODO: Blitter
+                // Blitter
                 if (s_.blth) {
                     do_blit();
                 }
             } while (0);
-        }
-
-        if (s_.copper_inst_ofs == 2) {
-            // Each copper command takes 8 cycles (4 raster pos increments) to execute
-            // TODO: Wait actually uses an extra cycle (?)
-
-            if (s_.copper_inst[0] & 1) {
-                // Wait/skip
-                const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
-                const auto hp = s_.copper_inst[0] & 0xfe;
-                const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
-                const auto he = s_.copper_inst[1] & 0xfe;
-
-                if (!(s_.copper_inst[1] & 0x8000) && !(s_.dmacon & DMAF_BLTDONE)) {
-                    // Blitter wait
-                } else if ((s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he))) {
-#ifdef COPPER_DEBUG
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
-#endif
-                    s_.copper_inst_ofs = 0; // Fetch next instruction
-                    if (s_.copper_inst[1] & 1) {
-                        // SKIP instruction. Actually reads next instruction, but does nothing?
-#ifdef COPPER_DEBUG
-                        std::cout << "Warning: SKIP processed\n";
-#endif
-                        assert(0);
-                    }
-                }
-
-                //std::cout << "Wait $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
-            } else {
-                // TODO: Check which register is accessed ($20+ is ok, $10+ ok only with copper danger)
-                const auto reg = s_.copper_inst[0] & 0x1ff;
-                if (reg != 0 || s_.copper_inst[1] != 0) // Seems to be used as a kind of NOP in the kickstart copper list?
-                    write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
-#ifdef COPPER_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
-#endif
-                s_.copper_inst_ofs = 0; // Fetch next instruction
-            }
         }
 
         // CIA tick rate is 1/10th of (base) CPU speed
@@ -1415,10 +1441,10 @@ public:
             s_.diwstop = val;
             return;
         case DDFSTRT: // $092
-            s_.ddfstrt = val;
+            s_.ddfstrt = val & 0xfc;
             return;
         case DDFSTOP: // $094
-            s_.ddfstop = val;
+            s_.ddfstop = val & 0xfc;
             return;
         case DMACON:  // $096
             setclr(s_.dmacon, val & ~(1 << 14 | 1 << 13 | 1 << 12 | 1 << 11));

@@ -532,10 +532,11 @@ private:
 
     void on_destroy()
     {
+        if (mouse_captured_)
+            release_mouse();
         DeleteObject(hbm_);
         DeleteDC(hdc_);
         PostQuitMessage(0);
-        release_mouse();
     }
 
     void on_paint()
