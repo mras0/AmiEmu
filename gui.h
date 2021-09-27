@@ -14,6 +14,7 @@ public:
 
     enum class event_type {
         quit,
+        reset,
         keyboard,
         mouse_button,
         mouse_move,

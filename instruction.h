@@ -162,6 +162,8 @@ constexpr uint8_t ea_usp       = 0b01'001'000;
 constexpr unsigned max_instruction_words = 5; // 68020+ can be 11 words
 
 constexpr uint16_t illegal_instruction_num = 0x4afc; // Designated illegal instruction
+constexpr uint16_t reset_instruction_num   = 0x4e70;
+constexpr uint16_t stop_instruction_num    = 0x4e72;
 
 extern const instruction instructions[65536];
 

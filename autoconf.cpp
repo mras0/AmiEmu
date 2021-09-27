@@ -8,6 +8,7 @@ autoconf_device::autoconf_device(memory_handler& mem_handler, memory_area_handle
     : mem_handler_ { mem_handler }
     , area_handler_ { area_handler }
     , config_ { config }
+    , base_ { 0 }
 {
     memset(conf_data_, 0, sizeof(conf_data_));
     assert((config.type & 0xc7) == 0);
@@ -42,8 +43,16 @@ void autoconf_device::activate(uint8_t base)
 {
     assert(mode_ == mode::autoconf);
     mode_ = mode::active;
+    base_ = base;
     std::cout << "[AUTOCONF] " << desc() << " activating at $" << hexfmt(base << 16, 8) << "\n";
     mem_handler_.register_handler(area_handler_, base << 16, config_.size);
+}
+
+void autoconf_device::config_mode()
+{
+    assert(mode_ == mode::active);
+    mem_handler_.unregister_handler(area_handler_, base_ << 16, config_.size);
+    mode_ = mode::autoconf;
 }
 
 
@@ -86,11 +95,22 @@ void autoconf_handler::add_device(autoconf_device& dev)
     devices_.push_back(&dev);
 }
 
-void autoconf_handler::remove_device()
+void autoconf_handler::device_configured()
 {
     assert(!devices_.empty());
+    auto dev = devices_.back();
     has_low_addr_ = false;
     devices_.pop_back();
+    configured_devices_.push_back(dev);
+}
+
+void autoconf_handler::reset()
+{
+    for (auto it = configured_devices_.rbegin(); it != configured_devices_.rend(); ++it) {
+        (*it)->config_mode();
+        devices_.push_back(*it);
+    }
+    configured_devices_.clear();
 }
 
 uint8_t autoconf_handler::read_u8(uint32_t, uint32_t offset)
@@ -131,7 +151,7 @@ void autoconf_handler::write_u8(uint32_t, uint32_t offset, uint8_t val)
             if (!has_low_addr_)
                 std::cerr << "[AUTOCONF] Warning high address written without low address val=$" << hexfmt(val) << "\n";
             dev.activate(static_cast<uint16_t>((val & 0xf0) | low_addr_hold_));
-            remove_device();
+            device_configured();
             return;
         } else if (offset == 0x4a) {
             if (has_low_addr_)
@@ -142,7 +162,7 @@ void autoconf_handler::write_u8(uint32_t, uint32_t offset, uint8_t val)
         } else if (offset == 0x4c) {
             // shutup
             dev.shutup();
-            remove_device();
+            device_configured();
             return;
         }
     } else {

@@ -169,6 +169,7 @@ public:
     struct step_result {
         uint32_t last_pc;
         uint32_t current_pc;
+        uint16_t instruction;
         bool stopped;
     };
     using cycle_handler = std::function<void (uint8_t)>;
@@ -179,6 +180,8 @@ public:
     void set_cycle_handler(const cycle_handler& handler);
 
     step_result step(uint8_t current_ipl = 0);
+
+    void reset();
 
 private:
     class impl;

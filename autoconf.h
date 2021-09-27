@@ -23,6 +23,7 @@ public:
     void write_config_byte(uint8_t offset, uint8_t val);
     void shutup();    
     void activate(uint8_t base);
+    void config_mode();
 
 protected:
     explicit autoconf_device(memory_handler& mem_handler, memory_area_handler& area_handler, const board_config& config);
@@ -33,6 +34,7 @@ private:
     memory_area_handler& area_handler_;
     const board_config config_;
     uint8_t conf_data_[12];
+    uint8_t base_;
 
     std::string desc() const;
 
@@ -70,15 +72,17 @@ public:
 private:
     static constexpr uint32_t base = 0xe80000;
     std::vector<autoconf_device*> devices_;
+    std::vector<autoconf_device*> configured_devices_;
     uint8_t low_addr_hold_ = 0;
     bool has_low_addr_ = 0;
 
-    void remove_device();
+    void device_configured();
 
     uint8_t read_u8(uint32_t, uint32_t offset) override;
     uint16_t read_u16(uint32_t addr, uint32_t offset) override;
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override;
+    void reset() override;
 };
 
 #endif

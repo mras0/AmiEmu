@@ -50,6 +50,11 @@ private:
     uint32_t ptr_hold_ = 0;
     std::vector<uint8_t> buffer_;
 
+    void reset() override
+    {
+        ptr_hold_ = 0;
+    }
+
     uint8_t read_u8(uint32_t, uint32_t offset) override
     {
         if (offset >= config.rom_vector_offset && offset < config.rom_vector_offset + sizeof(exprom)) {

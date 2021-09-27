@@ -53,6 +53,8 @@ public:
         write_u16(addr, offset, val >> 16);
         write_u16(addr + 2, offset + 2, val & 0xffff);
     }
+
+    virtual void reset() = 0;
 };
 
 class default_handler : public memory_area_handler {
@@ -61,6 +63,7 @@ public:
     uint16_t read_u16(uint32_t addr, uint32_t) override;
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t, uint16_t val) override;
+    void reset() override { }
 };
 
 class ram_handler : public memory_area_handler {
@@ -75,6 +78,7 @@ public:
     uint16_t read_u16(uint32_t, uint32_t offset) override;
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override;
+    void reset() override { }
 
 private:
     std::vector<uint8_t> ram_;
@@ -95,6 +99,7 @@ public:
     uint16_t read_u16(uint32_t, uint32_t offset) override;
     void write_u8(uint32_t addr, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t offset, uint16_t val) override;
+    void reset() override { }
 
 private:
     memory_handler& mem_handler_;
@@ -131,6 +136,8 @@ public:
     void write_u8(uint32_t addr, uint8_t val);
     void write_u16(uint32_t addr, uint16_t val);
     void write_u32(uint32_t addr, uint32_t val);
+
+    void reset();
 
 private:
     struct area {

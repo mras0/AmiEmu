@@ -85,10 +85,15 @@ public:
     explicit impl(memory_handler& mem)
         : mem_ { mem }
     {
+        reset();
+    }
+
+    void reset()
+    {
         memset(&state_, 0, sizeof(state_));
         state_.sr = srm_s | srm_ipl; // 0x2700
-        state_.ssp = mem.read_u32(0);
-        state_.pc = mem.read_u32(4);
+        state_.ssp = mem_.read_u32(0);
+        state_.pc = mem_.read_u32(4);
         prefetch();
     }
 
@@ -122,14 +127,14 @@ public:
 
         if (state_.stopped) {
             if (!trace_active && !current_ipl)
-                return { state_.pc, state_.pc, true };
+                return { state_.pc, state_.pc, iwords_[0], true };
             state_.stopped = false;
         }
         assert(current_ipl < 8);
 
         ++state_.instruction_count;
         start_pc_ = state_.pc;
-        step_result step_res { state_.pc, 0, false };
+        step_result step_res { state_.pc, 0, 0, false };
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
             do_interrupt(current_ipl);
@@ -240,6 +245,7 @@ public:
                 HANDLE_INST(ROR);
                 HANDLE_INST(ROXL);
                 HANDLE_INST(ROXR);
+                HANDLE_INST(RESET);
                 HANDLE_INST(RTE);
                 HANDLE_INST(RTR);
                 HANDLE_INST(RTS);
@@ -364,6 +370,8 @@ found:
             if (trace_active)
                 do_trap(interrupt_vector::trace);
         }
+
+        step_res.instruction = iwords_[0];
 
         return step_res;
     }
@@ -1804,6 +1812,12 @@ private:
         push_u32(addr);
     }
 
+    void handle_RESET()
+    {
+        // Handle externally
+        state_.pc = start_pc_;
+    }
+
     void handle_ROL()
     {
         uint32_t val, cnt;
@@ -2116,4 +2130,9 @@ void m68000::set_cycle_handler(const cycle_handler& handler)
 m68000::step_result m68000::step(uint8_t current_ipl)
 {
     return impl_->step(current_ipl);
+}
+
+void m68000::reset()
+{
+    impl_->reset();
 }

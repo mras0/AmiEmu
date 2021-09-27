@@ -130,8 +130,8 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     map[VK_LCONTROL] = 0x63; // No right control!
     map[VK_LMENU] = 0x64;
     map[VK_RMENU] = 0x65;
-    map[VK_HOME] = 0x66;  // left amiga 0x66
-    map[VK_END] = 0x67; // right amiga 0x67
+    map[VK_INSERT] = 0x66;  // left amiga 0x66
+    map[VK_HOME] = 0x67; // right amiga 0x67
  
     return map;
 }();
@@ -1252,6 +1252,10 @@ private:
         if (key == 0xff) {
             std::cerr << "Unhandled virtual key " << vk << " ($" << hexfmt(static_cast<uint8_t>(vk)) << ")\n";
             return;
+        }
+        if (pressed && (key == 0x63 || key == 0x66 || key == 0x67)) {
+            if (GetKeyState(VK_LCONTROL) < 0 && GetKeyState(VK_HOME) < 0 && GetKeyState(VK_INSERT) < 0)
+                events_.push_back({ event_type::reset });
         }
         events_.push_back({ event_type::keyboard, keyboard_event { pressed, key } });
     }

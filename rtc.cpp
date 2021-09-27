@@ -26,6 +26,10 @@ private:
     static constexpr uint8_t crf_test = 8;
     uint8_t cr_[3] = { 0, 0, crf_24hr };
 
+    void reset() override
+    {
+    }
+
     uint8_t read_u8(uint32_t, uint32_t offset) override
     {
         if (offset < 0x40) {

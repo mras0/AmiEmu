@@ -240,3 +240,14 @@ memory_handler::area& memory_handler::find_area(uint32_t& addr)
     }
     return def_area_;
 }
+
+void memory_handler::reset()
+{
+    std::vector<memory_area_handler*> already_reset;
+    for (auto& a : areas_) {
+        if (std::find(already_reset.begin(), already_reset.end(), a.handler) != already_reset.end())
+            continue;
+        already_reset.push_back(a.handler);
+        a.handler->reset();
+    }
+}

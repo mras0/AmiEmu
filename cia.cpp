@@ -205,7 +205,6 @@ public:
         assert(dfs[0]);
         memcpy(drives_, dfs, sizeof(drives_));
         mem_handler_.register_handler(*this, 0xBF0000, 0x10000);
-        rom_handler_.set_overlay(true);
         reset();
         // Since all ports are set to input, OVL in CIA pra is high -> OVL set
         assert(s_[0].port_value(0) & CIAF_OVERLAY);
@@ -243,15 +242,12 @@ public:
             return handle_read(!(addr & 1), (addr >> 8) & 0xf);
         }
         std::cerr << "To handle 8-bit read from CIA: addr=$" << hexfmt(addr) << "\n";
-        assert(0);
         return 0xFF;
     }
 
-    uint16_t read_u16(uint32_t addr, uint32_t) override
+    uint16_t read_u16(uint32_t addr, uint32_t offset) override
     {
-        std::cerr << "Invalid 16-bit read from CIA: addr=$" << hexfmt(addr) << "\n";
-        assert(0);
-        return 0xFF;
+        return read_u8(addr, offset) << 8 | read_u8(addr + 1, offset + 1);
     }
 
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override
@@ -389,7 +385,7 @@ private:
 
     static constexpr uint32_t latch_active_mask = 0x8000'0000;
 
-    void reset()
+    void reset() override
     {
         memset(s_, 0, sizeof(s_));
         // Set output pin values to high (since they're connected to pull-ups)
@@ -399,6 +395,7 @@ private:
         s_[1].port_input[1] = 0xFF;
         kbd_buffer_head_ = kbd_buffer_tail_ = 0;
         kbd_ack_ = true;
+        rom_handler_.set_overlay(true);
     }
 
     static constexpr bool valid_address(uint32_t addr)

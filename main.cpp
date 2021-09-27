@@ -441,7 +441,7 @@ int main(int argc, char* argv[])
         uint8_t pending_disk_drive = 0xff;
         uint32_t disk_chosen_countdown = 0;
         constexpr uint32_t invalid_pc = ~0U;
-        enum {wait_none, wait_next_inst, wait_exact_pc, wait_non_rom_pc, wait_vpos} wait_mode = wait_none;
+        enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_non_rom_pc, wait_vpos} wait_mode = wait_none;
         uint32_t wait_arg = 0;
         std::vector<uint32_t> breakpoints;
         bool debug_mode = false;
@@ -459,6 +459,7 @@ int main(int argc, char* argv[])
         bool audio_buffer_ready[2] = { false, false };
         int audio_next_to_play = 0;
         int audio_next_to_fill = 0;
+        bool reset = false;
 
         cpu.set_cycle_handler([&](uint8_t cycles) {
             assert(cpu_active);
@@ -578,9 +579,6 @@ int main(int argc, char* argv[])
                 audio->set_paused(pause);
         });
 
-        // Temp:
-        //debug_flags |= debug_flag_audio;
-
         constexpr uint32_t min_rom_addr = 0x00e0'0000;
         mem.set_memory_interceptor([&](uint32_t addr, uint32_t /*data*/, uint8_t size, bool /*write*/) {
             if (!cpu_active)
@@ -608,6 +606,9 @@ int main(int argc, char* argv[])
                     switch (evt.type) {
                     case gui::event_type::quit:
                         quit = true;
+                        break;
+                    case gui::event_type::reset:
+                        reset = true;
                         break;
                     case gui::event_type::keyboard:
                         cias.keyboard_event(evt.keyboard.pressed, evt.keyboard.scancode);
@@ -689,6 +690,19 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "fd") {
                             breakpoints.clear();
                             std::cout << "All breakpoints deleted\n";
+                        } else if (args[0] == "fi") {
+                            if (args.size() > 1) {
+                                auto [valid, inst] = from_hex(args[1]);
+                                if (valid && inst < 0x10000) {
+                                    wait_mode = wait_exact_inst;
+                                    wait_arg = inst;
+                                    break;
+                                } else {
+                                    std::cerr << "Invalid instruction\n";
+                                }
+                            } else {
+                                std::cerr << "fi without arguments not supported yet\n";
+                            }
                         } else if (args[0] == "g") {
                             break;
                         } else if (args[0] == "m") {
@@ -874,20 +888,22 @@ unknown_command:
                 cpu_step = cpu.step(custom_step.ipl);
                 cpu_active = false;
                    
-                if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr)) {
-                    active_debugger();
-                    wait_mode = wait_none;
-                } else if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
-                    active_debugger();
-                    std::cout << "Breakpoint hit\n";
-                }
-
                 if (cpu_step.stopped) {
                     do {
                         ++idle_count;
                         cstep(false);
                     } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
                 } else {
+                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr) || (wait_mode == wait_exact_inst && cpu_step.instruction == wait_arg)) {
+                        active_debugger();
+                        wait_mode = wait_none;
+                    } else if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
+                        active_debugger();
+                        std::cout << "Breakpoint hit\n";
+                    }
+
+                    if (cpu_step.instruction == reset_instruction_num)
+                        reset = true;
                     do_all_custom_cylces();
                     idle_count = 0;
                 }
@@ -903,6 +919,14 @@ unknown_command:
                     pc_log_pos = (pc_log_pos + 1) % pc_log_size;
                 }
 #endif
+                if (reset) {
+                    std::cout << "RESET\n";
+                    if (!debug_mode) {
+                        mem.reset();
+                        cpu.reset();
+                        reset = false;
+                    }
+                }
 
                 if (new_frame) {
                     if (disk_chosen_countdown) {

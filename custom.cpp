@@ -923,7 +923,7 @@ public:
         reset();
     }
 
-    void reset()
+    void reset() override
     {
         memset(gfx_buf_, 0, sizeof(gfx_buf_));
         memset(audio_buf_, 0, sizeof(audio_buf_));
@@ -1321,7 +1321,9 @@ public:
 
     void blitstart(uint16_t val)
     {
-        assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTBUSY) && s_.blitstate == custom_state::blit_stopped);
+        if (s_.blitstate != custom_state::blit_stopped) {
+            DBGOUT << "Warning: Blitter started while busy. bltx=$" << hexfmt(s_.bltx) << " blth=$" << hexfmt(s_.blth) << " busy=" << !!(s_.dmacon & DMAF_BLTBUSY) << " state=" << (int)s_.blitstate << "\n";
+        }
         s_.bltsize = val;
         s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
         s_.blth = val >> 6 ? val >> 6 : 0x400;
