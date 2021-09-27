@@ -1147,14 +1147,15 @@ int main()
         if (!run_simple_tests())
             return 1;
 
-        if (!test_timing())
+        if (!run_winuae_tests())
             return 1;
 
-        if (!run_winuae_tests())
+        if (!test_timing())
             return 1;
 
         if (!run_tests())
             return 1;
+
     } catch (const std::exception& e) {
         std::cerr << e.what() << "\n";
         return 1;

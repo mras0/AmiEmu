@@ -139,7 +139,7 @@ private:
     ram_handler ram_;
     area def_area_ { 0, 1U << 24, &def_handler_ };
     area ram_area_;
-    std::vector<mem_access_info>* mem_access_info_;
+    std::vector<mem_access_info>* mem_access_info_ = nullptr;
 
     area& find_area(uint32_t& addr);
     void track(uint32_t addr, uint32_t data, uint8_t size, bool write)

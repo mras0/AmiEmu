@@ -7,8 +7,6 @@
 #include <sstream>
 #include <stdexcept>
 
-//#define COUNT_MEM_ACCESS // Really needs to implement prefetch for this...
-
 namespace {
 
 const char* const conditional_strings[16] = {
@@ -136,16 +134,13 @@ public:
 
         step_res_ = { state_.pc, 0, 0, 0 };
         start_pc_ = state_.pc;
-        iwords_[0] = mem_.read_u16(state_.pc);
+        iwords_[0] = mem_read16(state_.pc);
         state_.pc += 2;
         inst_ = &instructions[iwords_[0]];
         for (unsigned i = 1; i < inst_->ilen; ++i) {
-            iwords_[i] = mem_.read_u16(state_.pc);
+            iwords_[i] = mem_read16(state_.pc);
             state_.pc += 2;
         }
-#ifdef COUNT_MEM_ACCESS
-        mem_accesses_ = inst_->ilen;
-#endif
 
         step_res_.clock_cycles += inst_->base_cycles;
         step_res_.mem_accesses += inst_->memory_accesses;
@@ -287,10 +282,6 @@ public:
         if (trace_)
             *trace_ << "\n";
 
-#ifdef COUNT_MEM_ACCESS
-        assert(mem_accesses_ == step_res_.mem_accesses);
-#endif
-
         step_res_.current_pc = state_.pc;
 
         return step_res_;
@@ -308,9 +299,40 @@ private:
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     std::ostream* trace_ = nullptr;
     step_result step_res_ { 0, 0 };
-#ifdef COUNT_MEM_ACCESS
-    uint8_t mem_accesses_ = 0;
-#endif
+
+    uint8_t mem_read8(uint32_t addr)
+    {
+        return mem_.read_u8(addr);
+    }
+
+    uint16_t mem_read16(uint32_t addr)
+    {
+        return mem_.read_u16(addr);
+    }
+
+    uint32_t mem_read32(uint32_t addr)
+    {
+        uint32_t res = mem_read16(addr) << 16;
+        res |= mem_read16(addr + 2);
+        return res;
+    }
+
+    void mem_write8(uint32_t addr, uint8_t val)
+    {
+        mem_.write_u8(addr, val);
+    }
+
+    void mem_write16(uint32_t addr, uint16_t val)
+    {
+        mem_.write_u16(addr, val);
+    }
+
+    void mem_write32(uint32_t addr, uint32_t val)
+    {
+        // Note: Some instructions write in opposite order...
+        mem_write16(addr, static_cast<uint16_t>(val >> 16));
+        mem_write16(addr + 2, static_cast<uint16_t>(val));
+    }
 
     uint32_t read_reg(uint32_t val)
     {
@@ -327,19 +349,13 @@ private:
 
     uint32_t read_mem(uint32_t addr)
     {
-#ifdef COUNT_MEM_ACCESS
-        ++mem_accesses_;
-#endif
         switch (inst_->size) {
         case opsize::b:
-            return mem_.read_u8(addr);
+            return mem_read8(addr);
         case opsize::w:
-            return mem_.read_u16(addr);
+            return mem_read16(addr);
         case opsize::l:
-#ifdef COUNT_MEM_ACCESS
-            ++mem_accesses_;
-#endif
-            return mem_.read_u32(addr);
+            return mem_read32(addr);
         }
         throw std::runtime_error { "Invalid opsize" };
     }
@@ -505,21 +521,15 @@ private:
 
     void write_mem(uint32_t addr, uint32_t val)
     {
-#ifdef COUNT_MEM_ACCESS
-        ++mem_accesses_;
-#endif
         switch (inst_->size) {
         case opsize::b:
-            mem_.write_u8(addr, static_cast<uint8_t>(val));
+            mem_write8(addr, static_cast<uint8_t>(val));
             return;
         case opsize::w:
-            mem_.write_u16(addr, static_cast<uint16_t>(val));
+            mem_write16(addr, static_cast<uint16_t>(val));
             return;
         case opsize::l:
-#ifdef COUNT_MEM_ACCESS
-            ++mem_accesses_;
-#endif
-            mem_.write_u32(addr, val);
+            mem_write32(addr, val);
             return;
         }
         assert(!"Invalid opsize");
@@ -691,41 +701,29 @@ private:
     {
         auto& a7 = state_.A(7);
         a7 -= 2;
-        mem_.write_u16(a7, val);
-#ifdef COUNT_MEM_ACCESS
-        mem_accesses_++;
-#endif
+        mem_write16(a7, val);
     }
 
     void push_u32(uint32_t val)
     {
         auto& a7 = state_.A(7);
         a7 -= 4;
-        mem_.write_u32(a7, val);
-#ifdef COUNT_MEM_ACCESS
-        mem_accesses_ += 2;
-#endif
+        mem_write32(a7, val);
     }
 
     uint16_t pop_u16()
     {
         auto& a7 = state_.A(7);
-        const auto val = mem_.read_u16(a7);
+        const auto val = mem_read16(a7);
         a7 += 2;
-#ifdef COUNT_MEM_ACCESS
-        mem_accesses_++;
-#endif
         return val;
     }
 
     uint32_t pop_u32()
     {
         auto& a7 = state_.A(7);
-        const auto val = mem_.read_u32(a7);
+        const auto val = mem_read32(a7);
         a7 += 4;
-#ifdef COUNT_MEM_ACCESS
-        mem_accesses_ += 2;
-#endif
         return val;
     }
 
@@ -746,7 +744,7 @@ private:
         push_u32(state_.pc);
         push_u16(saved_sr);
 
-        state_.pc = mem_.read_u32(static_cast<uint32_t>(vec) * 4);
+        state_.pc = mem_read32(static_cast<uint32_t>(vec) * 4);
     }
 
     void do_trap(interrupt_vector vec)
@@ -759,7 +757,7 @@ private:
     {
         assert(ipl >= 1 && ipl <= 7);
         // Amiga detail: Uses non-autovector and ignores the special bus cycle where A3-A1 is is to IPL and all other address lines are high to simple read from ROM
-        const auto vec = mem_.read_u8(0xfffffff1 | ipl << 1);        
+        const auto vec = mem_read8(0xfffffff1 | ipl << 1);        
         do_interrupt_impl(static_cast<interrupt_vector>(vec), ipl);
     }
 
@@ -878,10 +876,6 @@ private:
             step_res_.clock_cycles = inst_->size == opsize::b ? 8 : 12;
             return;
         }
-#ifdef COUNT_MEM_ACCESS
-        if (inst_->size == opsize::b)
-            mem_accesses_++;
-#endif
         step_res_.clock_cycles = 10;
         step_res_.mem_accesses = 2;
         state_.pc = ea_data_[0];
@@ -1006,9 +1000,6 @@ private:
         } else {
             step_res_.clock_cycles += 6;
             step_res_.mem_accesses++;
-#ifdef COUNT_MEM_ACCESS
-            ++mem_accesses_;
-#endif
         }
     }
 
@@ -1238,10 +1229,7 @@ private:
 
         if (mem_to_reg) {
             // Mem to reg mode apparently does an extra read access
-            (void)mem_.read_u16(addr);
-#ifdef COUNT_MEM_ACCESS
-            ++mem_accesses_;
-#endif
+            (void)mem_read16(addr);
             step_res_.clock_cycles += 4;
             step_res_.mem_accesses += 1;
         }
@@ -1256,11 +1244,8 @@ private:
             auto addr = ea_data_[1];
             do {
                 shift -= 8;
-                mem_.write_u8(addr, static_cast<uint8_t>(val >> shift));
+                mem_write8(addr, static_cast<uint8_t>(val >> shift));
                 addr += 2;
-#ifdef COUNT_MEM_ACCESS
-        mem_accesses_++;
-#endif
             } while (shift);
 
         } else {
@@ -1269,11 +1254,8 @@ private:
             auto addr = ea_data_[0];
             do {
                 shift -= 8;
-                val |= mem_.read_u8(addr) << shift;
+                val |= mem_read8(addr) << shift;
                 addr += 2;
-#ifdef COUNT_MEM_ACCESS
-                mem_accesses_++;
-#endif
             } while (shift);
             write_ea(1, val);
         }
