@@ -141,9 +141,7 @@ void memory_handler::register_handler(memory_area_handler& h, uint32_t base, uin
     auto a = &find_area(base);
     assert(a == &def_area_ || a == &ram_area_);
     (void)a;
-    (void)len;
-    areas_.push_back(area {
-        base, len, &h });
+    areas_.push_back(area { base, len, &h });
 }
 
 void memory_handler::unregister_handler(memory_area_handler& h, uint32_t base, uint32_t len)
@@ -160,34 +158,19 @@ uint8_t memory_handler::read_u8(uint32_t addr)
 {
     auto& a = find_area(addr);
     const uint8_t data = a.handler->read_u8(addr, addr - a.base);
-    mem_access_info_.push_back({
-        .addr = addr,
-        .data = data,
-        .size = 1,
-        .write = false
-    });
+    track(addr, data, 1, false);
     return data;
 }
 
 uint16_t memory_handler::read_u16(uint32_t addr)
 {
     if (addr & 1) {
-        mem_access_info_.push_back({
-            .addr = addr,
-            .data = 0,
-            .size = 2,
-            .write = false
-        });
+        track(addr, 0, 2, false);
         throw std::runtime_error { "Word read from odd address " + hexstring(addr) };
     }
     auto& a = find_area(addr);
     const uint16_t data = a.handler->read_u16(addr, addr - a.base);
-    mem_access_info_.push_back({
-        .addr = addr,
-        .data = data,
-        .size = 2,
-        .write = false
-    });
+    track(addr, data, 2, false);
     return data;
 }
 
@@ -195,45 +178,25 @@ uint32_t memory_handler::read_u32(uint32_t addr)
 {
     // TODO: Handle if write to two different areas...
     if (addr & 1) {
-        mem_access_info_.push_back({
-            .addr = addr,
-            .data = 0,
-            .size = 4,
-            .write = false
-        });
+        track(addr, 0, 4, false);
         throw std::runtime_error { "Long read from odd address " + hexstring(addr) };
     }
     auto& a = find_area(addr);
     const uint32_t data = a.handler->read_u32(addr, addr - a.base);
-    mem_access_info_.push_back({
-        .addr = addr,
-        .data = data,
-        .size = 4,
-        .write = false
-    });
+    track(addr, data, 4, false);
     return data;
 }
 
 void memory_handler::write_u8(uint32_t addr, uint8_t val)
 {
-    mem_access_info_.push_back({
-        .addr = addr,
-        .data = val,
-        .size = 1,
-        .write = true
-    });
+    track(addr, val, 1, true);
     auto& a = find_area(addr);
     return a.handler->write_u8(addr, addr - a.base, val);
 }
 
 void memory_handler::write_u16(uint32_t addr, uint16_t val)
 {
-    mem_access_info_.push_back({
-        .addr = addr,
-        .data = val,
-        .size = 2,
-        .write = true
-    });
+    track(addr, val, 2, true);
     if (addr & 1)
         throw std::runtime_error { "Word write to odd address " + hexstring(addr) };
 
@@ -243,13 +206,8 @@ void memory_handler::write_u16(uint32_t addr, uint16_t val)
 
 void memory_handler::write_u32(uint32_t addr, uint32_t val)
 {
-    mem_access_info_.push_back({
-        .addr = addr,
-        .data = val,
-        .size = 4,
-        .write = true
-    });
-
+    track(addr, val, 4, true);
+    
     // TODO: Handle if write to two different areas...
     if (addr & 1)
         throw std::runtime_error { "Long write to odd address " + hexstring(addr) };

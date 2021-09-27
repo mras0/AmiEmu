@@ -112,10 +112,9 @@ public:
         return ram_.ram();
     }
 
-    std::vector<mem_access_info> access_list() {
-        auto cpy = mem_access_info_;
-        mem_access_info_.clear();
-        return cpy;
+    void track_mem_access(std::vector<mem_access_info>* access_list)
+    {
+        mem_access_info_ = access_list;
     }
 
     void register_handler(memory_area_handler& h, uint32_t base, uint32_t len);
@@ -140,9 +139,14 @@ private:
     ram_handler ram_;
     area def_area_ { 0, 1U << 24, &def_handler_ };
     area ram_area_;
-    std::vector<mem_access_info> mem_access_info_;
+    std::vector<mem_access_info>* mem_access_info_;
 
     area& find_area(uint32_t& addr);
+    void track(uint32_t addr, uint32_t data, uint8_t size, bool write)
+    {
+        if (mem_access_info_)
+            mem_access_info_->emplace_back(addr, data, size, write);
+    }
 };
 
 #endif

@@ -211,7 +211,7 @@ struct command_line_arguments {
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: -rom rom-file [-df0 adf-file] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0 adf-file] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -241,8 +241,9 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
             usage("Unrecognized command line parameter: " + std::string { argv[i] });
         }
     }
-    if (args.rom.empty())
-        usage("No ROM selected");
+    if (args.rom.empty()) {
+        args.rom = "rom.bin";
+    }
     return args;
 }
 
@@ -373,6 +374,8 @@ int main(int argc, char* argv[])
         bool debug_mode = false;
         custom_handler::step_result custom_step {};
         m68000::step_result cpu_step {}; // Records memory/cycle "deficit" of CPU compared to custom chips
+        std::vector<mem_access_info> ma_list;
+        uint8_t pending_ipl = 0;
         std::unique_ptr<std::ofstream> trace_file;
 
         for (bool quit = false; !quit;) {
@@ -565,7 +568,7 @@ unknown_command:
                 }
 
                 custom_step = custom.step();
-                (void)mem.access_list(); // Discard access list for now
+                
 
                 // "Pay off" cycle/mem deficit, not correct but should match speed better
                 if (custom_step.free_chip_cycle && cpu_step.mem_accesses) {
@@ -578,8 +581,18 @@ unknown_command:
 
 
                 if (!cpu_step.clock_cycles) {
+                    // HACK: Delay IPL change by one instruction to make buggy loops like this
+                    // (where system interrupts are still enabled..) actuallly complete (zoom/wait.s):
+                    // _waitVERTBLoop:
+                    //      move.w INTREQR(a5), d0
+                    //      btst #5, d0
+                    //      beq _waitVERTBLoop
+
                     assert(!cpu_step.mem_accesses);
-                    cpu_step = cpu.step(custom_step.ipl);
+                    mem.track_mem_access(&ma_list);
+                    cpu_step = cpu.step(pending_ipl);
+                    pending_ipl = custom_step.ipl;
+                    mem.track_mem_access(nullptr);
                     assert(cpu_step.clock_cycles >= 4 * cpu_step.mem_accesses); 
                    
                     if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu.state().pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu.state().pc < 0xf00000)) {
@@ -589,13 +602,13 @@ unknown_command:
                     }
 
                     // Only count chip accesses (for now, this is everything non-rom)
-                    const auto ma_list = mem.access_list();
                     uint8_t chip_accesses = 0;
                     for (const auto& ma : ma_list) {
                         if (ma.addr < 0x00F0'0000) {
                             chip_accesses += ma.size == 4 ? 2 : 1;
                         }
                     }
+                    ma_list.clear();
                     assert(cpu_step.mem_accesses >= chip_accesses);
                     assert(cpu_step.clock_cycles >= 4 * chip_accesses); 
                     cpu_step.mem_accesses = chip_accesses;
