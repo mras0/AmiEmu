@@ -824,7 +824,9 @@ struct custom_state {
     uint8_t blitline_ashift;
     bool blitline_sign;
     bool blitline_dot_this_line;
+    bool blitfirst;
     uint8_t bltblockingcpu;
+    enum { blit_stopped, blit_running, blit_final } blitstate;
 
     uint32_t coplc[2];
     uint16_t diwstrt;
@@ -862,7 +864,6 @@ struct custom_state {
     uint16_t bltdat[4];
     int16_t  bltmod[4];
     uint16_t bltsize;
-    enum { blit_stopped, blit_running, blit_final } blitstate;
 
     // audio
     enum class audio_channel_state {
@@ -1185,6 +1186,63 @@ public:
         return false;
     }
 
+    bool do_blitter_line()
+    {
+        const uint8_t period = 4; // -C-D
+        const bool no_dma = s_.bltblockingcpu >= 3;
+        bool dma = false;
+
+        switch (s_.bltcycle) {
+        case 0:
+        case 2:
+            // Idle cycles
+            break;
+        case 1: // C
+            if (s_.blitstate == custom_state::blit_final)
+                break;
+            if (no_dma)
+                return false;
+            // First pixel is written to D
+            s_.bltdpt = s_.blitfirst ? s_.bltpt[3] : s_.bltpt[2];
+            s_.blitfirst = false;
+            s_.bltdwrite = !(s_.bltcon1 & BC1F_ONEDOT) || !s_.blitline_dot_this_line;
+            s_.bltdat[2] = chip_read(s_.bltpt[2]);
+            s_.bltbhold = s_.bltdat[1] & 1 ? 0xFFFF : 0;
+            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> s_.blitline_ashift, s_.bltbhold, s_.bltdat[2]);
+            s_.bltpt[0] += s_.blitline_sign ? s_.bltmod[1] : s_.bltmod[0];
+            s_.blitline_dot_this_line = true;
+
+            s_.update_blitter_line();
+
+            s_.blitline_sign = static_cast<int16_t>(s_.bltpt[0]) < 0;
+            s_.bltdat[1] = rol(s_.bltdat[1], 1);
+
+            dma = true;
+            break;
+        case 3: // D
+            if (s_.bltdwrite) {
+                if (no_dma)
+                    return false;
+                chip_write(s_.bltdpt, s_.bltdat[3]);
+                dma = true;
+            }
+            break;
+        }
+
+        if (++s_.bltcycle == period) {
+            s_.bltcycle = 0;
+
+            if (s_.blitstate == custom_state::blit_final) {
+                blitdone();
+            } else if (--s_.blth == 0) {
+                assert(s_.blitstate == custom_state::blit_running);
+                s_.blitstate = custom_state::blit_final;
+            }
+        }
+
+        return dma;
+    }
+
     bool do_blitter()
     {
 #if 0
@@ -1198,13 +1256,7 @@ public:
         assert(s_.dmacon & DMAF_BLTBUSY);
 
         if (s_.bltcon1 & BC1F_LINEMODE) {
-            // Temp: Immediate blit for lines
-            do_immedite_blit_line();
-            s_.dmacon &= ~DMAF_BLTNZERO; // What should this be?
-            s_.blitstate = custom_state::blit_final;
-            s_.blth = 0;
-            blitdone();
-            return false;
+            return do_blitter_line();
         }
 
         const bool fillmode = !!(s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR));
@@ -1361,10 +1413,9 @@ public:
         s_.bltdpt = 0;
         s_.blitstate = custom_state::blit_running;
         s_.bltblockingcpu = 0;
+        s_.blitfirst = true;
 
         if (s_.bltcon1 & BC1F_LINEMODE) {
-            if (s_.bltdat[0] != 0x8000)
-                DBGOUT << "Warning: Blitter line unexpected BLTADAT $" << hexfmt(s_.bltdat[0]) << "\n";
             // http://eab.abime.net/showpost.php?p=206412&postcount=6
             // D can be disabled
             // C MUST be enabled (otherwise nothing is drawn)
@@ -2389,7 +2440,9 @@ public:
 
         // Warn if blitter registers are accessed when not idle
         if (offset >= BLTCON0 && offset <= BLTADAT && s_.blitstate != custom_state::blit_stopped) {
-            DBGOUT << "Warning: Blitter register access (" << custom_regname(offset) << " val $" << hexfmt(val) << ") while busy. bltx=$" << hexfmt(s_.bltx) << " blth=$" << hexfmt(s_.blth) << " busy=" << !!(s_.dmacon & DMAF_BLTBUSY) << " state=" << (int)s_.blitstate << "\n";
+            // Avoid spamming in demos (expect for BLTSIZE) unless blitter debugging is active
+            if (DEBUG_BLITTER || offset == BLTSIZE)
+                DBGOUT << "Warning: Blitter register access (" << custom_regname(offset) << " val $" << hexfmt(val) << ") while busy. bltx=$" << hexfmt(s_.bltx) << " blth=$" << hexfmt(s_.blth) << " busy=" << !!(s_.dmacon & DMAF_BLTBUSY) << " state=" << (int)s_.blitstate << "\n";
         }
 
         switch (offset) {
