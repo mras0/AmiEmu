@@ -745,7 +745,12 @@ private:
     void handle_ADDQ()
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
-        handle_ADD();
+        if ((inst_->ea[1] >> ea_m_shift) == ea_m_An) {
+            // ADDQ to address register is always long and doesn't update flags
+            state_.A(inst_->ea[1] & ea_xn_mask) += static_cast<int8_t>(ea_data_[0]);
+        } else {
+            handle_ADD();
+        }
     }
 
     void handle_ADDX()
@@ -1037,8 +1042,10 @@ private:
     {
         assert(inst_->nea == 2);
         const uint32_t src = read_ea(0);
-        update_flags(srm_ccr_no_x, src, 0); // Before write EA in case it's to CCR/SR
         write_ea(1, src);
+        // Reading/writing SR/CCR should not update flags
+        if (inst_->ea[0] != ea_sr && inst_->ea[0] != ea_ccr && inst_->ea[1] != ea_sr && inst_->ea[1] != ea_ccr)
+            update_flags(srm_ccr_no_x, src, 0);
     }
 
     void handle_MOVEA()
@@ -1091,8 +1098,7 @@ private:
                     continue;
                 auto& reg = bit < 8 ? state_.d[bit] : state_.A(bit & 7);
                 if (mem_to_reg) {
-                    assert(inst_->size == opsize::l);
-                    reg = read_mem(addr);
+                    reg = sext(read_mem(addr), inst_->size);
                 } else
                     write_mem(addr, reg);
                 addr += nb;
@@ -1387,7 +1393,12 @@ private:
     void handle_SUBQ()
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
-        handle_SUB();
+        if ((inst_->ea[1] >> ea_m_shift) == ea_m_An) {
+            // SUBQ to address register is always long and doesn't update flags
+            state_.A(inst_->ea[1] & ea_xn_mask) -= static_cast<int8_t>(ea_data_[0]);
+        } else {
+            handle_SUB();
+        }
     }
 
     void handle_SUBX()
@@ -1408,7 +1419,13 @@ private:
         assert(inst_->nea == 1 && (inst_->ea[0] >> ea_m_shift == ea_m_Dn));
         auto& r = state_.d[inst_->ea[0] & ea_xn_mask];
         r = (r & 0xffff) << 16 | ((r >> 16) & 0xffff);
-        update_flags(srm_ccr_no_x, r, 0);
+        uint8_t ccr = 0;
+        if (r & 0x80000000)
+            ccr |= srm_n;
+        else if (!r)
+            ccr |= srm_z;
+
+        state_.update_sr(srm_ccr_no_x, ccr);
     }
 
     void handle_TST()

@@ -922,14 +922,16 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "ROL.B");
+    //run_winuae_mnemonic_test(basedir / "MVMEL.W");
     //assert(0);
 
     const std::vector<const char*> skip = {
         // Require excpetion handling
-        "ANDSR", "MV2SR", "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP",
-        // assert
-        "MVMEL",
+        "ANDSR", "MV2SR", "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
+        // Not implemented
+        "CHK", "EORSR", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
+        // TODO (Undefinde flags?)
+        "ABCD", "SBCD", "NBCD",
     };
     bool errors = false;
     for (auto& p : fs::directory_iterator(basedir)) {
@@ -939,8 +941,13 @@ bool run_winuae_tests()
             std::cout << "SKIPPING " << p.path().stem().string() << "\n";
             continue;
         }
-        errors |= run_winuae_mnemonic_test(basedir / p);
+        errors |= !run_winuae_mnemonic_test(basedir / p);
+        // Temp:
+        //assert(!errors);
     }
+
+    // Temp:
+    assert(!errors);
 
     return errors;
 }
