@@ -61,11 +61,12 @@ int main(int argc, char* argv[])
 
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
-        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 2.0 (A600).rom";
+        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
+        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 2.0 (A600).rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 3.1 (A600).rom";
         //const char* const rom_file = "../../rom.bin";
         //const char* const rom_file = "../../aros.rom";
+        //const char* const rom_file = "../../Misc/simple-amiga-rom/out/rom.bin";
         memory_handler mem { 1U << 20 };
         rom_area_handler rom { mem, read_file(rom_file) };
         cia_handler cias { mem, rom };
