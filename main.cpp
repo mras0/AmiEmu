@@ -16,9 +16,9 @@ int main(int argc, char* argv[])
 {
     try {
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
-        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
-        //const char* const rom_file = "../../rom.bin";
+        const char* const rom_file = "../../rom.bin";
         //const char* const rom_file = "../../aros.rom";
         memory_handler mem { 1U << 20 };
         rom_area_handler rom { mem, read_file(rom_file) };

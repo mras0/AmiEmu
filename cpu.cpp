@@ -1239,19 +1239,19 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
-        bool carry;
-        if (!cnt) {
-            carry = false;
-        } else {
+        bool carry = false;
+        if (cnt) {
             const auto nbits = opsize_bytes(inst_->size) * 8;
             cnt &= (nbits - 1);
-            if (cnt)
+            if (cnt) {
                 val = (val << cnt) | (val >> (nbits - cnt));
+            }
+            carry = !!(val & 1);
         }
 
         write_ea(inst_->nea - 1, val);
         const uint16_t old_x = state_.sr & srm_x; // X is not affected
-        update_flags_rot(val, cnt, !!(val & opsize_msb_mask(inst_->size)));
+        update_flags_rot(val, cnt, carry);
         state_.update_sr(srm_x, old_x);
     }
 
@@ -1265,19 +1265,18 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
-        bool carry;
-        if (!cnt) {
-            carry = false;
-        } else {
+        bool carry = false;
+        if (cnt) {
             const auto nbits = opsize_bytes(inst_->size) * 8;
             cnt &= (nbits-1);
             if (cnt)
                 val = (val >> cnt) | (val << (nbits - cnt));
+            carry = val & opsize_msb_mask(inst_->size);
         }
 
         write_ea(inst_->nea - 1, val);
         const uint16_t old_x = state_.sr & srm_x; // X is not affected
-        update_flags_rot(val, cnt, !!(val & 1));
+        update_flags_rot(val, cnt, carry);
         state_.update_sr(srm_x, old_x);
     }
 
