@@ -16,6 +16,7 @@ public:
     uint8_t active_irq_mask() const;
     void increment_tod_counter(uint8_t cia);
     void keyboard_event(bool pressed, uint8_t raw);
+    void set_lbutton_state(bool pressed);
     bool power_led_on() const;
     disk_drive& active_drive(); // For DMA
 

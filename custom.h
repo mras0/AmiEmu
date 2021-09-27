@@ -6,7 +6,7 @@
 #include "memory.h"
 
 constexpr unsigned graphics_width  = 768; // 24*16*2
-constexpr unsigned graphics_height = 568; // 284*2 (actually 285, but only for every other field)
+constexpr unsigned graphics_height = 570; // 285*2 (285 is only for every other field)
 
 class cia_handler;
 
@@ -23,6 +23,8 @@ public:
     const uint32_t* new_frame();
 
     void set_serial_data_handler(const serial_data_handler& handler);
+    void set_rbutton_state(bool pressed);
+    void mouse_move(int dx, int dy);
 
 private:
     class impl;

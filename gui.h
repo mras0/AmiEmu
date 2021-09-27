@@ -12,16 +12,28 @@ public:
 
     enum class event_type {
         quit,
-        keyboard
+        keyboard,
+        mouse_button,
+        mouse_move,
     };
     struct keyboard_event {
         bool pressed;
         uint8_t scancode;
     };
+    struct mouse_button_event {
+        bool pressed;
+        bool left;
+    };
+    struct mouse_move_event {
+        int dx;
+        int dy;
+    };
     struct event {
         event_type type;
         union {
             keyboard_event keyboard;
+            mouse_button_event mouse_button;
+            mouse_move_event mouse_move;
         };
     };
 

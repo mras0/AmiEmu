@@ -300,6 +300,14 @@ public:
         kbd_buffer_[(kbd_buffer_head_++) % sizeof(kbd_buffer_)] = (pressed & 1) | (~raw) << 1;
     }
 
+    void set_lbutton_state(bool pressed)
+    {
+        if (pressed)
+            s_[0].port_input[0] &= ~CIAF_GAMEPORT0;
+        else
+            s_[0].port_input[0] |= CIAF_GAMEPORT0;
+    }
+
     bool power_led_on() const
     {
         return !(s_[0].port_value(0) & CIAF_LED);
@@ -639,6 +647,11 @@ void cia_handler::increment_tod_counter(uint8_t cia)
 void cia_handler::keyboard_event(bool pressed, uint8_t raw)
 {
     impl_->keyboard_event(pressed, raw);
+}
+
+void cia_handler::set_lbutton_state(bool pressed)
+{
+    impl_->set_lbutton_state(pressed);
 }
 
 bool cia_handler::power_led_on() const

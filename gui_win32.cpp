@@ -295,8 +295,7 @@ public:
         RECT r = { 0, 0, width_, height_ + extra_height };
         AdjustWindowRect(&r, style, FALSE);
 
-        const char* title = "Amiemu";
-        if (!CreateWindow(class_name_, std::wstring(title, title + strlen(title)).c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr, hInstance, this)) {
+        if (!CreateWindow(class_name_, title_, style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr, hInstance, this)) {
             throw_system_error("CreateWindow");
         }
         assert(hwnd_);
@@ -357,6 +356,7 @@ public:
 
 private:
     static constexpr const wchar_t* const class_name_ = L"Display";
+    static constexpr const wchar_t* const title_ = L"Amiemu";
     int width_;
     int height_;
     HWND hwnd_ = nullptr;
@@ -365,6 +365,8 @@ private:
     std::vector<event> events_;
     uint8_t led_state_ = 0;
     serial_data_window* ser_data_ = nullptr;
+    POINT last_mouse_pos_ { 0, 0 };
+    bool mouse_captured_ = false;
 
     void redraw()
     {
@@ -412,6 +414,51 @@ private:
         do_enqueue_keyboard_event(pressed, vk);
     }
 
+    void enqueue_mouse_button_event(bool pressed, bool left)
+    {
+        if (!mouse_captured_) {
+            capture_mouse();
+            return;
+        }
+        event evt;
+        evt.type = event_type::mouse_button;
+        evt.mouse_button = { pressed, left };
+        events_.push_back(evt);
+    }
+
+    void capture_mouse()
+    {
+        assert(!mouse_captured_);
+        SetCapture(hwnd_);
+        RECT rcClient;
+        GetClientRect(hwnd_, &rcClient);
+        POINT ptUL, ptLR;
+        ptUL.x = rcClient.left;
+        ptUL.y = rcClient.top;
+        ptLR.x = rcClient.right + 1;
+        ptLR.y = rcClient.bottom + 1;
+        ClientToScreen(hwnd_, &ptUL);
+        ClientToScreen(hwnd_, &ptLR);
+        SetRect(&rcClient, ptUL.x, ptUL.y, ptLR.x, ptLR.y);
+        ClipCursor(&rcClient);
+        ShowCursor(FALSE);
+        SetWindowText(hwnd_, (std::wstring { title_ } + L" - Mouse captured").c_str());
+        // Center mouse in window
+        last_mouse_pos_ = { ptUL.x + (ptLR.x - ptUL.x) / 2, ptUL.y + (ptLR.y - ptUL.y) / 2 };
+        SetCursorPos(last_mouse_pos_.x, last_mouse_pos_.y);
+        mouse_captured_ = true;
+    }
+
+    void release_mouse()
+    {
+        assert(mouse_captured_);
+        ShowCursor(TRUE);
+        ClipCursor(NULL);
+        ReleaseCapture();
+        SetWindowText(hwnd_, title_);
+        mouse_captured_ = false;
+    }
+
     LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         switch (uMsg) {
@@ -434,6 +481,34 @@ private:
                 PostQuitMessage(0);
             enqueue_keyboard_event(false, wParam, lParam);
             return 0;
+        case WM_LBUTTONDOWN:
+            enqueue_mouse_button_event(true, true);
+            break;
+        case WM_LBUTTONUP:
+            enqueue_mouse_button_event(false, true);
+            break;
+        case WM_RBUTTONDOWN:
+            enqueue_mouse_button_event(true, false);
+            break;
+        case WM_RBUTTONUP:
+            enqueue_mouse_button_event(false, false);
+            break;
+        case WM_MOUSEMOVE: {
+            if (!mouse_captured_)
+                break;
+            POINT mouse_pos = { LOWORD(lParam), HIWORD(lParam) };
+            ClientToScreen(hwnd_, &mouse_pos);
+            event evt;
+            evt.type = event_type::mouse_move;
+            evt.mouse_move = { mouse_pos.x - last_mouse_pos_.x, mouse_pos.y - last_mouse_pos_.y };
+            events_.push_back(evt);
+            SetCursorPos(last_mouse_pos_.x, last_mouse_pos_.y);
+            break;
+        }
+        case WM_ACTIVATEAPP:
+            if (!wParam && mouse_captured_)
+                release_mouse();
+            break;
         }
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
@@ -460,6 +535,7 @@ private:
         DeleteObject(hbm_);
         DeleteDC(hdc_);
         PostQuitMessage(0);
+        release_mouse();
     }
 
     void on_paint()

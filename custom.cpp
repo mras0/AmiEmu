@@ -59,6 +59,7 @@
     X(BLTCDAT  , 0x070 , 1) /* Blitter source C data register                          */ \
     X(BLTBDAT  , 0x072 , 1) /* Blitter source B data register                          */ \
     X(BLTADAT  , 0x074 , 1) /* Blitter source A data register                          */ \
+    X(DSKSYNC  , 0x07E , 1) /* Disk sync register                                      */ \
     X(COP1LCH  , 0x080 , 1) /* Coprocessor first location register (high 3 bits)       */ \
     X(COP1LCL  , 0x082 , 1) /* Coprocessor first location register (low 15 bits)       */ \
     X(COP2LCH  , 0x084 , 1) /* Coprocessor second location register (high 3 bits)      */ \
@@ -200,6 +201,7 @@
     X(COLOR29  , 0x1BA , 1) /* Color table 29                                          */ \
     X(COLOR30  , 0x1BC , 1) /* Color table 30                                          */ \
     X(COLOR31  , 0x1BE , 1) /* Color table 31                                          */ \
+    X(FMODE    , 0x1FC,  1) /* Fetch mode (AGA)                                        */ \
 // keep this line clear (for macro continuation)
 
 
@@ -382,7 +384,7 @@ static constexpr uint16_t lores_max_pixel  = 0x1d1;
 static constexpr uint16_t hires_min_pixel  = 2 * lores_min_pixel;
 static constexpr uint16_t hires_max_pixel  = 2 * lores_max_pixel;
 
-static constexpr uint16_t vpos_per_field  = 312;
+static constexpr uint16_t vpos_per_field  = 313;
 //static constexpr uint16_t vpos_per_frame  = 625;
 static constexpr uint16_t vblank_end_vpos = 28;
 static constexpr uint16_t sprite_dma_start_vpos = 25; // http://eab.abime.net/showpost.php?p=1048395&postcount=200
@@ -455,6 +457,11 @@ struct custom_state {
     ddfstate ddfst;
     uint16_t ddfcycle;
     uint16_t ddfend;
+    bool long_frame;
+
+    bool rmb_pressed;
+    uint8_t cur_mouse_x;
+    uint8_t cur_mouse_y;
 
     uint32_t dskpt;
     uint16_t dsklen;
@@ -545,6 +552,7 @@ public:
     {
         memset(gfx_buf_, 0, sizeof(gfx_buf_));
         memset(&s_, 0, sizeof(s_));
+        s_.long_frame = true;
         pause_copper();
     }
 
@@ -559,6 +567,17 @@ public:
     void set_serial_data_handler(const serial_data_handler& handler)
     {
         serial_data_handler_ = handler;
+    }
+
+    void set_rbutton_state(bool pressed)
+    {
+        s_.rmb_pressed = pressed;
+    }
+
+    void mouse_move(int dx, int dy)
+    {
+        s_.cur_mouse_x = static_cast<uint8_t>(s_.cur_mouse_x + dx);
+        s_.cur_mouse_y = static_cast<uint8_t>(s_.cur_mouse_y + dy);
     }
 
     void log_blitter_state()
@@ -615,12 +634,11 @@ public:
         assert(s_.bltdat[0] == 0x8000);
         assert(s_.bltcon0 & (BC0F_SRCA | BC0F_SRCC | BC0F_DEST));
         assert(!(s_.bltcon0 & BC0F_SRCB));
-        assert(!(s_.bltcon1 & BC1F_ONEDOT)); // Not supported yet
-        assert(s_.bltpt[2] == s_.bltpt[3]);
         assert(s_.bltw == 2);
 
         uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
         bool sign = !!(s_.bltcon1 & BC1F_SIGNFLAG);
+        bool dot_this_line = false;
 
         auto incx = [&]() {
             if (++ashift == 16) {
@@ -636,9 +654,11 @@ public:
         };
         auto incy = [&]() {
             s_.bltpt[2] += s_.bltmod[2];
+            dot_this_line = false;
         };
         auto decy = [&]() {
             s_.bltpt[2] -= s_.bltmod[2];
+            dot_this_line = false;
         };
 
         for (uint16_t cnt = 0; cnt < s_.blth; ++cnt) {
@@ -675,8 +695,12 @@ public:
             sign = static_cast<int16_t>(s_.bltpt[0]) <= 0;
             s_.bltdat[1] = rol(s_.bltdat[1], 1);
             // First pixel is written to D
-            mem_.write_u16(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
+            if (!(s_.bltcon1 & BC1F_ONEDOT) || !dot_this_line) {
+                mem_.write_u16(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
+                dot_this_line = true;
+            }
         }
+        s_.bplpt[3] = s_.bplpt[2];
     }
 
     void do_blit()
@@ -801,8 +825,8 @@ public:
         }
 
         if (s_.vpos >= vblank_end_vpos && disp_pixel < graphics_width) {
-            uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel];
-            assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
+            uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? 0 : graphics_width)];
+            assert(&row[1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
 
             if (vert_disp && horiz_disp) {
                 const uint8_t nbpls = (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0;
@@ -893,7 +917,8 @@ public:
                 row[0] = row[1] = rgb4_to_8(s_.color[0]);
             }
 
-            if (!(s_.bplcon0 & BPLCON0F_LACE)) {
+            if (!(s_.bplcon0 & BPLCON0F_LACE) && s_.long_frame) {
+                assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
                 row[0 + graphics_width] = row[0];
                 row[1 + graphics_width] = row[1];
             }
@@ -1135,6 +1160,7 @@ public:
                 s_.copper_pt = s_.coplc[0];
                 s_.copper_inst_ofs = 0;
                 s_.vpos = 0;
+                s_.long_frame = (s_.bplcon0 & BPLCON0F_LACE ? !s_.long_frame : true);
                 s_.intreq |= INTF_VERTB;
                 cia_.increment_tod_counter(0);
                 if (!(s_.dmacon & DMAF_COPPER))
@@ -1155,16 +1181,15 @@ public:
         case DMACONR: // $002
             return s_.dmacon;
         case JOY0DAT: // $00A
-            return 0;
+            return s_.cur_mouse_y << 8 | s_.cur_mouse_x;
         case JOY1DAT: // $00C
             return 0;
         case VPOSR: // $004
-            // TODO: Bit15 LOF (long frame)
             // Hack: Just return a fixed V/HPOS when external sync is enabled (needed for KS1.2)
             if (s_.bplcon0 & BPLCON0F_ERSY)
                 return 0x8040;
 
-            return 0x8000 | ((s_.vpos >> 8)&1);
+            return (s_.long_frame ? 0x8000 : 0) | ((s_.vpos >> 8) & 1);
         case VHPOSR:  // $006
             // Hack: Just return a fixed V/HPOS when external sync is enabled (needed for KS1.2)
             if (s_.bplcon0 & BPLCON0F_ERSY)
@@ -1172,7 +1197,7 @@ public:
             return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
         case POTGOR:  // $016
             // Don't spam in DiagROM
-            return 0xFF00;
+            return 0xFF00 & ~(s_.rmb_pressed ? 0x400 : 0);
         case SERDATR: // $018
             return (3<<12); // Just return transmit buffer empty
         case INTENAR: // $01C
@@ -1184,23 +1209,13 @@ public:
         std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
         return 0xffff;
     }
+
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override
     {
-        auto write_partial = [offset, val](uint16_t& r) {
-            if (offset & 1)
-                r = (r & 0xff00) | val;
-            else
-                r = val << 8 | (r & 0xff);
-        };
-
-        if (offset >= COLOR00 && offset <= COLOR31 + 1) {
-            write_partial(s_.color[(offset - COLOR00) / 2]);
-            return;
-        }
-
-        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
-                  << " val $" << hexfmt(val) << "\n";
+        offset &= ~1;
+        write_u16(0xdff000 | offset, offset, val | val << 8);
     }
+
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
         //std::cerr << "Write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
@@ -1381,8 +1396,12 @@ public:
         case BLTADAT:
             s_.bltdat[0] = val;
             return;
+        case DSKSYNC: // $07E:
+            TODO_ASSERT(val == 0x4489);
+            return;
         case COPJMP1: // $088
-            TODO_ASSERT(0);
+            s_.copper_inst_ofs = 0;
+            s_.copper_pt = s_.coplc[0];
             return;
         case COPJMP2: // $08A
             s_.copper_inst_ofs = 0;
@@ -1420,8 +1439,6 @@ public:
 #endif
             return;
         case BPLCON0: // $100
-            if (val & BPLCON0F_LACE) // TODO: Handle LOF in vposr
-                std::cout << "Warning: Enabling interlace mode\n";
             s_.bplcon0 = val;
             return;
         case BPLCON1: // $102
@@ -1437,6 +1454,8 @@ public:
             return;
         case BPLMOD2: // $10A
             s_.bplmod2 = val;
+            return;
+        case FMODE: // $1FC
             return;
         case 0x1fe: // NO-OP
             return;
@@ -1507,4 +1526,14 @@ const uint32_t* custom_handler::new_frame()
 void custom_handler::set_serial_data_handler(const serial_data_handler& handler)
 {
     impl_->set_serial_data_handler(handler);
+}
+
+void custom_handler::set_rbutton_state(bool pressed)
+{
+    impl_->set_rbutton_state(pressed);
+}
+
+void custom_handler::mouse_move(int dx, int dy)
+{
+    impl_->mouse_move(dx, dy);
 }

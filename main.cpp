@@ -219,6 +219,15 @@ int main(int argc, char* argv[])
                     case gui::event_type::keyboard:
                         cias.keyboard_event(evt.keyboard.pressed, evt.keyboard.scancode);
                         break;
+                    case gui::event_type::mouse_button:
+                        if (evt.mouse_button.left)
+                            cias.set_lbutton_state(evt.mouse_button.pressed);
+                        else
+                            custom.set_rbutton_state(evt.mouse_button.pressed);
+                        break;
+                    case gui::event_type::mouse_move:
+                        custom.mouse_move(evt.mouse_move.dx, evt.mouse_move.dy);
+                        break;
                     default:
                         assert(0);
                     }
