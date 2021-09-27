@@ -15,6 +15,8 @@
 
 namespace {
 
+constexpr uint8_t gfx_scale = 2;
+
 void throw_system_error(const std::string& what, const unsigned error_code = GetLastError())
 {
     assert(error_code != ERROR_SUCCESS);
@@ -507,7 +509,8 @@ private:
             RECT r;
             GetClientRect(hwnd, &r);
             assert(r.left == 0 && r.top == 0);
-            BitBlt(ps.hdc, 0, 0, width_, height_, hdc_, 0, 0, SRCCOPY);
+            //BitBlt(ps.hdc, 0, 0, width_, height_, hdc_, 0, 0, SRCCOPY);
+            StretchBlt(ps.hdc, 0, 0, r.right, r.bottom, hdc_, 0, 0, width_, height_, SRCCOPY);
             EndPaint(hwnd, &ps);
         }
     }
@@ -1161,9 +1164,9 @@ public:
 
         std::unique_ptr<impl> wnd { new impl { width, height, disk_filenames } };
         const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
-        RECT r = { 0, 0, width, height + extra_height };
+        RECT r = { 0, 0, width * gfx_scale, height * gfx_scale + extra_height };
         AdjustWindowRect(&r, style, FALSE);
-        wnd->do_create(title_, style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr);
+        wnd->do_create(title_, style, 100, 100, r.right - r.left, r.bottom - r.top, nullptr);
 
         // Position serial data window to the right of the main window
         GetWindowRect(wnd->handle(), &r);
@@ -1295,7 +1298,7 @@ private:
 
     void repaint_extra()
     {
-        RECT r = { 0, height_, width_, height_ + extra_height };
+        RECT r = { 0, height_ * gfx_scale, width_ * gfx_scale, height_ * gfx_scale + extra_height };
         InvalidateRect(handle(), &r, FALSE);
     }
 
@@ -1496,7 +1499,10 @@ private:
     bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
         bitmap_window_ = bitmap_window::create(0, 0, width_, height_, hwnd);
-        return bitmap_window_ != nullptr;
+        if (!bitmap_window_)
+            return false;
+        MoveWindow(bitmap_window_->handle(), 0, 0, width_ * gfx_scale, height_ * gfx_scale, FALSE);
+        return true;
     }
 
     void on_destroy(HWND)
@@ -1514,7 +1520,9 @@ private:
     {
         PAINTSTRUCT ps;
         if (BeginPaint(hwnd, &ps) && !IsRectEmpty(&ps.rcPaint)) {
-            RECT bck { 0, height_, width_, height_ + extra_height };
+            const auto w = width_ * gfx_scale;
+            const auto h = height_ * gfx_scale;
+            RECT bck { 0, h, w, h + extra_height };
             FillRect(ps.hdc, &bck, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 
             SetBkColor(ps.hdc, RGB(0, 0, 0));
@@ -1529,7 +1537,7 @@ private:
                 }
             }
 
-            RECT power_led_rect = { width_ - led_width - 16, (height_ + extra_height) - led_height - border_height, width_ - 16, (height_ + extra_height) - border_height };
+            RECT power_led_rect = { w - led_width - 16, (h + extra_height) - led_height - border_height, w - 16, (h + extra_height) - border_height };
             HBRUSH power_led_brush = CreateSolidBrush(led_state_ & 1 ? RGB(0, 255, 0) : RGB(0, 0, 0));
             FillRect(ps.hdc, &power_led_rect, power_led_brush);
             DeleteObject(power_led_brush);
