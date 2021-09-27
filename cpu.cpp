@@ -52,6 +52,8 @@ void print_cpu_state(std::ostream& os, const cpu_state& s)
         else
             os << '-';
     }
+    if (s.stopped)
+        os << " (stopped)";
     os << '\n';
 }
 
@@ -77,11 +79,6 @@ public:
         return state_;
     }
 
-    uint64_t instruction_count() const
-    {
-        return instruction_count_;
-    }
-
     void trace(std::ostream* os)
     {
         trace_ = os;
@@ -89,7 +86,7 @@ public:
 
     void show_state(std::ostream& os)
     {
-        os << "After " << instruction_count_ << " instructions:\n";
+        os << "After " << state_.instruction_count << " instructions:\n";
         print_cpu_state(os, state_);
         disasm(os, start_pc_, iwords_, inst_->ilen);
         os << '\n';
@@ -99,19 +96,17 @@ public:
     {
         assert(current_ipl < 8);
 
-        ++instruction_count_;
+        ++state_.instruction_count;
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
-            stopped_ = false;
+            state_.stopped = false;
             do_interrupt(current_ipl);
         }
 
         if (trace_)
             print_cpu_state(*trace_, state_);
 
-        if (stopped_) {
-            if (trace_)
-                *trace_ << "Stopped\n";
+        if (state_.stopped) {
             return;
         }
 
@@ -266,8 +261,6 @@ private:
     uint8_t iword_idx_ = 0;
     const instruction* inst_ = &instructions[illegal_instruction_num];
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
-    uint64_t instruction_count_ = 0;
-    bool stopped_ = false;
     std::ostream* trace_ = nullptr;
 
     uint32_t read_reg(uint32_t val)
@@ -1378,7 +1371,7 @@ private:
     {
         assert(inst_->nea == 1);
         state_.sr = static_cast<uint16_t>(read_ea(0));
-        stopped_ = true;
+        state_.stopped = true;
     }
 
     void handle_SUB()
@@ -1482,11 +1475,6 @@ m68000::~m68000() = default;
 const cpu_state& m68000::state() const
 {
     return impl_->state();
-}
-
-uint64_t m68000::instruction_count() const
-{
-    return impl_->instruction_count();
 }
 
 void m68000::trace(std::ostream* os)

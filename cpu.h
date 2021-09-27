@@ -86,6 +86,9 @@ struct cpu_state {
     uint32_t pc;
     uint16_t sr;
 
+    bool stopped;
+    uint64_t instruction_count;
+
     uint32_t& A(unsigned idx)
     {
         assert(idx < 8);
@@ -162,7 +165,6 @@ public:
     ~m68000();
 
     const cpu_state& state() const;
-    uint64_t instruction_count() const;
     void trace(std::ostream* os);
     void show_state(std::ostream& os);
 

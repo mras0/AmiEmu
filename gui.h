@@ -17,6 +17,7 @@ public:
         mouse_button,
         mouse_move,
         disk_inserted,
+        debug_mode,
     };
     struct keyboard_event {
         bool pressed;
@@ -47,6 +48,7 @@ public:
     void update_image(const uint32_t* data);
     void led_state(uint8_t s);
     void serial_data(const std::vector<uint8_t>& data);
+    void set_active(bool act);
 
 private:
     class impl;

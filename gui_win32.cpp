@@ -373,6 +373,19 @@ public:
         SetFocus(hwnd_);
     }
 
+    void set_active(bool act)
+    {
+        if (act) {
+            SetFocus(hwnd_);
+            SetForegroundWindow(hwnd_);
+        } else {
+            if (mouse_captured_)
+                release_mouse();
+            SetFocus(GetConsoleWindow());
+            SetForegroundWindow(GetConsoleWindow());
+        }
+    }
+
 private:
     static constexpr const wchar_t* const class_name_ = L"Display";
     static constexpr const wchar_t* const title_ = L"Amiemu";
@@ -506,11 +519,17 @@ private:
                 if (was_captured)
                     release_mouse();
                 event evt;
-                evt.type = event_type::disk_inserted;
-                evt.disk_inserted = browse_for_file(hwnd_, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0");
-                events_.push_back(evt);
-                if (was_captured)
-                    capture_mouse();
+                if (GetKeyState(VK_SHIFT) < 0) {
+                    evt.type = event_type::debug_mode;
+                    events_.push_back(evt);
+                    set_active(false);
+                } else {
+                    evt.type = event_type::disk_inserted;
+                    evt.disk_inserted = browse_for_file(hwnd_, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0");
+                    events_.push_back(evt);
+                    if (was_captured)
+                        capture_mouse();
+                }
             } else
                 enqueue_keyboard_event(false, wParam, lParam);
             return 0;
@@ -616,4 +635,9 @@ void gui::led_state(uint8_t s)
 void gui::serial_data(const std::vector<uint8_t>& data)
 {
     impl_->serial_data(data);
+}
+
+void gui::set_active(bool act)
+{
+    impl_->set_active(act);
 }

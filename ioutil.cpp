@@ -64,3 +64,26 @@ void hexdump(std::ostream& os, const uint8_t* data, size_t size)
         i += here;
     }
 }
+
+void hexdump16(std::ostream& os, uint32_t addr, const uint8_t* data, size_t size)
+{
+    constexpr size_t width = 16;
+    assert(size % 2 == 0);
+    for (size_t i = 0; i < size;) {
+        const size_t here = std::min(size - i, width);
+
+        os << hexfmt(addr) << "  ";
+
+        for (size_t j = 0; j < here; ++j)
+            os << hexfmt(data[i + j]) << (j & 1 ? " " : "");
+        for (size_t j = here; j < width; ++j)
+            os << (j & 1 ? "   " : "  ");
+        for (size_t j = 0; j < here; ++j) {
+            const uint8_t d = data[i + j];
+            os << static_cast<char>(d >= 32 && d < 128 ? d : '.');
+        }
+        os << "\n";
+        i += here;
+        addr += static_cast<uint32_t>(here);
+    }
+}
