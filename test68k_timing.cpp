@@ -1439,15 +1439,27 @@ bool run_timing_tests()
         { "MOVEM.L D0-D7, $12.W"            , 76, 19 },
         { "MOVEM.L D0-D7, $12.L"            , 80, 20 },
 
-        // The following is not correct, but should ensure we're not vastly undercounting
+        // The following is not 100% correct
         { "DIVU D5, D0"                     , 76, 1 },
         { "DIVU #123, D0"                   , 80, 2 },
         { "DIVS D5, D0"                     , 120, 1 },
         { "DIVS #123, D0"                   , 124, 2 },
-        { "MULU D5, D0"                     , 38, 1 },
-        { "MULU #123, D0"                   , 42, 2 },
+
         { "MULS D5, D0"                     , 38, 1 },
-        { "MULS #123, D0"                   , 42, 2 },
+        { "MULS D4, D0"                     , 46, 1 },
+        { "MULS #123, D0"                   , 50, 2 },
+        { "MULS #$0000, D0"                 , 42, 2 }, 
+        { "MULS #$FFFF, D0"                 , 44, 2 }, 
+        { "MULS #$5555, D0"                 , 74, 2 }, 
+        { "MULS #$AAAA, D0"                 , 72, 2 },
+        // MULU: 38+2*number of ones in source
+        { "MULU D5, D0"                     , 38, 1 },
+        { "MULU D4, D0"                     , 42, 1 },
+        { "MULU #123, D0"                   , 54, 2 },
+        { "MULU #$0000, D0"                 , 42, 2 }, 
+        { "MULU #$FFFF, D0"                 , 74, 2 }, 
+        { "MULU #$5555, D0"                 , 58, 2 }, 
+        { "MULU #$AAAA, D0"                 , 58, 2 }, 
     };
 
     const uint32_t code_pos = 0x1000;

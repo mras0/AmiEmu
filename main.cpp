@@ -365,6 +365,7 @@ int main(int argc, char* argv[])
         bool debug_mode = false;
         uint32_t wait_for_pc = invalid_pc;
         uint32_t wait_for_vpos = ~0U;
+        bool wait_next_inst = false;
         custom_handler::step_result custom_step {};
         m68000::step_result cpu_step {}; // Records memory/cycle "deficit" of CPU compared to custom chips
         std::unique_ptr<std::ofstream> trace_file;
@@ -409,17 +410,6 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                if (wait_for_pc != invalid_pc && cpu.state().pc == wait_for_pc) {
-                    g.set_active(false);
-                    debug_mode = true;
-                    wait_for_pc = invalid_pc;
-                }
-                if (wait_for_vpos == custom_step.vhpos) {
-                    g.set_active(false);
-                    debug_mode = true;
-                    wait_for_vpos = ~0U;
-                }
-
                 if (debug_mode) {
                     const auto& s = cpu.state();
                     g.set_debug_memory(mem.ram(), custom.get_regs());
@@ -449,7 +439,6 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "e") {
                             custom.show_registers(std::cout);
                         } else if (args[0] == "g") {
-                            goto exit_debug;
                             break;
                         } else if (args[0] == "m") {
                             auto [valid, addr, lines] = get_addr_and_lines(args, hexdump_addr, 20);
@@ -483,6 +472,7 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "r") {
                             cpu.show_state(std::cout);
                         } else if (args[0] == "t") {
+                            wait_next_inst = true;
                             break;
                         } else if (args[0] == "trace_file") {
                             if (args.size() > 1) {
@@ -522,11 +512,11 @@ int main(int argc, char* argv[])
 
                         } else if (args[0] == "z") {
                             wait_for_pc = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
-                            goto exit_debug;
+                            break;
                         } else if (args[0] == "zf") {
                             // Wait for next frame
                             wait_for_vpos = 0;
-                            goto exit_debug;
+                            break;
                         } else if (args[0] == "zv") {
                             // Wait for video position
                             if (args.size() > 1) {
@@ -545,7 +535,7 @@ int main(int argc, char* argv[])
                                     }
                                     if (waitpos != ~0U) {
                                         wait_for_vpos = waitpos;
-                                        goto exit_debug;
+                                        break;
                                     }
                                 } else {
                                     std::cout << "Invalid vpos\n";
@@ -558,22 +548,12 @@ unknown_command:
                             std::cout << "Unknown command \"" << args[0] << "\"\n";
                         }
                     }
-
-                    if (0) {
-exit_debug:
-                        debug_mode = false;
-                        g.set_debug_windows_visible(false);
-                        g.set_active(true);
-                    }
-
+                    debug_mode = false;
+                    g.set_debug_windows_visible(false);
+                    g.set_active(true);
                 }
 
-                if (!cpu_step.clock_cycles) {
-                    assert(!cpu_step.mem_accesses);
-                    cpu_step = cpu.step(custom.current_ipl());
-                }
                 custom_step = custom.step();
-
 
                 // "Pay off" cycle/mem deficit, not correct but should match speed better
                 if (custom_step.free_mem_cycle && cpu_step.mem_accesses) {
@@ -582,6 +562,26 @@ exit_debug:
                     --cpu_step.clock_cycles;
                 } else if (cpu_step.clock_cycles > 4 * cpu_step.mem_accesses)
                     --cpu_step.clock_cycles;
+
+
+                if (!cpu_step.clock_cycles) {
+                    assert(!cpu_step.mem_accesses);
+                    cpu_step = cpu.step(custom.current_ipl());
+
+                    if (wait_next_inst || (wait_for_pc != invalid_pc && cpu.state().pc == wait_for_pc)) {
+                        g.set_active(false);
+                        debug_mode = true;
+                        wait_for_pc = invalid_pc;
+                        wait_next_inst = false;
+                    }
+
+                }
+    
+                if (wait_for_vpos == custom_step.vhpos) {
+                    g.set_active(false);
+                    debug_mode = true;
+                    wait_for_vpos = ~0U;
+                }
 
 #ifdef TRACE_LOG
                 if (cpu.instruction_count() == trace_start_inst) {

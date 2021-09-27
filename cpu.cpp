@@ -7,6 +7,8 @@
 #include <sstream>
 #include <stdexcept>
 
+//#define COUNT_MEM_ACCESS // Really needs to implement prefetch for this...
+
 namespace {
 
 const char* const conditional_strings[16] = {
@@ -62,6 +64,15 @@ void print_cpu_state(std::ostream& os, const cpu_state& s)
     if (s.stopped)
         os << " (stopped)";
     os << '\n';
+}
+
+constexpr uint8_t num_bits_set(uint16_t n)
+{
+    uint8_t cnt = 0;
+    for (int i = 0; i < 16; ++i)
+        if (n & (1 << i))
+            ++cnt;
+    return cnt;
 }
 
 class m68000::impl {
@@ -126,7 +137,7 @@ public:
             iwords_[i] = mem_.read_u16(state_.pc);
             state_.pc += 2;
         }
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         mem_accesses_ = inst_->ilen;
 #endif
 
@@ -268,7 +279,9 @@ public:
         if (trace_)
             *trace_ << "\n";
 
-        //assert(mem_accesses_ == step_res_.mem_accesses); // TODO: Re-enable
+#ifdef COUNT_MEM_ACCESS
+        assert(mem_accesses_ == step_res_.mem_accesses);
+#endif
 
         return step_res_;
     }
@@ -285,7 +298,7 @@ private:
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     std::ostream* trace_ = nullptr;
     step_result step_res_ { 0, 0 };
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
     uint8_t mem_accesses_ = 0;
 #endif
 
@@ -304,7 +317,7 @@ private:
 
     uint32_t read_mem(uint32_t addr)
     {
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         ++mem_accesses_;
 #endif
         switch (inst_->size) {
@@ -313,7 +326,7 @@ private:
         case opsize::w:
             return mem_.read_u16(addr);
         case opsize::l:
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
             ++mem_accesses_;
 #endif
             return mem_.read_u32(addr);
@@ -482,7 +495,7 @@ private:
 
     void write_mem(uint32_t addr, uint32_t val)
     {
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         ++mem_accesses_;
 #endif
         switch (inst_->size) {
@@ -493,7 +506,7 @@ private:
             mem_.write_u16(addr, static_cast<uint16_t>(val));
             return;
         case opsize::l:
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
             ++mem_accesses_;
 #endif
             mem_.write_u32(addr, val);
@@ -669,7 +682,7 @@ private:
         auto& a7 = state_.A(7);
         a7 -= 2;
         mem_.write_u16(a7, val);
-#ifndef  NDEBUG
+#ifdef COUNT_MEM_ACCESS
         mem_accesses_++;
 #endif
     }
@@ -679,7 +692,7 @@ private:
         auto& a7 = state_.A(7);
         a7 -= 4;
         mem_.write_u32(a7, val);
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         mem_accesses_ += 2;
 #endif
     }
@@ -689,7 +702,7 @@ private:
         auto& a7 = state_.A(7);
         const auto val = mem_.read_u16(a7);
         a7 += 2;
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         mem_accesses_++;
 #endif
         return val;
@@ -700,7 +713,7 @@ private:
         auto& a7 = state_.A(7);
         const auto val = mem_.read_u32(a7);
         a7 += 4;
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         mem_accesses_ += 2;
 #endif
         return val;
@@ -855,7 +868,7 @@ private:
             step_res_.clock_cycles = inst_->size == opsize::b ? 8 : 12;
             return;
         }
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         if (inst_->size == opsize::b)
             mem_accesses_++;
 #endif
@@ -983,7 +996,7 @@ private:
         } else {
             step_res_.clock_cycles += 6;
             step_res_.mem_accesses++;
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
             ++mem_accesses_;
 #endif
         }
@@ -1216,7 +1229,7 @@ private:
         if (mem_to_reg) {
             // Mem to reg mode apparently does an extra read access
             (void)mem_.read_u16(addr);
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
             ++mem_accesses_;
 #endif
             step_res_.clock_cycles += 4;
@@ -1235,7 +1248,7 @@ private:
                 shift -= 8;
                 mem_.write_u8(addr, static_cast<uint8_t>(val >> shift));
                 addr += 2;
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
         mem_accesses_++;
 #endif
             } while (shift);
@@ -1248,7 +1261,7 @@ private:
                 shift -= 8;
                 val |= mem_.read_u8(addr) << shift;
                 addr += 2;
-#ifndef NDEBUG
+#ifdef COUNT_MEM_ACCESS
                 mem_accesses_++;
 #endif
             } while (shift);
@@ -1277,6 +1290,7 @@ private:
         if (res & 0x80000000)
             ccr |= srm_n;
         state_.update_sr(srm_ccr_no_x, ccr);
+        step_res_.clock_cycles += 2 * num_bits_set(static_cast<uint16_t>(a ^ (a << 1)));
     }
 
     void handle_MULU()
@@ -1292,6 +1306,7 @@ private:
         if (res & 0x80000000)
             ccr |= srm_n;
         state_.update_sr(srm_ccr_no_x, ccr);
+        step_res_.clock_cycles += 2 * num_bits_set(static_cast<uint16_t>(a));
     }
 
     void handle_NBCD()
