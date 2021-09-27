@@ -1469,8 +1469,23 @@ private:
             break;
         }
         case WM_ACTIVATEAPP:
-            if (!wParam && mouse_captured_)
-                release_mouse();
+            if (!wParam) {
+                if (mouse_captured_)
+                    release_mouse();
+
+                // Hack: Fake release of all modifier keys when switching away (to avoid stuck keys)
+                constexpr uint8_t vks[] = {
+                    VK_LSHIFT,
+                    VK_RSHIFT,
+                    VK_LMENU,
+                    VK_RMENU,
+                    VK_LCONTROL,
+                    VK_RCONTROL
+                };
+                for (auto vk : vks)
+                    if (GetKeyState(vk) < 0)
+                        do_enqueue_keyboard_event(false, vk);
+            }
             break;
         }
         return window_base::wndproc(hwnd, uMsg, wParam, lParam);
