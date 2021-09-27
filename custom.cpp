@@ -695,8 +695,6 @@ public:
             do_blitter_line();
             any = 1; // ?
         } else {
-            TODO_ASSERT(!(s_.bltcon1 & BC1F_FILL_OR));
-
             const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
             const uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
             const uint8_t bshift = s_.bltcon1 >> BC1_BSHIFTSHIFT;
@@ -745,17 +743,21 @@ public:
                         do_dma(2);
 
                     uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), ahold, s_.bltbhold, s_.bltdat[2]);
-                    any |= val;
-                    if (s_.bltcon1 & BC1F_FILL_XOR) {
+                    if (s_.bltcon1 & (BC1F_FILL_OR|BC1F_FILL_XOR)) {
                         for (uint8_t bit = 0; bit < 16; ++bit) {
                             const uint16_t mask = 1U << bit;
-                            if (val & mask)
+                            const bool match = !!(val & mask);
+                            if (inpoly) {
+                                if (s_.bltcon1 & BC1F_FILL_XOR)
+                                    val ^= mask;
+                                else
+                                    val |= mask;
+                            }
+                            if (match)
                                 inpoly = !inpoly;
-
-                            if (inpoly)
-                                val |= mask;
                         }
                     }
+                    any |= val;
                     if (s_.bltcon0 & BC0F_DEST) {
                         mem_.write_u16(s_.bltpt[3], val);
                         incr_ptr(s_.bltpt[3]);
