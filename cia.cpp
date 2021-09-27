@@ -89,6 +89,26 @@ constexpr uint8_t CIACRAF_INMODE  = 1 << CIACRAB_INMODE;
 constexpr uint8_t CIACRAF_SPMODE  = 1 << CIACRAB_SPMODE;
 constexpr uint8_t CIACRAF_TODIN   = 1 << CIACRAB_TODIN;
 
+// control register B bit numbers
+constexpr uint8_t CIACRBB_START   = 0;
+constexpr uint8_t CIACRBB_PBON    = 1;
+constexpr uint8_t CIACRBB_OUTMODE = 2;
+constexpr uint8_t CIACRBB_RUNMODE = 3;
+constexpr uint8_t CIACRBB_LOAD    = 4;
+constexpr uint8_t CIACRBB_INMODE0 = 5;
+constexpr uint8_t CIACRBB_INMODE1 = 6;
+constexpr uint8_t CIACRBB_ALARM   = 7;
+
+// control register B register masks
+constexpr uint8_t CIACRBF_START   = 1 << CIACRBB_START;
+constexpr uint8_t CIACRBF_PBON    = 1 << CIACRBB_PBON;
+constexpr uint8_t CIACRBF_OUTMODE = 1 << CIACRBB_OUTMODE;
+constexpr uint8_t CIACRBF_RUNMODE = 1 << CIACRBB_RUNMODE;
+constexpr uint8_t CIACRBF_LOAD    = 1 << CIACRBB_LOAD;
+constexpr uint8_t CIACRBF_INMODE0 = 1 << CIACRBB_INMODE0;
+constexpr uint8_t CIACRBF_INMODE1 = 1 << CIACRBB_INMODE1;
+constexpr uint8_t CIACRBF_ALARM   = 1 << CIACRBB_ALARM;
+
 // ciaa port A (0xbfe001)
 constexpr uint8_t CIAB_GAMEPORT1 = 7; // gameport 1, pin 6 (fire button*)
 constexpr uint8_t CIAB_GAMEPORT0 = 6; // gameport 0, pin 6 (fire button*)
@@ -109,46 +129,6 @@ constexpr uint8_t CIAF_LED       = 1 << CIAB_LED;
 constexpr uint8_t CIAF_OVERLAY   = 1 << CIAB_OVERLAY;
 
 #if 0
-
-/* control register A bit numbers */
-#define CIACRAB_START 0
-#define CIACRAB_PBON 1
-#define CIACRAB_OUTMODE 2
-#define CIACRAB_RUNMODE 3
-#define CIACRAB_LOAD 4
-#define CIACRAB_INMODE 5
-#define CIACRAB_SPMODE 6
-#define CIACRAB_TODIN 7
-
-/* control register B bit numbers */
-#define CIACRBB_START 0
-#define CIACRBB_PBON 1
-#define CIACRBB_OUTMODE 2
-#define CIACRBB_RUNMODE 3
-#define CIACRBB_LOAD 4
-#define CIACRBB_INMODE0 5
-#define CIACRBB_INMODE1 6
-#define CIACRBB_ALARM 7
-
-/* control register A register masks */
-#define CIACRAF_START (1L << CIACRAB_START)
-#define CIACRAF_PBON (1L << CIACRAB_PBON)
-#define CIACRAF_OUTMODE (1L << CIACRAB_OUTMODE)
-#define CIACRAF_RUNMODE (1L << CIACRAB_RUNMODE)
-#define CIACRAF_LOAD (1L << CIACRAB_LOAD)
-#define CIACRAF_INMODE (1L << CIACRAB_INMODE)
-#define CIACRAF_SPMODE (1L << CIACRAB_SPMODE)
-#define CIACRAF_TODIN (1L << CIACRAB_TODIN)
-
-/* control register B register masks */
-#define CIACRBF_START (1L << CIACRBB_START)
-#define CIACRBF_PBON (1L << CIACRBB_PBON)
-#define CIACRBF_OUTMODE (1L << CIACRBB_OUTMODE)
-#define CIACRBF_RUNMODE (1L << CIACRBB_RUNMODE)
-#define CIACRBF_LOAD (1L << CIACRBB_LOAD)
-#define CIACRBF_INMODE0 (1L << CIACRBB_INMODE0)
-#define CIACRBF_INMODE1 (1L << CIACRBB_INMODE1)
-#define CIACRBF_ALARM (1L << CIACRBB_ALARM)
 
 /* control register B INMODE masks */
 #define CIACRBF_IN_PHI2 0
@@ -229,8 +209,19 @@ public:
     void step()
     {
         for (int i = 0; i < 2; ++i) {
-            //auto& s = s_[i];
-            // TODO: Increment timers
+            auto& s = s_[i];
+            for (int t = 0; t < 2; ++t) {
+                if (s.cr[t] & CIACRAF_START) {
+                    if (!(s.timer_val[t]--)) {
+                        if (s.cr[t] & CIACRAF_RUNMODE) {
+                            s.cr[t] &= ~CIACRAF_START;
+                        } else {
+                            s.timer_val[t] = s.timer_latch[t];
+                        }
+                        s.trigger_int(t ? CIAICRB_TB : CIAICRB_TA);
+                    }
+                }
+            }
 
         }
 
@@ -312,6 +303,9 @@ private:
         uint32_t counter;
         uint32_t counter_latch;
 
+        uint16_t timer_latch[2];
+        uint16_t timer_val[2];
+
         uint8_t port_value(uint8_t port) const
         {
             assert(port < 2);
@@ -364,6 +358,14 @@ private:
         case ddra:
         case ddrb:
             return s.ddr[reg-ddra];
+        case talo:
+            return s.timer_val[0] & 0xff;
+        case tahi:
+            return (s.timer_val[0] >> 8) & 0xff;
+        case tblo:
+            return s.timer_val[1] & 0xff;
+        case tbhi:
+            return (s.timer_val[1] >> 8) & 0xff;
         case todlo: {
             const uint8_t val = (s.counter_latch & latch_active_mask ? s.counter_latch : s.counter) & 0xff;
             s.counter_latch = 0; // Latch disabled
@@ -405,6 +407,39 @@ private:
         case ddrb:
             s.ddr[reg - ddra] = val;
             break;
+        case talo:
+            s.timer_latch[0] = (s.timer_latch[0] & 0xff00) | val;
+            break;
+        case tahi:
+            s.timer_latch[0] = (s.timer_latch[0] & 0xff) | val << 8;
+            if (s.cr[0] & CIACRAF_RUNMODE) {
+                // In one-shot mode, a write to timer-high (register 5 for timer A, register 7 for Timer B) will transfer the timer latch to the counter and initiate counting regardless of the start bit.
+                s.timer_val[0] = s.timer_latch[0]; // Start timer
+                s.cr[0] |= CIACRAF_START;
+            }
+            break;
+        case tblo:
+            s.timer_latch[1] = (s.timer_latch[1] & 0xff00) | val;
+            break;
+        case tbhi:
+            s.timer_latch[1] = (s.timer_latch[1] & 0xff) | val << 8;
+            if (s.cr[1] & CIACRBF_RUNMODE) {
+                s.timer_val[1] = s.timer_latch[1]; // Start timer
+                s.cr[1] |= CIACRBF_START;
+            }
+            break;
+        case todlo:
+            assert(!(s.cr[1] & CIACRBF_ALARM));
+            s.counter = (s.counter & 0xffffff00) | val;
+            break;
+        case todmid:
+            assert(!(s.cr[1] & CIACRBF_ALARM));
+            s.counter = (s.counter & 0xffff00ff) | val << 8;
+            break;
+        case todhi:
+            assert(!(s.cr[1] & CIACRBF_ALARM));
+            s.counter = (s.counter & 0xff00ffff) | val << 16;
+            break;
         case sdr:
             if (!(s.cr[0] & CIACRAF_SPMODE))
                 throw std::runtime_error { "SR not in output mode?" };
@@ -424,7 +459,23 @@ private:
             break;
         }
         case cra:
-            assert(!(val & ~(CIACRAF_SPMODE))); // Not tested
+            assert(!(val & (CIACRAF_PBON | CIACRAF_OUTMODE | CIACRAF_INMODE))); // Not tested
+            if (val & CIACRAF_LOAD) {
+                val &= ~CIACRAF_LOAD;
+                s.timer_val[0] = s.timer_latch[0];
+                if (val & CIACRAF_RUNMODE)
+                    val |= CIACRAF_START;
+            }
+            s.cr[reg - cra] = val;
+            break;
+        case crb:
+            assert(!(val & (CIACRBF_PBON | CIACRBF_OUTMODE | CIACRBF_INMODE0 | CIACRBF_INMODE1))); // Not tested
+            if (val & CIACRAF_LOAD) {
+                val &= ~CIACRAF_LOAD;
+                s.timer_val[1] = s.timer_latch[1];
+                if (val & CIACRAF_RUNMODE)
+                    val |= CIACRAF_START;
+            }
             s.cr[reg - cra] = val;
             break;
         default:

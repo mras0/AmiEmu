@@ -494,8 +494,7 @@ public:
             // Don't spam in DiagROM
             return 0xff;
         case SERDATR: // $018
-            // Don't spam in DiagROM
-            return 0xff;
+            return (3<<12); // Just return transmit buffer empty
         case INTENAR: // $01C
             return s_.intena;
         case INTREQR: // $01E
