@@ -154,12 +154,6 @@ uint32_t copper_disasm(memory_handler& mem, uint32_t start, uint32_t count)
 } // unnamed namespace
 
 
-std::ostream& operator<<(std::ostream& os, const mem_access_info& mai)
-{
-    return os << (mai.write ? 'W' : 'R') << " " << (mai.size == 1 ? 'B' : mai.size == 2 ? 'W' : 'L') <<  " addr=$" << hexfmt(mai.addr) << " data=$" << hexfmt(mai.data, mai.size*2);
-}
-
-
 #if 0
 void rom_tag_scan(const std::vector<uint8_t>& rom)
 {
@@ -375,9 +369,20 @@ int main(int argc, char* argv[])
         bool debug_mode = false;
         custom_handler::step_result custom_step {};
         m68000::step_result cpu_step {}; // Records memory/cycle "deficit" of CPU compared to custom chips
-        std::vector<mem_access_info> ma_list;
         uint8_t pending_ipl = 0;
         std::unique_ptr<std::ofstream> trace_file;
+
+        uint8_t chip_accesses = 0;
+        constexpr uint32_t min_rom_addr = 0x00e0'0000;
+        mem.set_memory_interceptor([&chip_accesses](uint32_t addr, uint32_t /*data*/, uint8_t size, bool /*write*/) {            
+            if (addr < min_rom_addr) {
+                ++chip_accesses;
+                if (size == 4)
+                    ++chip_accesses;
+            }
+        });
+
+        //cpu.trace(&std::cout);
 
         for (bool quit = false; !quit;) {
             try {
@@ -654,13 +659,12 @@ unknown_command:
                     //      beq _waitVERTBLoop
 
                     assert(!cpu_step.mem_accesses);
-                    mem.track_mem_access(&ma_list);
+                    chip_accesses = 0;
                     cpu_step = cpu.step(pending_ipl);
                     pending_ipl = custom_step.ipl;
-                    mem.track_mem_access(nullptr);
                     assert(cpu_step.clock_cycles >= 4 * cpu_step.mem_accesses); 
                    
-                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < 0xf00000)) {
+                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr)) {
                         g.set_active(false);
                         debug_mode = true;
                         wait_mode = wait_none;
@@ -670,14 +674,6 @@ unknown_command:
                         std::cout << "Breakpoint hit\n";
                     }
 
-                    // Only count chip accesses (for now, this is everything non-rom)
-                    uint8_t chip_accesses = 0;
-                    for (const auto& ma : ma_list) {
-                        if (ma.addr < 0x00F0'0000) {
-                            chip_accesses += ma.size == 4 ? 2 : 1;
-                        }
-                    }
-                    ma_list.clear();
                     assert(cpu_step.mem_accesses >= chip_accesses);
                     assert(cpu_step.clock_cycles >= 4 * chip_accesses); 
                     cpu_step.mem_accesses = chip_accesses;

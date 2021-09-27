@@ -7,8 +7,6 @@
 #include <sstream>
 #include <stdexcept>
 
-#include <iostream> // TEMPTEMP
-
 namespace {
 
 const char* const conditional_strings[16] = {
@@ -112,6 +110,12 @@ public:
         os << '\n';
     }
 
+    void set_cycle_handler(const cycle_handler& handler)
+    {
+        assert(!cycle_handler_);
+        cycle_handler_ = handler;
+    }
+
     step_result step(uint8_t current_ipl)
     {
         if (state_.stopped && !current_ipl) {
@@ -140,11 +144,6 @@ public:
         iword_idx_ = 0;        
         (void)read_iword();
         inst_ = &instructions[iwords_[0]];
-
-        if (trace_) {
-            disasm(*trace_, start_pc_, iwords_, inst_->ilen);
-            *trace_ << '\n';
-        }
 
         if ((inst_->extra & extra_priv_flag) && !(state_.sr & srm_s)) {
             state_.pc = start_pc_; // "The saved value of the program counter is the address of the first word of the instruction causing the privilege violation.
@@ -256,21 +255,14 @@ public:
         assert(inst_->nea == 0 || (ea_calced_[0] && (inst_->nea == 1 || ea_calced_[1])));
 
     out:
-        if (trace_)
+        if (trace_) {
+            disasm(*trace_, start_pc_, iwords_, inst_->ilen);
             *trace_ << "\n";
+        }
 
         step_res_.current_pc = state_.pc;
 
         prefetch();
-
-        // TEMP
-        if ((step_res_.clock_cycles < inst_->base_cycles || step_res_.mem_accesses < inst_->memory_accesses) && inst_->type != inst_type::DIVS && inst_->type != inst_type::DIVU) {
-            std::cout << "ERROR MISMATCH IN NUM CYCLES/MEMORY ACCEESSES\n";
-            std::cout << "Expecting (minimum) Cycles=" << (int)inst_->base_cycles << " Memory accesses=" << (int)inst_->memory_accesses << "\n";
-            std::cout << "Got                 Cycles=" << (int)step_res_.clock_cycles << " Memory accesses=" << (int)step_res_.mem_accesses << "\n";
-            std::cout << "While processing\n";
-            show_state(std::cout);
-        }
 
         return step_res_;
     }
@@ -280,6 +272,7 @@ private:
 
     memory_handler& mem_;
     cpu_state state_;
+    cycle_handler cycle_handler_;
 
     // Decoder state
     uint32_t start_pc_ = 0;
@@ -295,12 +288,14 @@ private:
 
     void add_cycles(uint8_t cnt)
     {
+        if (cycle_handler_)
+            cycle_handler_(cnt);
         step_res_.clock_cycles += cnt;
     }
 
     void add_mem_access()
     {
-        add_cycles(4);
+        step_res_.clock_cycles += 4;
         ++step_res_.mem_accesses;
     }
 
@@ -904,6 +899,27 @@ private:
     void do_trap(interrupt_vector vec)
     {
         assert(vec < interrupt_vector::level1 || vec > interrupt_vector::level7); // Should use do_interrupt
+        if (trace_) {
+            *trace_ << "Exception " << static_cast<int>(vec) << " ($" << hexfmt(static_cast<uint8_t>(vec)) << ")";
+            if (vec <= interrupt_vector::line_1111) {
+                constexpr const char* const names[12] = {
+                    "Reset (initial SSP)",
+                    "Reset (initial PC)",
+                    "Bus Error",
+                    "Address Error",
+                    "Illegal Instruction",
+                    "Zero Divide",
+                    "CHK Instruction",
+                    "TRAPV Instruction",
+                    "Privilege Violation",
+                    "Trace",
+                    "Line 1010 Emulator",
+                    "Line 1111 Emulator"
+                };
+                *trace_ << " " << names[static_cast<int>(vec)];
+            }
+            *trace_ << "\n";
+        }
         do_interrupt_impl(vec, (state_.sr & srm_ipl) >> sri_ipl); // IPL not updated
     }
 
@@ -1078,11 +1094,12 @@ private:
     void handle_BSR()
     {
         assert(inst_->nea == 1);
+        auto addr = calc_ea(0);
         push_u32(state_.pc);
         if (inst_->size != opsize::w)
             useless_prefetch();
-        state_.pc = calc_ea(0);
         add_cycles(2);
+        state_.pc = addr;
     }
 
     std::pair<uint32_t, uint32_t> bit_op_helper()
@@ -1955,6 +1972,11 @@ void m68000::trace(std::ostream* os)
 void m68000::show_state(std::ostream& os)
 {
     impl_->show_state(os);
+}
+
+void m68000::set_cycle_handler(const cycle_handler& handler)
+{
+    impl_->set_cycle_handler(handler);
 }
 
 m68000::step_result m68000::step(uint8_t current_ipl)

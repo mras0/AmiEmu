@@ -1504,7 +1504,10 @@ bool run_timing_tests()
         input_state.usp = 64;
         input_state.ssp = 32;
 
+        uint8_t counted_cycles = 0;
+
         m68000 cpu { mem, input_state };
+        cpu.set_cycle_handler([&counted_cycles](uint8_t cycles) { counted_cycles += cycles; });
 
         const auto step_res = cpu.step();
         if (step_res.clock_cycles != tc.clock_cycles || step_res.mem_accesses != tc.memory_accesses) {
@@ -1512,6 +1515,12 @@ bool run_timing_tests()
             std::cerr << "Expected clock cycles:    " << (int)tc.clock_cycles << "\tActual: " << (int)step_res.clock_cycles << "\n";
             std::cerr << "Expected memory accesses: " << (int)tc.memory_accesses << "\tActual: " << (int)step_res.mem_accesses << "\n";
             all_ok = false;
+        } else if (counted_cycles + step_res.mem_accesses * 4 != tc.clock_cycles) {
+            std::cerr << "Test failed for:\n" << tc.test_inst << "\n";
+            std::cerr << "Expected clock cycles:    " << (int)tc.clock_cycles << "\tCounted: " << (int)counted_cycles << "\n";
+            std::cerr << "Expected memory accesses: " << (int)tc.memory_accesses << "\tActual: " << (int)step_res.mem_accesses << "\n";
+            all_ok = false;
+
         }
     }
 

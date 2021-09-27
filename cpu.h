@@ -5,6 +5,7 @@
 #include <cassert>
 #include <stdint.h>
 #include <ostream>
+#include <functional>
 
 enum sr_bit_index {
     // User byte
@@ -171,10 +172,12 @@ public:
         uint8_t clock_cycles;
         uint8_t mem_accesses;
     };
+    using cycle_handler = std::function<void (uint8_t)>;
 
     const cpu_state& state() const;
     void trace(std::ostream* os);
     void show_state(std::ostream& os);
+    void set_cycle_handler(const cycle_handler& handler);
 
     step_result step(uint8_t current_ipl = 0);
 

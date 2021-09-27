@@ -118,8 +118,6 @@ struct instruction {
     uint8_t ea[2];
     uint8_t data;
     uint8_t extra;
-    uint8_t base_cycles;
-    uint8_t memory_accesses;
 };
 
 enum ea_m {

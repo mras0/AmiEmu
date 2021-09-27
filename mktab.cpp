@@ -1183,8 +1183,8 @@ int main(int argc, char* argv[])
         out << "inst_type::" << std::left << std::setw(10) << ai.type << ", " << std::left << std::setw(12) << n << ", opsize::" << std::left << std::setw(5) << ai.osize << ", ";
         out << (1+ai.ea_words) << ", " << static_cast<int>(ai.nea);
         out << ", { 0x" << hexfmt(ai.ea[0]) << ", 0x" << hexfmt(ai.ea[1]) << "}, ";
-        out << "0x" << hexfmt(ai.data) << ", 0x" << hexfmt(ai.extra) << ", ";
-        out << "0x" << hexfmt(ai.base_cycles) << ", 0x" << hexfmt(ai.memory_accesses);
+        out << "0x" << hexfmt(ai.data) << ", 0x" << hexfmt(ai.extra);
+        //out << ", 0x" << hexfmt(ai.base_cycles) << ", 0x" << hexfmt(ai.memory_accesses);
         out << " },\n";
     }
 }
