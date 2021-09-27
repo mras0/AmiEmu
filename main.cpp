@@ -214,6 +214,7 @@ struct command_line_arguments {
     uint8_t cpu_scale;
     bool test_mode;
     bool nosound;
+    bool debug;
 
     void handle_state(state_file& sf)
     {
@@ -230,7 +231,7 @@ struct command_line_arguments {
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-state statefile] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-state statefile] [-debug] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -307,6 +308,9 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             } else if (!strcmp(&argv[i][1], "nosound")) {
                 args.nosound = true;
+                continue;
+            } else if (!strcmp(&argv[i][1], "debug")) {
+                args.debug = true;
                 continue;
             }
         }
@@ -499,6 +503,9 @@ int main(int argc, char* argv[])
         int audio_next_to_fill = 0;
         bool reset = false;
 
+        uint8_t cpu_ipl = 0;
+        uint8_t cpu_ipl_delay = 0;
+
         cpu.set_cycle_handler([&](uint8_t cycles) {
             assert(cpu_active);
             cycles_todo += cycles;
@@ -525,13 +532,28 @@ int main(int argc, char* argv[])
         if (state) {
             mem.handle_state(*state);
             cpu.handle_state(*state);
+            // Fake up something for the debugger
+            cpu_step.current_pc = cpu_step.last_pc = cpu.state().pc;
+            cpu_step.instruction = cpu.state().prefecth_val;
         }
 
         auto cstep = [&](bool cpu_waiting) {
             const bool cpu_was_active = cpu_active;
             cpu_active = false;
-            custom_step = custom.step(cpu_waiting);
+            custom_step = custom.step(cpu_waiting, cpu_step.current_pc);
             cpu_active = cpu_was_active;
+
+            // HACK: Delay IPL change from Paula by 3 CCKs.
+            // Reality is more complicated: https://github.com/dirkwhoffmann/vAmiga/issues/274
+            // And below isn't correct if Paula IPL changes between delay start and end, but let's see...
+            // TODO: This should also be in state file...
+            if (cpu_ipl_delay) {
+                if (--cpu_ipl_delay == 0)
+                    cpu_ipl = custom_step.ipl;
+            } else if (cpu_ipl != custom_step.ipl) {
+                cpu_ipl_delay = 12;
+            } 
+
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
                 active_debugger();
                 wait_mode = wait_none;
@@ -663,6 +685,9 @@ int main(int argc, char* argv[])
         });
 
         //cpu.trace(&std::cout);
+
+        if (cmdline_args.debug)
+            active_debugger();
 
         for (bool quit = false; !quit;) {
             try {
@@ -1034,7 +1059,7 @@ unknown_command:
                 }
 
                 cpu_active = true;
-                cpu_step = cpu.step(custom_step.ipl);
+                cpu_step = cpu.step(cpu_ipl);
                 cpu_active = false;
                    
                 if (cpu_step.stopped) {

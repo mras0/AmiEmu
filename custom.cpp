@@ -11,7 +11,7 @@
 
 #define TODO_ASSERT(expr) do { if (!(expr)) throw std::runtime_error{("TODO: " #expr " in ") + std::string{__FILE__} + " line " + std::to_string(__LINE__) }; } while (0)
 
-#define DBGOUT *debug_stream << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 2) << ") "
+#define DBGOUT *debug_stream << "PC=$" << hexfmt(current_pc_) << " vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 2) << ") "
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
@@ -1384,6 +1384,8 @@ public:
     {
         assert(s_.blitstate == custom_state::blit_final);
         assert(s_.blth == 0);
+        if (DEBUG_BLITTER)
+            DBGOUT << "Blitter done INTREQ=$" << hexfmt(s_.intreq) << " DMACON=$" << hexfmt(s_.dmacon) << " state=" << (int)s_.blitstate << "\n";
         s_.intreq |= INTF_BLIT;
         s_.dmacon &= ~DMAF_BLTBUSY;
         s_.bltw = s_.blth = 0;
@@ -1688,7 +1690,7 @@ public:
         return true;
     }
 
-    step_result step(bool cpu_wants_access)
+    step_result step(bool cpu_wants_access, uint32_t current_pc)
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
 
@@ -1703,6 +1705,8 @@ public:
             .frame = gfx_buf_,
             .audio = audio_buf_,
         };
+
+        current_pc_ = current_pc;
 
         uint8_t spriteidx[8];
         for (uint8_t spr = 0; spr < 8; ++spr) {
@@ -2495,6 +2499,8 @@ public:
             setclr(s_.intena, val);
             return;
         case INTREQ:  // $09C
+            if (DEBUG_BLITTER && (val & INTF_BLIT))
+                DBGOUT << (val & INTF_SETCLR ? "Setting" : "Clearing") << " INTF_BLIT in INTREQ (val=$" << hexfmt(val) << ")\n";
             val &= ~INTF_INTEN;
             setclr(s_.intreq, val);
             return;
@@ -2578,6 +2584,7 @@ private:
     int16_t audio_buf_[audio_buffer_size];
     custom_state s_;
     uint32_t chip_ram_mask_;
+    uint32_t current_pc_; // For debug output
 
     uint16_t chip_read(uint32_t addr)
     {
@@ -2880,9 +2887,9 @@ custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia, ui
 
 custom_handler::~custom_handler() = default;
 
-custom_handler::step_result custom_handler::step(bool cpu_wants_access)
+custom_handler::step_result custom_handler::step(bool cpu_wants_access, uint32_t current_pc)
 {
-    return impl_->step(cpu_wants_access);
+    return impl_->step(cpu_wants_access, current_pc);
 }
 
 void custom_handler::set_serial_data_handler(const serial_data_handler& handler)
