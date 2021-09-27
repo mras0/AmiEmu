@@ -292,17 +292,6 @@ constexpr uint16_t BC1F_LINEMODE     = 0x0001; // Line mode control bit
 const uint8_t BC0_ASHIFTSHIFT = 12; // bits to right align ashift value
 const uint8_t BC1_BSHIFTSHIFT = 12; // bits to right align bshift value
 
-#if 0
-#define OCTANT8 24
-#define OCTANT7 4
-#define OCTANT6 12
-#define OCTANT5 28
-#define OCTANT4 20
-#define OCTANT3 8
-#define OCTANT2 0
-#define OCTANT1 16
-#endif
-
 // 454 virtual Lores pixels
 // 625 lines/frame (interlaced)
 // https://retrocomputing.stackexchange.com/questions/44/how-to-obtain-256-arbitrary-colors-with-limitation-of-64-per-line-in-amiga-ecs
@@ -339,6 +328,32 @@ constexpr uint32_t rgb4_to_8(const uint16_t rgb4)
     const uint32_t g = (rgb4 >> 4) & 0xf;
     const uint32_t b = rgb4 & 0xf;
     return r << 20 | r << 16 | g << 12 | g << 8 | b << 4 | b;
+}
+
+constexpr uint16_t blitter_func(uint8_t minterm, uint16_t a, uint16_t b, uint16_t c)
+{
+    uint16_t val = 0;
+    if (minterm & BC0F_ABC)    val |=   a &  b &  c;
+    if (minterm & BC0F_ABNC)   val |=   a &  b &(~c);
+    if (minterm & BC0F_ANBC)   val |=   a &(~b)&  c;
+    if (minterm & BC0F_ANBNC)  val |=   a &(~b)&(~c);
+    if (minterm & BC0F_NABC)   val |= (~a)&  b &  c;
+    if (minterm & BC0F_NABNC)  val |= (~a)&  b &(~c);
+    if (minterm & BC0F_NANBC)  val |= (~a)&(~b)&  c;
+    if (minterm & BC0F_NANBNC) val |= (~a)&(~b)&(~c);
+    return val;
+}
+
+template<std::integral T>
+constexpr T rol(T val, unsigned amt)
+{
+    return val << amt | val >> (sizeof(T) * CHAR_BIT - amt);
+}
+
+template <std::integral T>
+constexpr T ror(T val, unsigned amt)
+{
+    return val >> amt | val << (sizeof(T) * CHAR_BIT - amt);
 }
 
 struct custom_state {
@@ -419,6 +434,125 @@ public:
         }
     }
 
+    void do_blitter_line()
+    {
+#if 0
+        The line goes from (x1 ,y1) to (x2,y2).
+
+        dx = max (abs (x2 - x1), abs (y2 - y1) )
+        dy = min (abs (x2 - x1), abs (y2 - y1) )
+
+        BLTADAT = $8000
+        BLTBDAT = line texture pattern ($FFFF for a solid line)
+        BLTAFWM = $FFFF
+        BLTALWM = $FFFF
+        BLTAMOD = 4 * (dy-dx)
+        BLTBMOD = 4 * dy
+        BLTCMOD = width of the bitplane in bytes
+        BLTDMOD = width of the bitplane in bytes
+        BLTAPT = (4 * dy) - (2 * dx)
+        BLTBPT = unused
+        BLTCPT = word containing the first pixel of the line
+        BLTDPT = word containing the first pixel of the line
+        BLTCON0 bits 15-12 = x1 modulo 15
+        BLTCON0 bits SRCA, SRCC, and SRCD = 1
+        BLTCON0 bit SRCB = 0
+        if exclusive-or line mode:          _   _
+            then BLTCON0 LF control byte = ABC + AC
+                                                _
+            else BLTCON0 LF control byte = AB + AC
+        
+        BLTCON1 bit LINEMODE = 1
+        BLTCON1 bit OVFLAG = 0
+        BLTCON1 bits 4-2 = octant number from table
+        BLTCON1 bits 15-12 = start bit for line texture (0 = last significant
+                bit)
+        if (((4 * dy) - (2 * dx)) < 0):
+            then BLTCON1 bit SIGNFLAG = 1
+            else BLTCON1 bit SIGNFLAG = 0
+        if one pixel/row:
+            then BLTCON1 bit ONEDOT = 1
+            else BLTCON1 bit ONEDOT = 0
+        BLTSIZE bits 15-6 = dx + 1
+        BLTSIZE bits 5-0 = 2
+#endif
+        assert(s_.bltdat[0] == 0x8000);
+        assert(s_.bltcon0 & (BC0F_SRCA | BC0F_SRCC | BC0F_DEST));
+        assert(!(s_.bltcon0 & BC0F_SRCB));
+        assert(!(s_.bltcon1 & BC1F_ONEDOT)); // Not supported yet
+        assert(s_.bltpt[2] == s_.bltpt[3]);
+        assert(s_.bltw == 2);
+
+        uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
+        bool sign = !!(s_.bltcon1 & BC1F_SIGNFLAG);
+
+        auto incx = [&]() {
+            if (++ashift == 16) {
+                ashift = 0;
+                s_.bltpt[2] += 2;
+            }
+        };
+        auto decx = [&]() {
+            if (ashift-- == 0) {
+                ashift = 15;
+                s_.bltpt[2] -= 2;
+            }
+        };
+        auto incy = [&]() {
+            s_.bltpt[2] += s_.bltmod[2];
+        };
+        auto decy = [&]() {
+            s_.bltpt[2] -= s_.bltmod[2];
+        };
+
+
+        for (uint16_t cnt = 0; cnt < s_.blth; ++cnt) {
+            const uint32_t addr = s_.bltpt[2];
+            // blitter_read
+            s_.bltdat[2] = mem_.read_u16(addr);
+
+		    // blitter_line
+            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> ashift, (s_.bltdat[1] & 1) ? 0xFFFF : 0, s_.bltdat[2]);
+
+            // blitter_line_proc
+            s_.bltpt[0] += sign ? s_.bltmod[1] : s_.bltmod[0];
+
+            if (!sign) {
+                if (s_.bltcon1 & BC1F_SUD) {
+                    if (s_.bltcon1 & BC1F_SUL)
+                        decy();
+                    else
+                        incy();
+                } else {
+                    if (s_.bltcon1 & BC1F_SUL)
+                        decx();
+                    else
+                        incx();
+                }
+            }
+            if (s_.bltcon1 & BC1F_SUD) {
+                if (s_.bltcon1 & BC1F_AUL)
+                    decx();
+                else
+                    incx();
+            } else {
+                if (s_.bltcon1 & BC1F_AUL)
+                    decy();
+                else
+                    incy();
+            } 
+
+            sign = static_cast<int16_t>(s_.bltpt[0]) <= 0;
+
+
+            // blitter_nxline
+            s_.bltdat[1] = rol(s_.bltdat[1], 1);
+            // blitter_write
+            // First pixel is written to D
+            mem_.write_u16(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
+        }
+    }
+
     void do_blit()
     {
         // For now just do immediate blit
@@ -426,8 +560,8 @@ public:
         uint16_t any = 0;
 
         if (s_.bltcon1 & BC1F_LINEMODE) {
-            std::cout << "TODO: Line mode\n";
-            log_blitter_state();
+            do_blitter_line();
+            any = 1; // ?
         } else {
             TODO_ASSERT(!(s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR | BC1F_FILL_CARRYIN)));
 
@@ -453,9 +587,8 @@ public:
                 return res;
             };
 
-            uint16_t areg = 0;
-            uint16_t breg = 0;
-
+            uint16_t areg = 0; // Cleared at EOL?
+            uint16_t breg = 0; // Cleared at EOL?
             for (uint16_t y = 0; y < s_.blth; ++y) {
                 for (uint16_t x = 0; x < s_.bltw; ++x) {
                     if (s_.bltcon0 & BC0F_SRCA) do_dma(0);
@@ -468,16 +601,7 @@ public:
                         amask &= s_.bltalwm;
                     const uint16_t a = shift_val(areg, s_.bltdat[0] & amask, ashift);
                     const uint16_t b = shift_val(breg, s_.bltdat[1], bshift);
-                    const uint16_t c = s_.bltdat[2];
-                    uint16_t val = 0;
-                    if (s_.bltcon0 & BC0F_ABC)    val |=   a &  b &  c;
-                    if (s_.bltcon0 & BC0F_ABNC)   val |=   a &  b &(~c);
-                    if (s_.bltcon0 & BC0F_ANBC)   val |=   a &(~b)&  c;
-                    if (s_.bltcon0 & BC0F_ANBNC)  val |=   a &(~b)&(~c);
-                    if (s_.bltcon0 & BC0F_NABC)   val |= (~a)&  b &  c;
-                    if (s_.bltcon0 & BC0F_NABNC)  val |= (~a)&  b &(~c);
-                    if (s_.bltcon0 & BC0F_NANBC)  val |= (~a)&(~b)&  c;
-                    if (s_.bltcon0 & BC0F_NANBNC) val |= (~a)&(~b)&(~c);
+                    const uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), a, b, s_.bltdat[2]);
 
                     any |= val;
                     if (s_.bltcon0 & BC0F_DEST) {
@@ -748,7 +872,7 @@ public:
         //std::cerr << "Write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
         auto write_partial = [offset, &val](uint32_t& r) {
             if (offset & 2) {
-                assert(!(val & 1));
+                //assert(!(val & 1)); // Blitter pointers (and modulo) ignore bit0
                 r = (r & 0xffff0000) | val;
             }
             else
@@ -812,46 +936,43 @@ public:
         case BLTALWM:
             s_.bltalwm = val;
             return;
-        case BLTCPTL:
-            val &= 0xfffe;
-            [[fallthrough]];
         case BLTCPTH:
+        case BLTCPTL:
             write_partial(s_.bltpt[2]);
+            s_.bltpt[2] &= ~1U;
             return;
-        case BLTBPTL:
-            val &= 0xfffe;
-            [[fallthrough]];
         case BLTBPTH:
+        case BLTBPTL:
             write_partial(s_.bltpt[1]);
+            s_.bltpt[1] &= ~1U;
             return;
-        case BLTAPTL:
-            val &= 0xfffe;
-            [[fallthrough]];
         case BLTAPTH:
+        case BLTAPTL:
             write_partial(s_.bltpt[0]);
+            s_.bltpt[0] &= ~1U;
             return;
-        case BLTDPTL:
-            val &= 0xfffe;
-            [[fallthrough]];
         case BLTDPTH:
+        case BLTDPTL:
             write_partial(s_.bltpt[3]);
+            s_.bltpt[3] &= ~1U;
             return;
         case BLTSIZE:        
             assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTDONE));
             s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
             s_.blth = val >> 6 ? val >> 6 : 0x400;
+            s_.dmacon |= DMAF_BLTDONE;
             return;
         case BLTCMOD:
-            s_.bltmod[2] = val & 0xfffe;
+            s_.bltmod[2] = val & ~1U;
             return;
         case BLTBMOD:
-            s_.bltmod[1] = val & 0xfffe;
+            s_.bltmod[1] = val & ~1U;
             return;
         case BLTAMOD:
-            s_.bltmod[0] = val & 0xfffe;
+            s_.bltmod[0] = val & ~1U;
             return;
         case BLTDMOD:
-            s_.bltmod[3] = val & 0xfffe;
+            s_.bltmod[3] = val & ~1U;
             return;
         case BLTCDAT:
             s_.bltdat[2] = val;
