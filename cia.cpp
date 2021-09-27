@@ -198,7 +198,6 @@ constexpr uint8_t cia_start_delay = 2;
 #define CIAF_PRTRBUSY (1L << 0)
 
 #endif
-
 }
 
 // Handles both MOS Technology 8520 Complex Interface Adapter chips
@@ -261,7 +260,24 @@ public:
 
     uint8_t read_u8(uint32_t addr, uint32_t) override
     {
-        return handle_read(!(addr & 1), (addr >> 8) & 0xf);
+        // CIA-A is selected when A12=0, CIA-B is selcted when A13=0
+        const uint8_t reg = (addr >> 8) & 0xf;
+        switch ((addr >> 12) & 3) {
+        case 0: // Both!
+            return handle_read(!(addr & 1), reg);
+        case 1: // CIA-B
+            if (addr & 1)
+                break;
+            return handle_read(1, reg);
+        case 2: // CIA-A
+            if (!(addr & 1))
+                break;
+            return handle_read(0, reg);
+        case 3: // Neither!
+            break;
+        }
+        std::cerr << "[CIA] Warning: Unhandled read from $" << hexfmt(addr) << "\n";
+        return 0xff;
     }
 
     uint16_t read_u16(uint32_t addr, uint32_t offset) override
@@ -271,13 +287,20 @@ public:
 
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override
     {
-        handle_write(!(addr & 1), (addr >> 8) & 0xf, val);
+        // CIA-A is selected when A12=0, CIA-B is selcted when A13=0
+        const uint8_t reg = (addr >> 8) & 0xf;
+        const auto chip_select = (addr >> 12) & 3;
+
+        if (!(chip_select & 1))
+            handle_write(0, reg, val);
+        if (!(chip_select & 2))
+            handle_write(1, reg, val);
     }
 
-    void write_u16(uint32_t addr, uint32_t, uint16_t val) override
+    void write_u16(uint32_t addr, uint32_t offset, uint16_t val) override
     {
-        std::cerr << "Invalid 16-bit write to CIA: " << hexfmt(addr) << " val = $" << hexfmt(val) << "\n";
-        assert(0);
+        write_u8(addr, offset, static_cast<uint8_t>(val >> 8));
+        write_u8(addr + 1, offset + 1, static_cast<uint8_t>(val));
     }
 
     uint8_t active_irq_mask() const

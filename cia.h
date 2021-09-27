@@ -29,7 +29,7 @@ private:
     std::unique_ptr<impl> impl_;
 };
 
-constexpr uint32_t cia_base_addr = 0xBF0000;
-constexpr uint32_t cia_mem_size  = 0x10000;
+constexpr uint32_t cia_base_addr = 0xA00000;
+constexpr uint32_t cia_mem_size  = 0xC00000-cia_base_addr;
 
 #endif
