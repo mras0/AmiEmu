@@ -7,6 +7,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include <iostream> // TEMPTEMP
+
 namespace {
 
 const char* const conditional_strings[16] = {
@@ -118,31 +120,27 @@ public:
         assert(current_ipl < 8);
 
         ++state_.instruction_count;
+        start_pc_ = state_.pc;
+        step_res_ = { state_.pc, 0, 0, 0 };
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
-            start_pc_ = state_.pc;
             state_.stopped = false;
             do_interrupt(current_ipl);
             if (trace_) {
                 *trace_ << "Interrupt switching to IPL " << static_cast<int>(current_ipl) << "\n";
                 print_cpu_state(*trace_, state_);
             }
-            step_res_ = { start_pc_, state_.pc, 44, 8 };
             goto out;
         }
 
         if (trace_)
             print_cpu_state(*trace_, state_);
 
-        step_res_ = { state_.pc, 0, 0, 0 };
         start_pc_ = state_.pc;
         iword_idx_ = 0;        
         (void)read_iword();
         inst_ = &instructions[iwords_[0]];
 
-        step_res_.clock_cycles += inst_->base_cycles;
-        step_res_.mem_accesses += inst_->memory_accesses;
-        
         if (trace_) {
             disasm(*trace_, start_pc_, iwords_, inst_->ilen);
             *trace_ << '\n';
@@ -151,8 +149,8 @@ public:
         if ((inst_->extra & extra_priv_flag) && !(state_.sr & srm_s)) {
             state_.pc = start_pc_; // "The saved value of the program counter is the address of the first word of the instruction causing the privilege violation.
             do_trap(interrupt_vector::privililege_violation);
-            step_res_.clock_cycles = 34;
-            step_res_.mem_accesses = 7;
+            //step_res_.clock_cycles = 34;
+            //step_res_.mem_accesses = 7;
             goto out;
         }
 
@@ -265,6 +263,15 @@ public:
 
         prefetch();
 
+        // TEMP
+        if ((step_res_.clock_cycles < inst_->base_cycles || step_res_.mem_accesses < inst_->memory_accesses) && inst_->type != inst_type::DIVS && inst_->type != inst_type::DIVU) {
+            std::cout << "ERROR MISMATCH IN NUM CYCLES/MEMORY ACCEESSES\n";
+            std::cout << "Expecting (minimum) Cycles=" << (int)inst_->base_cycles << " Memory accesses=" << (int)inst_->memory_accesses << "\n";
+            std::cout << "Got                 Cycles=" << (int)step_res_.clock_cycles << " Memory accesses=" << (int)step_res_.mem_accesses << "\n";
+            std::cout << "While processing\n";
+            show_state(std::cout);
+        }
+
         return step_res_;
     }
 
@@ -286,13 +293,26 @@ private:
     std::ostream* trace_ = nullptr;
     step_result step_res_ { 0, 0 };
 
+    void add_cycles(uint8_t cnt)
+    {
+        step_res_.clock_cycles += cnt;
+    }
+
+    void add_mem_access()
+    {
+        add_cycles(4);
+        ++step_res_.mem_accesses;
+    }
+
     uint8_t mem_read8(uint32_t addr)
     {
+        add_mem_access();
         return mem_.read_u8(addr);
     }
 
     uint16_t mem_read16(uint32_t addr)
     {
+        add_mem_access();
         return mem_.read_u16(addr);
     }
 
@@ -305,11 +325,13 @@ private:
 
     void mem_write8(uint32_t addr, uint8_t val)
     {
+        add_mem_access();
         mem_.write_u8(addr, val);
     }
 
     void mem_write16(uint32_t addr, uint16_t val)
     {
+        add_mem_access();
         mem_.write_u16(addr, val);
     }
 
@@ -336,8 +358,16 @@ private:
 
     void prefetch()
     {
+        if (prefetch_address_ == state_.pc)
+            return;
         prefetch_address_ = state_.pc;
         prefecth_val_ = mem_read16(prefetch_address_);
+    }
+
+    void useless_prefetch()
+    {
+        mem_read16(state_.pc);
+        prefetch_address_ = invalid_prefetch_address;
     }
 
     uint32_t read_reg(uint32_t val)
@@ -399,6 +429,26 @@ private:
                 // Stack pointer is always kept word aligned
                 if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
                     state_.A(7)--;
+                if (idx == 0) {
+                    add_cycles(2);
+                } else {
+                    switch (inst_->type) {
+                    case inst_type::MOVE:
+                        // MOVE.W SR, -(An) isn't discounted?
+                        if (inst_->ea[0] == ea_sr)
+                            add_cycles(2);
+                        break;
+                    case inst_type::MOVEA:
+                    case inst_type::MOVEM:
+                    case inst_type::ADDX:
+                    case inst_type::SUBX:
+                    case inst_type::ABCD:
+                    case inst_type::SBCD:
+                        break;
+                    default:
+                        add_cycles(2);
+                    }
+                }
             }
             res = state_.A(ea & ea_xn_mask);
             return;
@@ -418,6 +468,7 @@ private:
             if (!((extw >> 11) & 1))
                 r = sext(r, opsize::w);
             res += r;
+            add_cycles(2);
             return;
         }
         case ea_m_Other:
@@ -449,6 +500,7 @@ private:
                 if (!((extw >> 11) & 1))
                     r = sext(r, opsize::w);
                 res += r;
+                add_cycles(2);
                 return;
             }
             case ea_other_imm:
@@ -541,6 +593,14 @@ private:
             }
             break;
         default:
+            // Bit of a hack to do this here...
+            if (idx == 0 && (ea == ea_sr || ea == ea_ccr)) {
+                assert(inst_->nea == 2 && inst_->type == inst_type::MOVE);
+                if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
+                    add_cycles(2);
+                else
+                    useless_prefetch();
+            }
             return val;
         }
         throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea) };
@@ -622,11 +682,19 @@ private:
         default:
             if (ea == ea_sr) {
                 assert((state_.sr & srm_s));
+                assert(idx == 1);
                 val &= ~(srm_m | 1 << 14); // Clear unsupported bits
                 state_.sr = static_cast<uint16_t>(val & ~srm_illegal);
+                add_cycles(8);
+                if (inst_->type != inst_type::MOVE)
+                    useless_prefetch();
                 return;
             } else if (ea == ea_ccr) {
+                assert(idx == 1);
                 state_.update_sr(srm_ccr, val & srm_ccr);
+                add_cycles(8);
+                if (inst_->type != inst_type::MOVE)
+                    useless_prefetch();
                 return;
             } else if (ea == ea_usp) {
                 assert(state_.sr & srm_s); // Checked
@@ -689,9 +757,8 @@ private:
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
-
-        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         const auto osmask = opsize_msb_mask(inst_->size);
         const auto orig_val = val;
@@ -758,6 +825,64 @@ private:
     void do_interrupt_impl(interrupt_vector vec, uint8_t ipl)
     {
         assert(vec > interrupt_vector::reset_pc); // RESET doesn't save anything
+
+        // Common:
+        // push_u32(pc)        8(0/2)
+        // push_u16(sr)        4(0/1)
+        // read_u32(vec)       8(2/0)
+        // useless_prefetch    4(1/0)
+        // prefetch            4(1/0)
+        // --------------------------
+        //                    28(4/3)
+        constexpr uint8_t common_cycles = 28;
+
+        switch (vec) {
+        case interrupt_vector::reset_ssp:
+        case interrupt_vector::reset_pc:
+        case interrupt_vector::bus_error:
+        case interrupt_vector::address_error:
+            // Address error       | 50(4/7)  |48   nn ns ns nS ns ns ns nS nV nv np np
+            // Bus error           | 50(4/7)  |48   nn ns ns nS ns ns ns nS nV nv np np
+            // /RESET              | 40(6/0)  |38   (n-)*5   nn       nF nf nV nv np np
+            assert(!"Not implemented");
+            break;
+        case interrupt_vector::zero_divide:
+            // Divide by Zero      | 38(4/3)+ |36         nn nn    ns ns nS nV nv np np
+            add_cycles(38 - common_cycles);
+            break;
+        case interrupt_vector::chk_exception:
+            // CHK Instruction     | 40(4/3)+ |38 np (n-)    nn    ns ns nS nV nv np np
+            add_cycles(40 - common_cycles);
+            break;
+        case interrupt_vector::trapv_instruction:
+            // TRAPV               | 34(5/3)  |          np ns nS ns np np np np
+            add_cycles(34 - common_cycles - 4); // Extra prefect in handler
+            break;
+        case interrupt_vector::trace:
+            // Trace | 34(4 / 3) | 32 nn ns nS ns nV nv np np
+            add_cycles(34 - common_cycles);
+            break;
+        case interrupt_vector::level1:
+        case interrupt_vector::level2:
+        case interrupt_vector::level3:
+        case interrupt_vector::level4:
+        case interrupt_vector::level5:
+        case interrupt_vector::level6:
+        case interrupt_vector::level7:
+            // Interrupt | 44(5 / 3) | 42 n nn ns ni n - n nS ns nV nv np np
+            add_cycles(44 - common_cycles - 4); // Already fetched vector
+            break;
+        case interrupt_vector::illegal_instruction:
+        case interrupt_vector::privililege_violation:
+        case interrupt_vector::line_1010:
+        case interrupt_vector::line_1111:
+        default: // Other traps
+            // Privilege Violation | 34(4/3)  |32            nn    ns ns nS nV nv np np
+            // Illegal Instruction | 34(4/3)  |32            nn    ns ns nS nV nv np np
+            add_cycles(34 - common_cycles);
+            break;
+        }
+
         const uint16_t saved_sr = state_.sr;
         state_.update_sr(static_cast<sr_mask>(srm_trace | srm_s | srm_ipl), srm_s | ipl << sri_ipl); // Clear trace, set superviser mode
         // Now always on supervisor stack
@@ -773,6 +898,7 @@ private:
         push_u16(saved_sr);
 
         state_.pc = mem_read32(static_cast<uint32_t>(vec) * 4);
+        useless_prefetch();
     }
 
     void do_trap(interrupt_vector vec)
@@ -798,11 +924,28 @@ private:
         const auto carry = ((l & r) | ((l | r) & ~res)) & 0x88;
         const auto carry10 = (((res + 0x66) ^ res) & 0x110) >> 1;
         const auto res2 = res + ((carry | carry10) - ((carry | carry10) >> 2));
-        write_ea(1, res2);
         uint8_t ccr = (res2 & 0xf00 ? srm_c | srm_x : 0) | (res2 & 0xff ? 0 : state_.sr & srm_z) | (res2 & 0x80 ? srm_n : 0);
         if (!(res & 0x80) && (res2 & 0x80))
             ccr |= srm_v;
+        if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
+        write_ea(1, res2);
         state_.update_sr(srm_ccr, ccr);
+    }
+
+    void add_rmw_cycles()
+    {
+        if (inst_->ea[1] >> ea_m_shift == ea_m_Dn) {
+            if (inst_->size != opsize::l)
+                return;
+            add_cycles(inst_->ea[0] == ea_immediate || inst_->ea[0] >> ea_m_shift <= ea_m_An ? 4 : 2);
+        } else if (inst_->ea[0] >> ea_m_shift == ea_m_Dn) {
+        } else if (inst_->ea[0] == ea_immediate || inst_->ea[0] == ea_data3) {
+            // data3 is for addq/subq
+        } else {
+            if (inst_->size == opsize::l)
+                add_cycles(4);
+        }
     }
 
     void handle_ADD()
@@ -811,6 +954,9 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l + r;
+
+        add_rmw_cycles();
+
         write_ea(1, res);
         // All flags updated
         update_flags(srm_ccr, res, (l & r) | ((l | r) & ~res));
@@ -821,6 +967,7 @@ private:
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
         (void)calc_ea(1);
+        add_cycles(inst_->size == opsize::w || inst_->ea[0] >> ea_m_shift <= ea_m_An || inst_->ea[0] == ea_immediate ? 4 : 2);
         state_.A(inst_->ea[1] & ea_xn_mask) += s; // And the operation performed on the full 32-bit value
         // No flags
     }
@@ -830,10 +977,13 @@ private:
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         if ((inst_->ea[1] >> ea_m_shift) == ea_m_An) {
             // ADDQ to address register is always long and doesn't update flags
+            add_cycles(4);
             state_.A(inst_->ea[1] & ea_xn_mask) += static_cast<int8_t>(calc_ea(0));
             (void)calc_ea(1);
         } else {
             handle_ADD();
+            if (inst_->ea[1] >> ea_m_shift == ea_m_Dn && inst_->size == opsize::l)
+                add_cycles(2);
         }
     }
 
@@ -843,6 +993,8 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l + r + !!(state_.sr & srm_x);
+        if (inst_->ea[0] >> ea_m_shift == ea_m_Dn && inst_->size == opsize::l)
+            add_cycles(4);
         write_ea(1, res);
         update_flags(static_cast<sr_mask>(srm_ccr & ~srm_z), res, (l & r) | ((l | r) & ~res));
         // Z is only cleared if the result is non-zero
@@ -856,6 +1008,7 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l & r;
+        add_rmw_cycles();
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
     }
@@ -874,8 +1027,8 @@ private:
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
-        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         const auto msb = !!(val & opsize_msb_mask(inst_->size));
 
@@ -902,27 +1055,34 @@ private:
         // Taken:      10/2,       10/2
         // Not taken:   8/1,       12/2
         assert(inst_->nea == 1 && inst_->ea[0] == ea_disp && (inst_->extra & extra_cond_flag));
-        (void)calc_ea(0);
+        const auto addr = calc_ea(0);
         if (!state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
-            step_res_.clock_cycles = inst_->size == opsize::b ? 8 : 12;
+            add_cycles(4);
             return;
         }
-        step_res_.clock_cycles = 10;
-        step_res_.mem_accesses = 2;
-        state_.pc = calc_ea(0);
+        if (inst_->size != opsize::w)
+            useless_prefetch();
+        add_cycles(2);
+        state_.pc = addr;
     }
 
     void handle_BRA()
     {
         assert(inst_->nea == 1);
+        if (inst_->size != opsize::w)
+            useless_prefetch();
         state_.pc = calc_ea(0);
+        add_cycles(2);
     }
 
     void handle_BSR()
     {
         assert(inst_->nea == 1);
         push_u32(state_.pc);
+        if (inst_->size != opsize::w)
+            useless_prefetch();
         state_.pc = calc_ea(0);
+        add_cycles(2);
     }
 
     std::pair<uint32_t, uint32_t> bit_op_helper()
@@ -936,7 +1096,7 @@ private:
             assert(inst_->size == opsize::l && inst_->ea[1] >> ea_m_shift == ea_m_Dn);
             bitnum &= 31;
             if (bitnum > 15)
-                step_res_.clock_cycles += 2;
+                add_cycles(2);
         }
         state_.update_sr(srm_z, !((num >> bitnum) & 1) ? srm_z : 0); // Set according to the previous state of the bit
         return { bitnum, num };
@@ -945,24 +1105,36 @@ private:
     void handle_BCHG()
     {
         const auto [bitnum, num] = bit_op_helper();
+        if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
         write_ea(1, num ^ (1 << bitnum));
     }
 
     void handle_BCLR()
     {
         const auto [bitnum, num] = bit_op_helper();
+        if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
+            add_cycles(4);
         write_ea(1, num & ~(1 << bitnum));
     }
 
     void handle_BSET()
     {
         const auto [bitnum, num] = bit_op_helper();
+        if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
         write_ea(1, num | (1 << bitnum));
     }
 
     void handle_BTST()
     {
         bit_op_helper(); // discard return value on purpose
+        if (inst_->ea[1] >> ea_m_shift == ea_m_Dn) {
+            if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+                add_cycles(2);
+            else if (inst_->ea[0] == ea_bitnum && (ea_data_[0] & 31) < 16)
+                add_cycles(2);
+        }
     }
 
     void handle_CHK()
@@ -979,6 +1151,8 @@ private:
     {
         assert(inst_->nea == 1);
         read_ea(0); // 68000 does a superflous read
+        if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
         write_ea(0, 0);
         state_.update_sr(srm_ccr_no_x, srm_z);
     }
@@ -989,6 +1163,8 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l - r;
+        if (inst_->size == opsize::l && inst_->ea[1] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
         update_flags(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res));
     }
 
@@ -996,6 +1172,7 @@ private:
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const uint32_t r = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        add_cycles(2);
         (void)calc_ea(1);
         const uint32_t l = state_.A(inst_->ea[1] & ea_xn_mask);
         // And the performed on the full 32-bit value
@@ -1022,18 +1199,17 @@ private:
         (void)calc_ea(1);
 
         if (state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
-            step_res_.clock_cycles += 4;
+            add_cycles(4);
             return;
         }
 
         --val;
         write_ea(0, val);
+        add_cycles(2);
         if (val != 0xffff) {
-            step_res_.clock_cycles += 2;
             state_.pc = calc_ea(1);          
         } else {
-            step_res_.clock_cycles += 6;
-            step_res_.mem_accesses++;
+            add_mem_access();
         }
     }
 
@@ -1043,16 +1219,18 @@ private:
         const auto d = read_ea(0);
         (void)calc_ea(1);
         if (!d) {
+            //  Divide by Zero      | 38(4/3)+ |36         nn nn    ns ns nS nV nv np np
             do_trap(interrupt_vector::zero_divide);
             return;
         }
              
         auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
-
+        add_cycles(72); // Best case: 76/ Worst case 136/140
         const auto q = reg / d;
         const auto r = reg % d;
         uint16_t ccr = 0;
         if (q > 0xffff) {
+            add_cycles(10); // Overflow costs 10 cycles
             ccr = srm_v | srm_n;
         } else {
             if (q & 0x8000)
@@ -1070,6 +1248,7 @@ private:
         const auto d = sext(read_ea(0), opsize::w);
         (void)calc_ea(1);
         if (!d) {
+            //  Divide by Zero      | 38(4/3)+ |36         nn nn    ns ns nS nV nv np np
             do_trap(interrupt_vector::zero_divide);
             return;
         }
@@ -1079,7 +1258,15 @@ private:
         const auto q = static_cast<int32_t>(reg) / d;
         const auto r = static_cast<int32_t>(reg) % d;
         uint16_t ccr = 0;
+
+        //.Best case : 120-122 cycles depending on dividend sign.                       
+        //.Worst case : 156 (158 ?) cycles.                                             
+
+        add_cycles(d < 0 ? 118 : 116);
+
         if (q > 0x7fff || q < -0x8000) {
+            //  .Overflow cost 16 or 18 cycles depending on dividend sign (n nn nn (n)n np).  
+            add_cycles(16);
             ccr = srm_v | srm_n;
         } else {
             if (q & 0x8000)
@@ -1097,6 +1284,7 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l ^ r;
+        add_rmw_cycles();
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
     }
@@ -1106,6 +1294,7 @@ private:
         assert(inst_->size == opsize::l && inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) < 2 && (inst_->ea[1] >> ea_m_shift) < 2);
         const auto a = read_ea(0);
         const auto b = read_ea(1);
+        add_cycles(2);
         write_ea(0, b);
         write_ea(1, a);
     }
@@ -1125,9 +1314,42 @@ private:
         update_flags(srm_ccr_no_x, res, 0);
     }
 
+    void add_jmp_jsr_cycles()
+    {
+        switch (inst_->ea[0] >> ea_m_shift) {
+        case ea_m_A_ind:
+            useless_prefetch();
+            break;
+        case ea_m_A_ind_disp16:
+            add_cycles(2);
+            break;
+        case ea_m_A_ind_index:
+            add_cycles(4);
+            break;
+        case ea_m_Other:
+            switch (inst_->ea[0] & ea_xn_mask) {
+            case ea_other_abs_w:
+            case ea_other_pc_disp16:
+                add_cycles(2);
+                break;
+            case ea_other_pc_index:
+                add_cycles(4);
+                break;
+            case ea_other_abs_l:
+                break;
+            default:
+                assert(0);
+            }
+            break;
+        default:
+            assert(0);
+        }
+    }
+
     void handle_JMP()
     {
         assert(inst_->nea == 1);
+        add_jmp_jsr_cycles();
         state_.pc = calc_ea(0);
     }
 
@@ -1135,6 +1357,7 @@ private:
     {
         assert(inst_->nea == 1);
         const auto addr = calc_ea(0);
+        add_jmp_jsr_cycles();
         push_u32(state_.pc);
         state_.pc = addr;
     }
@@ -1142,7 +1365,10 @@ private:
     void handle_LEA()
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift == ea_m_An) && inst_->size == opsize::l);
-        write_ea(1, calc_ea(0));
+        const auto addr = calc_ea(0);
+        if ((inst_->ea[0] >> ea_m_shift == ea_m_A_ind_index) || inst_->ea[0] == ea_pc_index)
+            add_cycles(2);
+        write_ea(1, addr);
         // No flags affected
     }
 
@@ -1171,8 +1397,8 @@ private:
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
-        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         bool carry;
         if (!cnt) {
@@ -1238,8 +1464,6 @@ private:
                 const auto regnum = 15 - bit;
                 addr -= nb;
                 write_mem(addr, regnum < 8 ? state_.d[regnum] : state_.A(regnum & 7));
-                step_res_.clock_cycles += nb * 2;
-                step_res_.mem_accesses += nb / 2;
             }
             // Update address register
             state_.A(inst_->ea[1] & ea_xn_mask) = addr;
@@ -1253,8 +1477,6 @@ private:
                 } else
                     write_mem(addr, reg);
                 addr += nb;
-                step_res_.clock_cycles += nb * 2;
-                step_res_.mem_accesses += nb / 2;
             }
 
             // Update address register if post-increment mode
@@ -1266,8 +1488,6 @@ private:
         if (mem_to_reg) {
             // Mem to reg mode apparently does an extra read access
             (void)mem_read16(addr);
-            step_res_.clock_cycles += 4;
-            step_res_.mem_accesses += 1;
         }
     }
 
@@ -1311,6 +1531,8 @@ private:
         const auto a = sext(read_ea(0) & 0xffff, opsize::w);
         const auto b = sext(read_ea(1) & 0xffff, opsize::w);
         const uint32_t res = static_cast<int32_t>(a) * b;
+        prefetch();
+        add_cycles(34 + 2*num_bits_set(static_cast<uint16_t>(a ^ (a << 1))));
         state_.d[inst_->ea[1] & ea_xn_mask] = res;
         uint16_t ccr = 0;
         if (!res)
@@ -1318,7 +1540,6 @@ private:
         if (res & 0x80000000)
             ccr |= srm_n;
         state_.update_sr(srm_ccr_no_x, ccr);
-        step_res_.clock_cycles += 2 * num_bits_set(static_cast<uint16_t>(a ^ (a << 1)));
     }
 
     void handle_MULU()
@@ -1327,6 +1548,8 @@ private:
         const auto a = static_cast<uint16_t>(read_ea(0) & 0xffff);
         const auto b = static_cast<uint16_t>(read_ea(1) & 0xffff);
         const uint32_t res = static_cast<uint32_t>(a) * b;
+        prefetch();
+        add_cycles(34 + 2*num_bits_set(static_cast<uint16_t>(a)));
         state_.d[inst_->ea[1] & ea_xn_mask] = res;
         uint16_t ccr = 0;
         if (!res)
@@ -1334,7 +1557,6 @@ private:
         if (res & 0x80000000)
             ccr |= srm_n;
         state_.update_sr(srm_ccr_no_x, ccr);
-        step_res_.clock_cycles += 2 * num_bits_set(static_cast<uint16_t>(a));
     }
 
     void handle_NBCD()
@@ -1347,10 +1569,12 @@ private:
         const auto res = l - r - !!(state_.sr & srm_x);
         const auto carry10 = ((~l & r) | (~(l ^ r) & res)) & 0x88;
         const auto res2 = res - (carry10 - (carry10 >> 2));
-        write_ea(0, res2);
         uint8_t ccr = (res2 & 0xf00 ? srm_c | srm_x : 0) | (res2 & 0xff ? 0 : state_.sr & srm_z) | (res2 & 0x80 ? srm_n : 0);
         if ((res & 0x80) && !(res2 & 0x80))
             ccr |= srm_v;
+        if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
+        write_ea(0, res2);
         state_.update_sr(srm_ccr, ccr);
     }
 
@@ -1372,6 +1596,8 @@ private:
             if (overflow)
                 ccr |= srm_v;
         }
+        if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
         write_ea(0, n);
         state_.update_sr(srm_ccr, ccr);
     }
@@ -1383,6 +1609,8 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = 0;
         const uint32_t res = l - r - !!(state_.sr & srm_x);
+        if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
         write_ea(0, res);
         update_flags(static_cast<sr_mask>(srm_ccr & ~srm_z), res, (~l & r) | (~(l ^ r) & res));
         // Z is only cleared if the result is non-zero
@@ -1395,6 +1623,8 @@ private:
     {
         assert(inst_->nea == 1);
         auto n = ~read_ea(0);
+        if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
         update_flags(srm_ccr_no_x, n, 0);
         write_ea(0, n);
     }
@@ -1409,6 +1639,7 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l | r;
+        add_rmw_cycles();
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
     }
@@ -1416,7 +1647,10 @@ private:
     void handle_PEA()
     {
         assert(inst_->nea == 1 && inst_->size == opsize::l);
-        push_u32(calc_ea(0));
+        const auto addr = calc_ea(0);
+        if ((inst_->ea[0] >> ea_m_shift == ea_m_A_ind_index) || inst_->ea[0] == ea_pc_index)
+            add_cycles(2);
+        push_u32(addr);
     }
 
     void handle_ROL()
@@ -1428,8 +1662,8 @@ private:
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
-        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         bool carry = false;
         if (cnt) {
@@ -1456,8 +1690,8 @@ private:
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
-        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         bool carry = false;
         if (cnt) {
@@ -1483,8 +1717,8 @@ private:
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
-        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         // TODO: Could optimize
         const auto msb = opsize_msb_mask(inst_->size);
@@ -1507,8 +1741,8 @@ private:
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
-        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         // TODO: Could optimize
         const auto shift = opsize_bytes(inst_->size) * 8 - 1;
@@ -1529,6 +1763,8 @@ private:
         const auto sr = pop_u16();
         state_.pc = pop_u32();
         state_.sr = sr; // Only after popping PC (otherwise we switch stacks too early)
+        useless_prefetch();
+
     }
 
     void handle_RTR()
@@ -1536,12 +1772,14 @@ private:
         const auto ccr = pop_u16();
         state_.pc = pop_u32();
         state_.sr = (state_.sr & ~srm_ccr) | (ccr & srm_ccr);
+        useless_prefetch();
     }
 
     void handle_RTS()
     {
         assert(inst_->nea == 0);
         state_.pc = pop_u32();
+        useless_prefetch();
     }
 
     void handle_SBCD()
@@ -1551,10 +1789,12 @@ private:
         const auto res = l - r - !!(state_.sr & srm_x);
         const auto carry10 = ((~l & r) | (~(l ^ r) & res)) & 0x88;
         const auto res2 = res - (carry10 - (carry10 >> 2));
-        write_ea(1, res2);
         uint8_t ccr = (res2 & 0xf00 ? srm_c | srm_x : 0) | (res2 & 0xff ? 0 : state_.sr & srm_z) | (res2 & 0x80 ? srm_n : 0);
         if ((res & 0x80) && !(res2 & 0x80))
             ccr |= srm_v;
+        if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            add_cycles(2);
+        write_ea(1, res2);
         state_.update_sr(srm_ccr, ccr);
     }
 
@@ -1563,7 +1803,9 @@ private:
         assert(inst_->nea == 1 && inst_->size == opsize::b && (inst_->extra & extra_cond_flag));
         const bool cond = state_.eval_cond(static_cast<conditional>(inst_->extra >> 4));
         if (cond && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
-            step_res_.clock_cycles += 2;
+            add_cycles(2);
+        else
+            (void)read_ea(0);
         write_ea(0, cond ? 0xff : 0x00);
     }
 
@@ -1580,6 +1822,7 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l - r;
+        add_rmw_cycles();
         write_ea(1, res);
         // All flags updated
         update_flags(srm_ccr, res, (~l & r) | (~(l ^ r) & res));
@@ -1590,6 +1833,7 @@ private:
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
         (void)calc_ea(1);
+        add_cycles(inst_->size == opsize::w || inst_->ea[0] >> ea_m_shift <= ea_m_An || inst_->ea[0] == ea_immediate ? 4 : 2);
         state_.A(inst_->ea[1] & ea_xn_mask) -= s; // And the operation performed on the full 32-bit value
         // No flags
     }
@@ -1599,10 +1843,13 @@ private:
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         if ((inst_->ea[1] >> ea_m_shift) == ea_m_An) {
             // SUBQ to address register is always long and doesn't update flags
+            add_cycles(4);
             state_.A(inst_->ea[1] & ea_xn_mask) -= static_cast<int8_t>(calc_ea(0));
             (void)calc_ea(1);
         } else {
             handle_SUB();
+            if (inst_->ea[1] >> ea_m_shift == ea_m_Dn && inst_->size == opsize::l)
+                add_cycles(2);
         }
     }
 
@@ -1612,6 +1859,8 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l - r - !!(state_.sr & srm_x);
+        if (inst_->ea[0] >> ea_m_shift == ea_m_Dn && inst_->size == opsize::l)
+            add_cycles(4);
         write_ea(1, res);
         update_flags(static_cast<sr_mask>(srm_ccr & ~srm_z), res, (~l & r) | (~(l ^ r) & res));
         // Z is only cleared if the result is non-zero
@@ -1643,6 +1892,8 @@ private:
         else if (!v)
             ccr |= srm_z;
         state_.update_sr(srm_ccr_no_x, ccr);
+        if (inst_->ea[0] >> ea_m_shift != ea_m_Dn)
+            add_cycles(2); // TAS uses a special (10 cycle) RMW cycle
         write_ea(0, v | 0x80);
     }
 
@@ -1651,16 +1902,13 @@ private:
         const uint8_t trap = static_cast<uint8_t>(calc_ea(0));
         assert(inst_->nea == 1 && trap < 16);
         do_trap(static_cast<interrupt_vector>(32 + (trap & 0xf)));
-        step_res_.clock_cycles = 34;
-        step_res_.mem_accesses = 7;
     }
 
     void handle_TRAPV()
     {
         if (state_.sr & srm_v) {
             do_trap(interrupt_vector::trapv_instruction);
-            step_res_.clock_cycles = 34;
-            step_res_.mem_accesses = 8;
+            useless_prefetch();
         }
     }
 

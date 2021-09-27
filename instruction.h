@@ -149,7 +149,11 @@ constexpr uint8_t extra_priv_flag = 1 << 2; // Instruction is privileged (causes
 constexpr uint8_t ea_m_shift = 3;
 constexpr uint8_t ea_xn_mask = 7;
 
+constexpr uint8_t ea_pc_index  = ea_m_Other << ea_m_shift | ea_other_pc_index;
 constexpr uint8_t ea_immediate = ea_m_Other << ea_m_shift | ea_other_imm;
+constexpr uint8_t ea_data3     = 0b01'000'000;
+constexpr uint8_t ea_data4     = 0b01'000'001;
+constexpr uint8_t ea_data8     = 0b01'000'010;
 constexpr uint8_t ea_disp      = 0b01'000'011;
 constexpr uint8_t ea_sr        = 0b01'000'100;
 constexpr uint8_t ea_ccr       = 0b01'000'101;

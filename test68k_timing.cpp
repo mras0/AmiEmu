@@ -111,8 +111,8 @@ Dn,<ea> :         |
     (d8,An,Xn)    |  4(1/0) 10(2/0)
     (xxx).W       |  4(1/0)  8(2/0)
     (xxx).L       |  4(1/0) 12(3/0)
-Dn,Dm :           |                
-  .L :            |  6(1/0)  0(0/0)
+  .L :            |
+    Dn            |  6(1/0)  0(0/0)
 #<data>,<ea> :    |                
   .B :            |                
     (An)          |  8(2/0)  4(1/0)
@@ -122,8 +122,8 @@ Dn,Dm :           |
     (d8,An,Xn)    |  8(2/0) 10(2/0)
     (xxx).W       |  8(2/0)  8(2/0)
     (xxx).L       |  8(2/0) 12(3/0)
-#<data>,Dn :      |                
-  .L :            | 10(2/0)  0(0/0)
+  .L :            |
+    Dn            | 10(2/0)  0(0/0)
 )";
 
 const char* const move_table = R"(
@@ -452,6 +452,7 @@ const char* const tst_table = R"(
     (xxx).L       |  4(1/0) 16(4/0) 
 )";
 
+// Note: EA memory accesses adjust up one for (xxx).W/L compared to YACHT
 const char* const tas_table = R"(
 <ea> :            |                
   .B :            |                
@@ -461,8 +462,8 @@ const char* const tas_table = R"(
     -(An)         | 10(1/1)  6(1/0)
     (d16,An)      | 10(1/1)  8(2/0)
     (d8,An,Xn)    | 10(1/1) 10(2/0)
-    (xxx).W       | 10(1/1)  8(1/0)
-    (xxx).L       | 10(1/1) 12(2/0)
+    (xxx).W       | 10(1/1)  8(2/0)
+    (xxx).L       | 10(1/1) 12(3/0)
 )";
 
 const char* const add_sub_table = R"(
@@ -833,6 +834,10 @@ struct tester {
                     sizes = { ".L" };
                 else
                     throw std::runtime_error { "Size not recognied: " + line };
+
+                if (trim(line.substr(divpos + 1)) != "")
+                    throw std::runtime_error { "Invalid size line: \"" + line + "\" while testing (first:) " + insts[0]};
+
                 continue;
             }
             assert(line.compare(0, 4, "    ") == 0);
@@ -869,9 +874,6 @@ struct tester {
                     args = replace(args, "Ay", "A4");
                     args = replace(args, "<data>", data);
 
-
-
-                    //std::cout << "\tTest " << i << s << "\t" << args << "!\n";
 
                     const auto stmt = inst + s + "\t" + args;
 
@@ -1440,10 +1442,13 @@ bool run_timing_tests()
         { "MOVEM.L D0-D7, $12.L"            , 80, 20 },
 
         // The following is not 100% correct (also need division by zero)
-        { "DIVU D5, D0"                     , 76, 1 },
+        // TODO: Check overflow
+        { "DIVU D3, D0"                     , 76, 1 },
         { "DIVU #123, D0"                   , 80, 2 },
-        { "DIVS D5, D0"                     , 120, 1 },
+        { "DIVU D5, D0"                     , 38, 7 }, // Division by zero
+        { "DIVS D3, D0"                     , 120, 1 },
         { "DIVS #123, D0"                   , 124, 2 },
+        { "DIVS D5, D0"                     , 38, 7 }, // Division by zero
 
         { "MULS D5, D0"                     , 38, 1 },
         { "MULS D4, D0"                     , 46, 1 },
@@ -1465,6 +1470,9 @@ bool run_timing_tests()
         { "TRAPV"                           , 34, 8 },
         { "ILLEGAL"                         , 34, 7 },
         { "DC.W $4E7B"                      , 34, 7 }, // MOVEC D1, VBR
+
+        { "BTST.L #15, D7"                  , 10, 2 },
+        { "BTST.L #16, D7"                  , 10, 2 },
     };
 
     const uint32_t code_pos = 0x1000;
@@ -1523,14 +1531,14 @@ bool run_timing_tests()
 
 bool test_timing()
 {
-    bool all_ok = true;
-    all_ok &= run_timing_tests();
+    if (!run_timing_tests())
+        return false;
 
     tester t;
     for (const auto& tc : timing_tests) {
-        const bool ok = t.tests_from_table(tc.table, tc.instructions);
-        all_ok &= ok;
+        if (!t.tests_from_table(tc.table, tc.instructions))
+            return false;
     }
 
-    return all_ok;
+    return true;
 }
