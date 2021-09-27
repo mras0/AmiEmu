@@ -921,11 +921,15 @@ bool run_winuae_tests()
     test_lowmem = read_file((basedir/"lmem.dat").string());
     test_testmem = read_file((basedir / "tmem.dat").string());
 
+    //debug_winuae_tests = true;
+    //run_winuae_mnemonic_test(basedir / "ROL.B");
+    //assert(0);
+
     const std::vector<const char*> skip = {
         // Require excpetion handling
         "ANDSR", "MV2SR", "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP",
         // assert
-        "MVMEL", "ROL", "ROR",
+        "MVMEL",
     };
     bool errors = false;
     for (auto& p : fs::directory_iterator(basedir)) {

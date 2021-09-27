@@ -598,7 +598,8 @@ private:
         if (res & mask)
             ccr |= srm_n;
         // X not affected if zero shift count...
-        state_.update_sr(cnt ? srm_ccr : srm_ccr_no_x, ccr);
+        const sr_mask sm = cnt ? srm_ccr : srm_ccr_no_x;
+        state_.update_sr(sm, ccr & sm);
     }
 
     void do_left_shift(bool arit)
