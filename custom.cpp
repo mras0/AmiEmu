@@ -422,6 +422,13 @@ constexpr T ror(T val, unsigned amt)
     return val >> amt | val << (sizeof(T) * CHAR_BIT - amt);
 }
 
+enum class ddfstate {
+    before_ddfstrt,
+    active,
+    ddfstop_passed,
+    stopped,
+};
+
 struct custom_state {
     // Internal state
     uint16_t hpos; // Resolution is in low-res pixels
@@ -431,6 +438,9 @@ struct custom_state {
     bool bpl1dat_written;
     uint8_t bpldata_avail;
     uint32_t ham_color;
+    ddfstate ddfst;
+    uint16_t ddfcycle;
+    uint16_t ddfend;
 
     uint32_t dskpt;
     uint16_t dsklen;
@@ -897,22 +907,58 @@ public:
                 // TODO: Audio
 
                 // Display
-                if ((s_.dmacon & DMAF_RASTER) && vert_disp
-                    // Note: hack - comparing colclock-7 with ddfstop since ddfstop/d8 is the latest point a new 8-word transfer can be started
-                    && colclock >= std::max<uint16_t>(0x18, s_.ddfstrt) && (colclock-7) <= std::min<uint16_t>(0xD8, s_.ddfstop)) {
+                const uint16_t act_ddfstop = std::min<uint16_t>(0xD8, s_.ddfstop);
+                const bool bpl_dma_active = (s_.dmacon & DMAF_RASTER) && vert_disp && (s_.bplcon0 & BPLCON0F_BPU);
+
+#ifdef BPL_DMA_DEBUG
+                static int num_bpl1_writes = 0;
+#endif
+                if (bpl_dma_active) {
+                    if (s_.ddfst == ddfstate::before_ddfstrt && colclock == std::max<uint16_t>(0x18, s_.ddfstrt)) {
+#ifdef BPL_DMA_DEBUG
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " DDFSTRT=$" << hexfmt(s_.ddfstrt) << " passed\n";
+                        num_bpl1_writes = 0;
+#endif
+                        s_.ddfst = ddfstate::active;
+                        s_.ddfcycle = 0;
+                        s_.ddfend = 0;
+                    } else if (s_.ddfst == ddfstate::active && colclock == std::min<uint16_t>(0xD8, s_.ddfstop)) {
+#ifdef BPL_DMA_DEBUG
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " DDFSTOP=$" << hexfmt(s_.ddfstop) << " passed\n";
+#endif
+                        // Need to do one final 8-cycles DMA fetch
+                        s_.ddfst = ddfstate::ddfstop_passed;
+                    } else if (s_.ddfst == ddfstate::ddfstop_passed && s_.ddfcycle == s_.ddfend) {
+#ifdef BPL_DMA_DEBUG
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " BPL DMA done (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
+#endif
+                        s_.ddfst = ddfstate::stopped;
+                    }
+                }
+
+                if (bpl_dma_active && (s_.ddfst == ddfstate::active || s_.ddfst == ddfstate::ddfstop_passed)) {
                     constexpr uint8_t lores_bpl_sched[8] = { 0, 4, 6, 2, 0, 3, 5, 1 };
                     constexpr uint8_t hires_bpl_sched[8] = { 4, 3, 2, 1, 4, 3, 2, 1 };
-                    const int bpl = (s_.bplcon0 & BPLCON0F_HIRES ? hires_bpl_sched : lores_bpl_sched)[colclock & 7] - 1;
+                    const int bpl = (s_.bplcon0 & BPLCON0F_HIRES ? hires_bpl_sched : lores_bpl_sched)[s_.ddfcycle & 7] - 1;
+                    if (s_.ddfst == ddfstate::ddfstop_passed && !s_.ddfend && (s_.ddfcycle & 7) == 0) {
+#ifdef BPL_DMA_DEBUG
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Doing final DMA cycles (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
+#endif
+                        s_.ddfend = s_.ddfcycle + 8;
+                    }
+                    ++s_.ddfcycle;
 
                     if (bpl >= 0 && bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0)) {
 #ifdef BPL_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " BPL " << bpl << " DMA\n";
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " BPL " << bpl << " DMA (fetch cycle $" << hexfmt(s_.ddfcycle) << ")\n";
 #endif
                         s_.bpldat[bpl] = do_dma(s_.bplpt[bpl]);
                         if (bpl == 0) {
 #ifdef BPL_DMA_DEBUG                            
                             std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Data available -- bpldat1_written = " << s_.bpl1dat_written << " bpldata_avail = " << hexfmt(s_.bpldata_avail) << (s_.bpl1dat_written ? " Warning!" : "") << "\n";
+                            ++num_bpl1_writes;
 #endif
+
                             s_.bpl1dat_written = true;
                         }
                         break;
@@ -965,6 +1011,7 @@ public:
             rem_pixelsO = rem_pixelsE = 0;
 #endif
             s_.ham_color = rgb4_to_8(s_.color[0]);
+            s_.ddfst = ddfstate::before_ddfstrt;
 
             cia_.increment_tod_counter(1);
             if ((s_.dmacon & (DMAF_MASTER|DMAF_RASTER)) == (DMAF_MASTER|DMAF_RASTER) && vert_disp) {

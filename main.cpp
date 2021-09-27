@@ -56,11 +56,42 @@ FC00CC  00FC00D2                    RT_INIT         (execution address)*
 }
 #endif
 
+struct command_line_arguments {
+    std::string rom;
+    std::string df0;
+};
+
+command_line_arguments parse_command_line_arguments(int argc, char* argv[])
+{
+    command_line_arguments args;
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "-df0")) {
+            if (++i == argc)
+                throw std::runtime_error { "Missing df0 argument" };
+            if (!args.df0.empty())
+                throw std::runtime_error { "Multiple df0 arguments" };
+            args.df0 = argv[i];
+        } else if (!strcmp(argv[i], "-rom")) {
+            if (++i == argc)
+                throw std::runtime_error { "Missing rom argument" };
+            if (!args.rom.empty())
+                throw std::runtime_error { "Multiple rom arguments" };
+            args.rom = argv[i];
+        } else {
+            throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
+        }
+    }
+    if (args.rom.empty())
+        args.rom = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+    return args;
+}
+
 int main(int argc, char* argv[])
 {
     try {
+        const auto args = parse_command_line_arguments(argc, argv);
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
-        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 2.0 (A600).rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 3.1 (A600).rom";
@@ -70,7 +101,7 @@ int main(int argc, char* argv[])
         disk_drive df0 {};
         disk_drive* drives[max_drives] = { &df0 };
         memory_handler mem { 1U << 20 };
-        rom_area_handler rom { mem, read_file(rom_file) };
+        rom_area_handler rom { mem, read_file(args.rom) };
         cia_handler cias { mem, rom, drives };
         custom_handler custom { mem, cias };
 
@@ -78,24 +109,15 @@ int main(int argc, char* argv[])
         //ram_handler slow_ram { slow_size }; // For KS1.2
         //mem.register_handler(slow_ram, slow_base, slow_size);
 
-        //const char* disk = "../../Misc/AmigaWorkbench/Workbench13.adf";
-        const char* disk = R"(..\..\misc\amiga\ham\out\ham.adf)";
+        //const char* disk = "";
+        //disk = "../../Misc/AmigaWorkbench/Workbench13.adf";
+        //disk = R"(..\..\misc\amiga\ctest\out\test.adf)";
+
 
         m68000 cpu { mem };
 
-        for (int i = 1; i < argc; ++i) {
-            if (!strcmp(argv[i], "-trace"))
-                cpu.trace(&std::cout);
-            else if (!strcmp(argv[i], "-df0")) {
-                if (++i == argc)
-                    throw std::runtime_error { "Missing disk argument" };
-                disk = argv[i];
-            }
-            else
-                throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
-        }
-
-        df0.insert_disk(read_file(disk));
+        if (!args.df0.empty())
+            df0.insert_disk(read_file(args.df0));
 
         //rom_tag_scan(rom.rom());
 
