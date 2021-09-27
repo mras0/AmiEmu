@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <cassert>
 #include <fstream>
+#include <chrono>
 
 //#define TRACE_LOG
 
@@ -204,11 +205,12 @@ struct command_line_arguments {
     uint32_t chip_size;
     uint32_t slow_size;
     uint32_t fast_size;
+    bool test_mode;
 };
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0 adf-file] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0 adf-file] [-chip size] [-slow size] [-fast size] [-testmode] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -262,6 +264,12 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_size_arg("fast", args.fast_size, max_fast_size))
                 continue;
+            else if (!strcmp(&argv[i][1], "help"))
+                usage("");
+            else if (!strcmp(&argv[i][1], "testmode")) {
+                args.test_mode = true;
+                continue;
+            }
         }
         usage("Unrecognized command line parameter: " + std::string { argv[i] });
     }
@@ -470,6 +478,9 @@ private:
 
 int main(int argc, char* argv[])
 {
+    constexpr uint32_t testmode_stable_frames = 5*50;
+    constexpr uint32_t testmode_min_instructions = 5'000'000;
+
     try {
         const auto cmdline_args = parse_command_line_arguments(argc, argv);
         disk_drive df0 {"DF0:"}, df1 {"DF1:"};
@@ -482,6 +493,8 @@ int main(int argc, char* argv[])
         custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size };
         autoconf_handler autoconf { cmdline_args.fast_size };
         mem.register_handler(autoconf, 0xe80000, 0x80000);
+        std::vector<uint32_t> testmode_data;
+        uint32_t testmode_cnt = 0;
 
         if (cmdline_args.slow_size) {
             slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
@@ -500,6 +513,11 @@ int main(int argc, char* argv[])
             df1.insert_disk(read_file(cmdline_args.df1));
 
         std::cout << "Memory configuration: Chip: " << (cmdline_args.chip_size >> 10) << " KB, Slow: " << (cmdline_args.slow_size >> 10) << " KB, Fast: " << (cmdline_args.fast_size >> 10) << " KB\n";
+
+        if (cmdline_args.test_mode) {
+            std::cout << "Testmode! Min. instructions=" << testmode_min_instructions << " frames=" << testmode_stable_frames << "\n";
+            testmode_data.resize(graphics_width * graphics_height);
+        }
 
         //rom_tag_scan(rom.rom());
 
@@ -611,6 +629,7 @@ int main(int argc, char* argv[])
         bool new_frame = false;
         bool cpu_active = true;
         uint32_t cycles_todo = 0;
+        uint32_t idle_count = 0;
 
         cpu.set_cycle_handler([&](uint8_t cycles) {
             assert(cpu_active);
@@ -938,10 +957,12 @@ unknown_command:
                 if (cpu_step.clock_cycles == 0) {
                     // CPU is stopped
                     do {
+                        ++idle_count;
                         cstep(false);
                     } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
                 } else {
                     do_all_custom_cylces();
+                    idle_count = 0;
                 }
 
     
@@ -963,6 +984,33 @@ unknown_command:
                             std::cout << drives[pending_disk_drive]->name() << " Inserting disk\n";
                             drives[pending_disk_drive]->insert_disk(std::move(pending_disk));
                             pending_disk_drive = 0xff;
+                        }
+                    }
+                    if (cmdline_args.test_mode) {
+                        if (!memcmp(custom_step.frame, testmode_data.data(), testmode_data.size() * 4)) {
+                            if (cpu.state().instruction_count >= testmode_min_instructions && idle_count > 100'000 && ++testmode_cnt >= testmode_stable_frames) {
+                                const auto ts = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+                                std::string filename = "c:/temp/test" + ts + ".ppm";
+                                {
+                                    std::ofstream out { filename, std::ofstream::binary };
+                                    out << "P6\n" << graphics_width << " " << graphics_height << "\n255\n";
+                                    for (unsigned i = 0; i < graphics_width * graphics_height; ++i) {
+                                        const auto c = custom_step.frame[i];
+                                        char rgb[3] = { static_cast<char>((c >> 16) & 0xff), static_cast<char>((c >> 8) & 0xff), static_cast<char>((c & 0xff)) };
+                                        out.write(rgb, 3);
+                                    }
+                                }
+
+                                auto pngname = "c:/temp/test" + ts + ".png";
+                                auto cmd = "c:/Tools/ImageMagick/convert " + filename + " " + pngname;
+                                system(cmd.c_str());
+                                _unlink(filename.c_str());
+
+                                std::cout << "Testmode done. Wrote " << pngname << " (DF0: " << cmdline_args.df0 << ")\n";
+                                return 0;
+                            }
+                        } else {
+                            memcpy(&testmode_data[0], custom_step.frame, testmode_data.size() * 4);
                         }
                     }
                     new_frame = false;
@@ -990,6 +1038,8 @@ unknown_command:
                 serdata_flush();
                 debug_mode = true;
                 g.set_active(false);
+                if (cmdline_args.test_mode)
+                    throw;
 #else
                 throw;
 #endif
