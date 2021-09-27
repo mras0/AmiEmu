@@ -792,7 +792,7 @@ struct custom_state {
     uint8_t bplmod1_countdown;
     uint8_t bplmod2_countdown;
 
-    bool rmb_pressed;
+    bool rmb_pressed[2];
     uint8_t cur_mouse_x;
     uint8_t cur_mouse_y;
     uint16_t joydat;
@@ -1035,7 +1035,7 @@ public:
 
     void set_rbutton_state(bool pressed)
     {
-        s_.rmb_pressed = pressed;
+        s_.rmb_pressed[0] = pressed;
     }
 
     void mouse_move(int dx, int dy)
@@ -1046,8 +1046,8 @@ public:
 
     void set_joystate(uint16_t dat, bool button_state)
     {
-        (void)button_state; // Ignore for now
         s_.joydat = dat;
+        s_.rmb_pressed[1] = button_state;
     }
 
     void show_debug_state(std::ostream& os)
@@ -2382,8 +2382,7 @@ public:
         case POT1DAT: // $014
             break;
         case POTGOR:  // $016
-            // Don't spam in DiagROM
-            return 0xFF00 & ~(s_.rmb_pressed ? 0x400 : 0);
+            return 0xFF00 & ~(s_.rmb_pressed[0] ? 0x400 : 0) & ~(s_.rmb_pressed[1] ? 0x4000 : 0);
         case SERDATR: // $018
             return (3<<12); // Just return transmit buffer empty
         case DSKBYTR:
