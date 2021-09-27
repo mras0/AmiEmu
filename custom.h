@@ -18,7 +18,7 @@ class cia_handler;
 
 class custom_handler {
 public:
-    explicit custom_handler(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end);
+    explicit custom_handler(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end, uint32_t floppy_speed);
     ~custom_handler();
 
     using serial_data_handler = std::function<void(uint8_t numbits, uint8_t data)>;

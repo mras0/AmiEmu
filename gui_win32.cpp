@@ -727,6 +727,7 @@ private:
         const wchar_t* const name;
         int val;
     } fields[] = {
+        #if 0
         { L"Width", 320 },
         { L"Height", 256 },
         { L"BPLCON0", 1<<12 },
@@ -738,6 +739,19 @@ private:
         { L"Plane4", 0 },
         { L"Plane5", 0 },
         { L"Plane6", 0 },
+        #else
+        { L"Width", 352 },
+        { L"Height", 512 },
+        { L"BPLCON0", 0x9200 },
+        { L"Modulo1", 0 },
+        { L"Modulo2", 0 },
+        { L"Plane1", 0x4b000 },
+        { L"Plane2", 0 },
+        { L"Plane3", 0 },
+        { L"Plane4", 0 },
+        { L"Plane5", 0 },
+        { L"Plane6", 0 },
+#endif
     };
     uint16_t palette_[32];
     static constexpr auto num_fields = sizeof(fields) / sizeof(*fields);

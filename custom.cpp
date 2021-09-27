@@ -792,6 +792,7 @@ struct custom_state {
     uint16_t dsksync;
     bool dsksync_passed;
     bool dskread;
+    uint16_t dskpos;
     uint16_t mfm_pos;
     uint8_t mfm_sector_cnt;
     uint8_t mfm_track[MFM_TRACK_SIZE_WORDS * 2];
@@ -920,10 +921,11 @@ struct custom_state {
 
 class custom_handler::impl : public memory_area_handler {
 public:
-    explicit impl(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end)
+    explicit impl(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end, uint32_t floppy_speed)
         : mem_ { mem_handler }
         , cia_ { cia }
         , chip_ram_mask_ { static_cast<uint32_t>(mem_.ram().size()) - 2 } // -1 for normal mask, -2 for word aligned mask
+        , floppy_speed_ { floppy_speed }
     {
         mem_.register_handler(*this, 0xDFF000, 0x1000);
         for (uint32_t addr = slow_end; addr < 0xDC'0000; addr += 256 << 10) {
@@ -1192,7 +1194,7 @@ public:
 
     bool do_blitter()
     {
-#if 0
+#if 1
         if (1)
             return do_immedite_blit();
 #endif
@@ -1533,6 +1535,7 @@ public:
             if (DEBUG_DISK)
                 DBGOUT << "Reading track\n";
             assert(s_.mfm_pos == 0);
+            assert(s_.dskpos == 0);
             cia_.active_drive().read_mfm_track(s_.mfm_track);
             s_.dskread = true;
             s_.dskwait = 0;
@@ -1566,17 +1569,22 @@ public:
             TODO_ASSERT(!"Sync word not found?");
         }
 
+        if (DEBUG_DISK && !s_.dskpos)
+            DBGOUT << "Disk reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << "\n";
 
-        if (DEBUG_DISK)
-            DBGOUT << "Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm offset=$" << hexfmt(s_.mfm_pos) << "\n";
-    
-        for (uint16_t i = 0; i < nwords; ++i) {
+        // 400% floppy speed corrupts display at start of "flower"/Anarchy Germany (https://www.pouet.net/prod.php?which=3037)
+        for (uint32_t i = 0; i < floppy_speed_ && s_.dskpos < nwords; ++i) {
             chip_write(s_.dskpt, get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]));
             s_.dskpt += 2;
             ++s_.mfm_pos;
+            ++s_.dskpos;
         }
-        s_.intreq |= INTF_DSKBLK;
-        s_.dsklen_act = 0;
+        if (s_.dskpos == nwords) {
+            if (DEBUG_DISK)
+                DBGOUT << "Disk read done $" << hexfmt(nwords) << " words read\n";
+            s_.intreq |= INTF_DSKBLK;
+            s_.dsklen_act = 0;
+        }
         return true;
     }
 
@@ -2402,6 +2410,7 @@ public:
             s_.dsklen = val;
             s_.dskwait = 0;
             s_.mfm_pos = 0;
+            s_.dskpos = 0;
             s_.dsksync_passed = false;
             s_.dskread = false;
             if (DEBUG_DISK)
@@ -2610,6 +2619,7 @@ private:
     custom_state s_;
     uint32_t chip_ram_mask_;
     uint32_t current_pc_; // For debug output
+    uint32_t floppy_speed_;
 
     uint16_t chip_read(uint32_t addr)
     {
@@ -2905,8 +2915,8 @@ uint16_t custom_handler::impl::internal_read(uint16_t reg)
     }
 }
 
-custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end)
-    : impl_ { std::make_unique<impl>(mem_handler, cia, slow_end) }
+custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end, uint32_t floppy_speed)
+    : impl_ { std::make_unique<impl>(mem_handler, cia, slow_end, floppy_speed) }
 {
 }
 

@@ -212,6 +212,7 @@ struct command_line_arguments {
     uint32_t slow_size;
     uint32_t fast_size;
     uint8_t cpu_scale;
+    uint32_t floppy_speed;
     bool test_mode;
     bool nosound;
     bool debug;
@@ -231,7 +232,7 @@ struct command_line_arguments {
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-state statefile] [-debug] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-state statefile] [-debug] [-floppyspeed X] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -287,6 +288,8 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_size_arg("fast", args.fast_size, max_fast_size))
                 continue;
+            else if (get_size_arg("floppyscale", args.floppy_speed, 0x4000)) // Just some limit
+                continue;
             else if (get_string_arg("state", args.state_filename))
                 continue;
             else if (!strcmp(&argv[i][1], "cpuscale")) {
@@ -330,6 +333,8 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
     }
     if (!args.cpu_scale)
         args.cpu_scale = 1;
+    if (!args.floppy_speed)
+        args.floppy_speed = 16;
     return args;
 }
 
@@ -353,7 +358,7 @@ int main(int argc, char* argv[])
         memory_handler mem { cmdline_args.chip_size };
         rom_area_handler rom { mem, read_file(cmdline_args.rom) };
         cia_handler cias { mem, rom, drives };
-        custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size };
+        custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size, cmdline_args.floppy_speed };
         autoconf_handler autoconf { mem };
         std::vector<uint32_t> testmode_data;
         uint32_t testmode_cnt = 0;
@@ -361,6 +366,7 @@ int main(int argc, char* argv[])
         if (cmdline_args.slow_size) {
             slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
             mem.register_handler(*slow_ram, slow_base, cmdline_args.slow_size);
+            #if 0 // XXX: Figure out behavior for custom mirror..
             // Mirror up to 0xd80000
             const uint32_t slow_end = slow_base + max_slow_size;
             for (uint32_t addr = slow_base + cmdline_args.slow_size; addr < slow_end; addr += cmdline_args.slow_size) {
@@ -369,6 +375,7 @@ int main(int argc, char* argv[])
                     size = slow_end - addr;
                 mem.register_handler(*slow_ram, addr, size);
             }
+            #endif
         }
         if (cmdline_args.fast_size) {
             fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
