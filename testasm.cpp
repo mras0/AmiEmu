@@ -186,6 +186,54 @@ bool simple_asm_tests()
         { "move sp, d0", { 0x300f } },
         { "move usp, a0", { 0x4e68 } },
         { "move a3, usp", { 0x4e63 } },
+        { "label bsr label", { 0x61fe } },
+        { "label move.l #$12345678, $1234.w\n bsr.w label", { 0x21fc, 0x1234, 0x5678, 0x1234, 0x6100, 0xfff6} },
+        { "label BHI label", { 0x62fe } },
+        { "label BLS label", { 0x63fe } },
+        { "label BCC label", { 0x64fe } },
+        { "label BCS label", { 0x65fe } },
+        { "label BNE label", { 0x66fe } },
+        { "label BEQ label", { 0x67fe } },
+        { "label BVC label", { 0x68fe } },
+        { "label BVS label", { 0x69fe } },
+        { "label BPL label", { 0x6afe } },
+        { "label BMI label", { 0x6bfe } },
+        { "label BGE label", { 0x6cfe } },
+        { "label BLT label", { 0x6dfe } },
+        { "label BGT label", { 0x6efe } },
+        { "label BLE label", { 0x6ffe } },
+        { "label DBT d3, label",  { 0x50cb, 0xfffe } },
+        { "label DBF d3, label",  { 0x51cb, 0xfffe } },
+        { "label DBHI d3, label", { 0x52cb, 0xfffe } },
+        { "label DBLS d3, label", { 0x53cb, 0xfffe } },
+        { "label DBCC d3, label", { 0x54cb, 0xfffe } },
+        { "label DBCS d3, label", { 0x55cb, 0xfffe } },
+        { "label DBNE d3, label", { 0x56cb, 0xfffe } },
+        { "label DBEQ d3, label", { 0x57cb, 0xfffe } },
+        { "label DBVC d3, label", { 0x58cb, 0xfffe } },
+        { "label DBVS d3, label", { 0x59cb, 0xfffe } },
+        { "label DBPL d3, label", { 0x5acb, 0xfffe } },
+        { "label DBMI d3, label", { 0x5bcb, 0xfffe } },
+        { "label DBGE d3, label", { 0x5ccb, 0xfffe } },
+        { "label DBLT d3, label", { 0x5dcb, 0xfffe } },
+        { "label DBGT d3, label", { 0x5ecb, 0xfffe } },
+        { "label DBLE d3, label", { 0x5fcb, 0xfffe } },
+        { "ST d0",  { 0x50c0 } },
+        { "SF d3",  { 0x51c3 } },
+        { "SHI (a0)", { 0x52d0 } },
+        { "SLS 12(a1)", { 0x53e9, 0x000c } },
+        { "SCC (a2)+", { 0x54da } },
+        { "SCS $12.w", { 0x55f8, 0x0012 } },
+        { "SNE $12345678.l", { 0x56f9, 0x1234, 0x5678 } },
+        { "SEQ d3", { 0x57c3 } },
+        { "SVC d3", { 0x58c3 } },
+        { "SVS d3", { 0x59c3 } },
+        { "SPL d3", { 0x5ac3 } },
+        { "SMI d3", { 0x5bc3 } },
+        { "SGE d3", { 0x5cc3 } },
+        { "SLT d3", { 0x5dc3 } },
+        { "SGT d3", { 0x5ec3 } },
+        { "SLE d3", { 0x5fc3 } },
         // MOVEP
         // MOVEM
         // TAS
@@ -193,13 +241,8 @@ bool simple_asm_tests()
         // RTR
         // TRAPV
         // TRAP
-        // Scc
-        // DBcc
         // LINK
         // UNLNK
-        // BSR
-        // Bcc
-        // MOVEQ
         // ABCD/SBCD
         // DIVU
         // DIVS

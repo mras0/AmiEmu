@@ -29,41 +29,62 @@ constexpr bool range16(uint32_t val)
     return static_cast<int32_t>(val) >= -32768 && static_cast<int32_t>(val) <= 32767;
 }
 
-#define INSTRUCTIONS(X)            \
-    X(ADD       , bwl  , w    , 2) \
-    X(ADDQ      , bwl  , w    , 2) \
-    X(AND       , bwl  , w    , 2) \
-    X(BCHG      , bl   , none , 2) \
-    X(BCLR      , bl   , none , 2) \
-    X(BSET      , bl   , none , 2) \
-    X(BTST      , bl   , none , 2) \
-    X(BRA       , bw   , none , 1) \
-    X(CLR       , bwl  , w    , 1) \
-    X(CMP       , bwl  , w    , 2) \
-    X(EOR       , bwl  , w    , 2) \
-    X(EXT       , wl   , w    , 1) \
-    X(EXG       , l    , none , 2) \
-    X(ILLEGAL   , none , none , 0) \
-    X(JMP       , none , none , 1) \
-    X(JSR       , none , none , 1) \
-    X(LEA       , l    , l    , 2) \
-    X(MOVE      , bwl  , w    , 2) \
-    X(MOVEQ     , l    , l    , 2) \
-    X(NBCD      , b    , b    , 1) \
-    X(NEG       , bwl  , w    , 1) \
-    X(NEGX      , bwl  , w    , 1) \
-    X(NOP       , none , none , 0) \
-    X(NOT       , bwl  , w    , 1) \
-    X(OR        , bwl  , w    , 2) \
-    X(PEA       , l    , l    , 1) \
-    X(RESET     , none , none , 0) \
-    X(RTE       , none , none , 0) \
-    X(RTS       , none , none , 0) \
-    X(STOP      , none , none , 1) \
-    X(SUB       , bwl  , w    , 2) \
-    X(SUBQ      , bwl  , w    , 2) \
-    X(SWAP      , w    , w    , 1) \
-    X(TST       , bwl  , w    , 1) \
+//n, m, d, no
+#define WITH_CC(X, prefix, tname, fname, m, d, no) \
+    X(tname      , m, d, no) \
+    X(fname      , m, d, no) \
+    X(prefix##HI , m, d, no) \
+    X(prefix##LS , m, d, no) \
+    X(prefix##CC , m, d, no) \
+    X(prefix##CS , m, d, no) \
+    X(prefix##NE , m, d, no) \
+    X(prefix##EQ , m, d, no) \
+    X(prefix##VC , m, d, no) \
+    X(prefix##VS , m, d, no) \
+    X(prefix##PL , m, d, no) \
+    X(prefix##MI , m, d, no) \
+    X(prefix##GE , m, d, no) \
+    X(prefix##LT , m, d, no) \
+    X(prefix##GT , m, d, no) \
+    X(prefix##LE , m, d, no)
+
+#define INSTRUCTIONS(X)                   \
+    X(ADD       , bwl  , w    , 2)        \
+    X(ADDQ      , bwl  , w    , 2)        \
+    X(AND       , bwl  , w    , 2)        \
+    X(BCHG      , bl   , none , 2)        \
+    X(BCLR      , bl   , none , 2)        \
+    X(BSET      , bl   , none , 2)        \
+    X(BTST      , bl   , none , 2)        \
+    WITH_CC(X, B, BRA, BSR, bw, none, 1)  \
+    X(CLR       , bwl  , w    , 1)        \
+    X(CMP       , bwl  , w    , 2)        \
+    WITH_CC(X, DB, DBT, DBF, w, w, 2)     \
+    X(EOR       , bwl  , w    , 2)        \
+    X(EXT       , wl   , w    , 1)        \
+    X(EXG       , l    , none , 2)        \
+    X(ILLEGAL   , none , none , 0)        \
+    X(JMP       , none , none , 1)        \
+    X(JSR       , none , none , 1)        \
+    X(LEA       , l    , l    , 2)        \
+    X(MOVE      , bwl  , w    , 2)        \
+    X(MOVEQ     , l    , l    , 2)        \
+    X(NBCD      , b    , b    , 1)        \
+    X(NEG       , bwl  , w    , 1)        \
+    X(NEGX      , bwl  , w    , 1)        \
+    X(NOP       , none , none , 0)        \
+    X(NOT       , bwl  , w    , 1)        \
+    X(OR        , bwl  , w    , 2)        \
+    X(PEA       , l    , l    , 1)        \
+    X(RESET     , none , none , 0)        \
+    X(RTE       , none , none , 0)        \
+    X(RTS       , none , none , 0)        \
+    WITH_CC(X, S, ST, SF, b, b, 1)        \
+    X(STOP      , none , none , 1)        \
+    X(SUB       , bwl  , w    , 2)        \
+    X(SUBQ      , bwl  , w    , 2)        \
+    X(SWAP      , w    , w    , 1)        \
+    X(TST       , bwl  , w    , 1)        \
 
 #define TOKENS(X)      \
     X(size_b , ".B"  ) \
@@ -702,27 +723,25 @@ operands_done:
         case token_type::BTST:
             iwords[0] = encode_bitop(info, ea, osize, 0x0800, 0x0100);
             break;
-        case token_type::BRA: {
-            if (ea[0].type >> ea_m_shift != ea_m_Other || (ea[0].type & 7) != ea_other_abs_l)
-                ASSEMBLER_ERROR("Unsupported operand to Bcc: " << ea_string(ea[0].type));
-            int32_t disp = ea[0].val - (pc_ + 2);
-            if (ea[0].fixup) {
-                const uint32_t ofs = static_cast<uint32_t>(result_.size() * 2);
-                if (osize == opsize::none || osize == opsize::w)
-                    ea[0].fixup->fixups.push_back(fixup_type { opsize::w, ofs + 2 });
-                else
-                    ea[0].fixup->fixups.push_back(fixup_type { opsize::b, ofs + 1 });
-            } else {
-                if (disp == 0 || !range8(disp)) {
-                    if (osize == opsize::b)
-                        ASSEMBLER_ERROR("Displacement " << disp << " is out of range for byte size");
-                    if (!range16(disp))
-                        ASSEMBLER_ERROR("Displacement " << disp << " is out of range");
-                    osize = opsize::w;
-                } else if (osize == opsize::none)
-                    osize = opsize::b;
-            }
-            iwords[0] = 0x6000 /* | cc << 8 */;
+        case token_type::BRA:
+        case token_type::BSR:
+        case token_type::BHI:
+        case token_type::BLS:
+        case token_type::BCC:
+        case token_type::BCS:
+        case token_type::BNE:
+        case token_type::BEQ:
+        case token_type::BVC:
+        case token_type::BVS:
+        case token_type::BPL:
+        case token_type::BMI:
+        case token_type::BGE:
+        case token_type::BLT:
+        case token_type::BGT:
+        case token_type::BLE:
+        {
+            int32_t disp = handle_disp_bw(info, ea[0], osize);
+            iwords[0] = 0x6000 | (static_cast<uint16_t>(inst) - static_cast<uint16_t>(token_type::BRA)) << 8;
             if (osize == opsize::b)
                 iwords[0] |= disp & 0xff;
             else
@@ -735,6 +754,35 @@ operands_done:
         case token_type::CMP:
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0C00, 0xB000);
             break;
+        case token_type::DBT:
+        case token_type::DBF:
+        case token_type::DBHI:
+        case token_type::DBLS:
+        case token_type::DBCC:
+        case token_type::DBCS:
+        case token_type::DBNE:
+        case token_type::DBEQ:
+        case token_type::DBVC:
+        case token_type::DBVS:
+        case token_type::DBPL:
+        case token_type::DBMI:
+        case token_type::DBGE:
+        case token_type::DBLT:
+        case token_type::DBGT:
+        case token_type::DBLE: {
+            if (ea[0].type >> ea_m_shift != ea_m_Dn)
+                ASSEMBLER_ERROR("First operand to " << info.name << " must be a data register");
+            if (ea[1].type >> ea_m_shift != ea_m_Other || (ea[1].type & 7) != ea_other_abs_l)
+                ASSEMBLER_ERROR("Unsupported operand to " << info.name << ": " << ea_string(ea[1].type));
+            const int32_t disp = ea[1].val - (pc_ + 2);
+            if (ea[1].fixup)
+                ea[1].fixup->fixups.push_back(fixup_type { opsize::w, static_cast<uint32_t>(result_.size() * 2) + 2 });
+            else if (!range16(disp))
+                ASSEMBLER_ERROR("Displacement " << disp << " is out of range");
+            iwords[0] = 0x50c8 | (static_cast<uint16_t>(inst) - static_cast<uint16_t>(token_type::DBT)) << 8 | (ea[0].type & 7);
+            iwords[iword_cnt++] = disp & 0xffff;
+            goto done;
+        }
         case token_type::EOR:
             if (check_special_reg_size(ea[1], explicit_size, osize)) {
                 // EORI to SR/CCR
@@ -864,6 +912,27 @@ operands_done:
         case token_type::RTS:
             iwords[0] = 0x4e75;
             break;
+        case token_type::ST:
+        case token_type::SF:
+        case token_type::SHI:
+        case token_type::SLS:
+        case token_type::SCC:
+        case token_type::SCS:
+        case token_type::SNE:
+        case token_type::SEQ:
+        case token_type::SVC:
+        case token_type::SVS:
+        case token_type::SPL:
+        case token_type::SMI:
+        case token_type::SGE:
+        case token_type::SLT:
+        case token_type::SGT:
+        case token_type::SLE: {
+            if (ea[0].type >> ea_m_shift == ea_m_An || ea[0].type >= ea_immediate)
+                ASSEMBLER_ERROR("Invalid operand to " << info.name);
+            iwords[0] = 0x50c0 | (static_cast<uint16_t>(inst) - static_cast<uint16_t>(token_type::ST)) << 8 | (ea[0].type & 0x3f);
+            break;
+        }
         case token_type::STOP:
             if (ea[0].type != ea_immediate)
                 ASSEMBLER_ERROR("Expeceted immediate for STOP");
@@ -1103,6 +1172,30 @@ done:
         ea[0].type = 0; // Don't encode the immediate
         constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
         return 0x5000 | is_sub << 8 | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[1].type & 0x3f);
+    }
+
+    int32_t handle_disp_bw(const instruction_info_type& info, const ea_result& ea, opsize& osize)
+    {
+        if (ea.type >> ea_m_shift != ea_m_Other || (ea.type & 7) != ea_other_abs_l)
+            ASSEMBLER_ERROR("Unsupported operand to " << info.name << ": " << ea_string(ea.type));
+        const int32_t disp = ea.val - (pc_ + 2);
+        if (ea.fixup) {
+            const uint32_t ofs = static_cast<uint32_t>(result_.size() * 2);
+            if (osize == opsize::none || osize == opsize::w)
+                ea.fixup->fixups.push_back(fixup_type { opsize::w, ofs + 2 });
+            else
+                ea.fixup->fixups.push_back(fixup_type { opsize::b, ofs + 1 });
+        } else {
+            if (disp == 0 || !range8(disp)) {
+                if (osize == opsize::b)
+                    ASSEMBLER_ERROR("Displacement " << disp << " is out of range for byte size");
+                if (!range16(disp))
+                    ASSEMBLER_ERROR("Displacement " << disp << " is out of range");
+                osize = opsize::w;
+            } else if (osize == opsize::none)
+                osize = opsize::b;
+        }
+        return disp;
     }
 };
 
