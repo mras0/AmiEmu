@@ -1010,6 +1010,7 @@ public:
         memset(gfx_buf_, 0, sizeof(gfx_buf_));
         memset(audio_buf_, 0, sizeof(audio_buf_));
         memset(&s_, 0, sizeof(s_));
+        memset(col32_, 0, sizeof(col32_));
         s_.long_frame = true;
         s_.copstate = copper_state::halted;
     }
@@ -1018,6 +1019,10 @@ public:
     {
         const state_file::scope scope { sf, "Custom", 1 };
         sf.handle_blob(&s_, sizeof(s_));
+        if (sf.loading()) {
+            for (int i = 0; i < 32; ++i)
+                col32_[i] = rgb4_to_8(s_.color[i]);
+        }
     }
 
 
@@ -1872,14 +1877,14 @@ public:
                         else
                             idx = pf2 + 8;
                     }
-                    return rgb4_to_8(s_.color[idx]);
+                    return col32_[idx];
                 } else if ((s_.bplcon0 & BPLCON0F_HOMOD) && nbpls >= 5) { // HAM is only active if 5 or 6 bitplanes
                     const int ibits = ((nbpls + 1) & ~1) - 2;
                     const int val = (pf1 & 0xf) << (8 - ibits);
                     auto& col = s_.ham_color;
                     switch (pf1 >> ibits) {
                     case 0: // Palette entry
-                        col = rgb4_to_8(s_.color[pf1 & 0xf]);
+                        col = col32_[pf1 & 0xf];
                         break;
                     case 1: // Modify B
                         col = (col & 0xffff00) | val;
@@ -1895,15 +1900,15 @@ public:
                     }
                     //if (active_sprite_group < pf2p)
                     if (active_sprite) // How is priority handled here?
-                        return rgb4_to_8(s_.color[active_sprite]);
+                        return col32_[active_sprite];
                     return col;
                 } else if (active_sprite_group < pf2p || !pf1) { // no active sprite -> active_sprite=0, so same as pf1
-                    return rgb4_to_8(s_.color[active_sprite]);
+                    return col32_[active_sprite];
                 } else if (nbpls < 6) {
-                    return rgb4_to_8(s_.color[pf1]);
+                    return col32_[pf1];
                 } else {
                     // EHB bpls=6 && !HAM && !DPU
-                    const auto col = rgb4_to_8(s_.color[pf1 & 0x1f]);
+                    const auto col = col32_[pf1 & 0x1f];
                     return pf1 & 0x20 ? (col & 0xfefefe) >> 1 : col;
                 }
             };
@@ -1921,7 +1926,7 @@ public:
                 row[0] = row[1] = one_pixel(pixel_temp);
             }
         } else {
-            row[0] = row[1] = rgb4_to_8(s_.color[0]);
+            row[0] = row[1] = col32_[0];
 
             if (DEBUG_BPL && s_.bpl1dat_written_this_line) {
                 rem_pixels_odd_--;
@@ -1975,7 +1980,6 @@ public:
         };
 
         current_pc_ = current_pc;
-
 
         // Sprite vpos check is 4 CCKs ahead
         const uint16_t spr_vpos_check = s_.vpos + (s_.hpos + 8 >= hpos_per_line);
@@ -2289,7 +2293,7 @@ public:
             s_.bpl1dat_written = false;
             s_.bpl1dat_written_this_line = false;
             rem_pixels_odd_ = rem_pixels_even_ = 0;
-            s_.ham_color = rgb4_to_8(s_.color[0]);
+            s_.ham_color = col32_[0];
             //memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
         }
 
@@ -2504,7 +2508,9 @@ public:
         }
 
         if (offset >= COLOR00 && offset <= COLOR31) {
-            s_.color[(offset-COLOR00)/2] = val;
+            const auto idx = (offset - COLOR00) / 2;
+            s_.color[idx] = val;
+            col32_[idx] = rgb4_to_8(val);
             return;
         }
 
@@ -2766,6 +2772,7 @@ private:
     uint32_t chip_ram_mask_;
     uint32_t current_pc_; // For debug output
     uint32_t floppy_speed_;
+    uint32_t col32_[32];
     // bitplane debugging (don't need to be saved)
     int rem_pixels_odd_;
     int rem_pixels_even_;
