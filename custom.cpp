@@ -616,6 +616,35 @@ const char* const minterm_desc[] = {
     "1",
 };
 
+#define A 0
+#define B 1
+#define C 2
+#define D 3
+#define I 0xff
+// First byte: Period
+constexpr uint8_t blitcycles[16][5] = {
+    { 1, I          }, // 0          none
+    { 2, D, I       }, // 1            D      D0  - D1  - D2
+    { 2, C, I       }, // 2          C        C0  - C1  - C2
+    { 3, C, D, I    }, // 3          C D      C0  -  - C1 D0  - C2 D1  - D2
+    { 3, B, I, I    }, // 4        B          B0  -  - B1  -  - B2
+    { 3, B, D, I    }, // 5        B   D      B0  -  - B1 D0  - B2 D1  - D2
+    { 3, B, C, I    }, // 6        B C        B0 C0  - B1 C1  - B2 C2
+    { 4, B, C, D, I }, // 7        B C D      B0 C0  -  - B1 C1 D0  - B2 C2 D1  - D2
+    { 2, A, I       }, // 8      A            A0  - A1  - A2
+    { 2, A, D       }, // 9      A     D      A0  - A1 D0 A2 D1  - D2
+    { 2, A, C       }, // A      A   C        A0 C0 A1 C1 A2 C2
+    { 3, A, C, D    }, // B      A   C D      A0 C0  - A1 C1 D0 A2 C2 D1  - D2
+    { 3, A, B, I    }, // C      A B          A0 B0  - A1 B1  - A2 B2
+    { 3, A, B, D    }, // D      A B   D      A0 B0  - A1 B1 D0 A2 B2 D1  - D2
+    { 3, A, B, C    }, // E      A B C        A0 B0 C0 A1 B1 C1 A2 B2 C2
+    { 4, A, B, C, D }, // F      A B C D      A0 B0 C0  - A1 B1 C1 D0 A2 B2 C2 D1 D2
+};
+#undef A
+#undef B
+#undef C
+#undef D
+#undef I
 
 // 454 virtual Lores pixels
 // 625 lines/frame (interlaced)
@@ -740,6 +769,11 @@ struct custom_state {
     uint16_t bltaold;
     uint16_t bltbold;
     uint16_t bltbhold;
+    uint8_t bltx;
+    uint8_t bltcycle;
+    bool bltdwrite;
+    bool bltinpoly;
+    uint32_t bltdpt;
 
     uint32_t coplc[2];
     uint16_t diwstrt;
@@ -777,6 +811,7 @@ struct custom_state {
     uint16_t bltdat[4];
     int16_t  bltmod[4];
     uint16_t bltsize;
+    enum { blit_stopped, blit_running, blit_final } blitstate;
 
     uint16_t sprite_vpos_start(uint8_t spr)
     {
@@ -875,7 +910,7 @@ public:
         }
     }
 
-    void do_blitter_line()
+    void do_immedite_blit_line()
     {
         assert(s_.bltdat[0] == 0x8000);
         assert(s_.bltcon0 & (BC0F_SRCA | BC0F_SRCC | BC0F_DEST));
@@ -950,38 +985,16 @@ public:
         s_.bltpt[3] = s_.bltpt[2];
     }
 
-    void do_blit()
+    bool do_immedite_blit()
     {
+        if (!s_.blth)
+            return false;
+
         // For now just do immediate blit
-
-        if (DEBUG_BLITTER) {
-            DBGOUT << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
-            for (int i = 0; i < 4; ++i) {
-                const char name[5] = { 'B', 'L', 'T', static_cast<char>('A' + i), 0 };
-                *debug_stream << "\t" << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(s_.bltdat[i]) << " " << name << "MOD=$" << hexfmt(s_.bltmod[i]) << " (" << (int)s_.bltmod[i] << ")\n";
-            }
-            if (s_.bltcon1 & BC1F_LINEMODE)
-                *debug_stream << "\tLine mode";
-            else if (s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR))
-                *debug_stream << "\t" << (s_.bltcon1 & BC1F_FILL_XOR ? "Xor" : "Or") << " fill mode";
-            else
-                *debug_stream << "\tNormal mode";
-            *debug_stream << " minterm: D = " << minterm_desc[s_.bltcon0 & 0xff] << "\t";
-            if (s_.bltcon0 & BC0F_SRCA)
-                *debug_stream << " SRCA";
-            if (s_.bltcon0 & BC0F_SRCB)
-                *debug_stream << " SRCB";
-            if (s_.bltcon0 & BC0F_SRCC)
-                *debug_stream << " SRCC";
-            if (s_.bltcon0 & BC0F_DEST)
-                *debug_stream << " DEST";
-            *debug_stream << "\n";
-        }
-
         uint16_t any = 0;
 
         if (s_.bltcon1 & BC1F_LINEMODE) {
-            do_blitter_line();
+            do_immedite_blit_line();
             any = 1; // ?
         } else {
             const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
@@ -1068,11 +1081,212 @@ public:
             if (dwrite)
                 chip_write(dpt, dval);
         }
-        s_.intreq |= INTF_BLIT;
-        s_.dmacon &= ~(DMAF_BLTDONE|DMAF_BLTNZERO);
         if (!any)
             s_.dmacon |= DMAF_BLTNZERO;
         s_.bltw = s_.blth = 0;
+        s_.blitstate = custom_state::blit_final;
+        blitdone();
+        return false;
+    }
+
+    bool do_blitter()
+    {
+#if 0
+        if (1)
+            return do_immedite_blit();
+#endif
+
+        if (s_.blitstate == custom_state::blit_stopped)
+            return false;
+
+        assert((s_.dmacon & DMAF_BLTDONE));
+
+        if (s_.bltcon1 & BC1F_LINEMODE) {
+            // Temp: Immediate blit for lines
+            do_immedite_blit_line();
+            s_.dmacon &= ~DMAF_BLTNZERO; // What should this be?
+            s_.blitstate = custom_state::blit_final;
+            s_.blth = 0;
+            blitdone();
+            return false;
+        }
+
+        const uint8_t usef = (s_.bltcon0 >> 8) & 0xf;
+        const uint8_t period = blitcycles[usef][0];
+        assert(s_.bltcycle < period);
+        const uint8_t cycle = blitcycles[usef][1 + s_.bltcycle];
+
+        const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
+        bool dma = false;
+
+        auto incr_ptr = [reverse](uint32_t& pt, int16_t n = 2) {
+            if (reverse)
+                pt -= n;
+            else
+                pt += n;
+        };
+        auto do_dma = [&](uint8_t index) {
+            s_.bltdat[index] = chip_read(s_.bltpt[index]);
+            incr_ptr(s_.bltpt[index]);
+        };
+
+        switch (cycle) {
+        case 0: { // A
+            if (s_.blitstate == custom_state::blit_final)
+                break;
+            do_dma(0);
+            dma = true;
+            break;
+        }
+        case 1: { // B
+            if (s_.blitstate == custom_state::blit_final)
+                break;
+            do_dma(1);
+            dma = true;
+            const uint8_t bshift = s_.bltcon1 >> BC1_BSHIFTSHIFT;
+            if (reverse)
+                s_.bltbhold = ((uint32_t)s_.bltdat[1] << 16 | s_.bltbold) >> (16 - bshift);
+            else
+                s_.bltbhold = ((uint32_t)s_.bltbold << 16 | s_.bltdat[1]) >> bshift;
+            s_.bltbold = s_.bltdat[1];
+            break;
+        }
+        case 2: { // C
+            if (s_.blitstate == custom_state::blit_final)
+                break;
+            do_dma(2);
+            dma = true;
+            break;
+        }
+        case 3: { // D
+            if (s_.bltdwrite) {
+                chip_write(s_.bltdpt, s_.bltdat[3]);
+                dma = true;
+            }
+            break;
+        }
+        case 0xff: // Idle
+            break;
+        default:
+            assert(0);
+        }
+
+        if (++s_.bltcycle == period) {
+            s_.bltcycle = 0;
+
+            if (s_.blitstate == custom_state::blit_final) {
+                blitdone();
+            } else {
+                // A
+                uint16_t a = s_.bltdat[0], ahold;
+                if (s_.bltx == 0)
+                    a &= s_.bltafwm;
+                if (s_.bltx == s_.bltw - 1)
+                    a &= s_.bltalwm;
+                const uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
+                if (reverse)
+                    ahold = ((uint32_t)a << 16 | s_.bltaold) >> (16 - ashift);
+                else
+                    ahold = ((uint32_t)s_.bltaold << 16 | a) >> ashift;
+                s_.bltaold = a;
+                // B already shifted
+                // Nothing for C
+
+                uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), ahold, s_.bltbhold, s_.bltdat[2]);
+                if (s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR)) {
+                    for (uint8_t bit = 0; bit < 16; ++bit) {
+                        const uint16_t mask = 1U << bit;
+                        const bool match = !!(val & mask);
+                        if (s_.bltinpoly) {
+                            if (s_.bltcon1 & BC1F_FILL_XOR)
+                                val ^= mask;
+                            else
+                                val |= mask;
+                        }
+                        if (match)
+                            s_.bltinpoly = !s_.bltinpoly;
+                    }
+                }
+                if (val)
+                    s_.dmacon &= ~DMAF_BLTNZERO;
+
+                if (s_.bltcon0 & BC0F_DEST) {
+                    s_.bltdwrite = true;
+                    s_.bltdat[3] = val;
+                    s_.bltdpt = s_.bltpt[3];
+                    incr_ptr(s_.bltpt[3]);
+                }
+
+                if (++s_.bltx == s_.bltw) {
+                    s_.bltx = 0;
+                    s_.bltinpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);
+                    if (--s_.blth == 0) {
+                        assert(s_.blitstate == custom_state::blit_running);
+                        s_.blitstate = custom_state::blit_final;
+                    }
+                    if (s_.bltcon0 & BC0F_SRCA)
+                        incr_ptr(s_.bltpt[0], s_.bltmod[0]);
+                    if (s_.bltcon0 & BC0F_SRCB)
+                        incr_ptr(s_.bltpt[1], s_.bltmod[1]);
+                    if (s_.bltcon0 & BC0F_SRCC)
+                        incr_ptr(s_.bltpt[2], s_.bltmod[2]);
+                    if (s_.bltcon0 & BC0F_DEST)
+                        incr_ptr(s_.bltpt[3], s_.bltmod[3]);
+                }
+            }
+        }
+
+        return dma;
+    }
+
+    void blitstart(uint16_t val)
+    {
+        assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTDONE) && s_.blitstate == custom_state::blit_stopped);
+        s_.bltsize = val;
+        s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
+        s_.blth = val >> 6 ? val >> 6 : 0x400;
+        s_.bltaold = 0;
+        s_.bltbold = 0;
+        s_.dmacon |= DMAF_BLTDONE | DMAF_BLTNZERO;
+        s_.bltx = 0;
+        s_.bltcycle = 0;
+        s_.bltdwrite = false;
+        s_.bltinpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);      
+        s_.bltdpt = 0;
+        s_.blitstate = custom_state::blit_running;
+        if (DEBUG_BLITTER) {
+            DBGOUT << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
+            for (int i = 0; i < 4; ++i) {
+                const char name[5] = { 'B', 'L', 'T', static_cast<char>('A' + i), 0 };
+                *debug_stream << "\t" << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(s_.bltdat[i]) << " " << name << "MOD=$" << hexfmt(s_.bltmod[i]) << " (" << (int)s_.bltmod[i] << ")\n";
+            }
+            if (s_.bltcon1 & BC1F_LINEMODE)
+                *debug_stream << "\tLine mode";
+            else if (s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR))
+                *debug_stream << "\t" << (s_.bltcon1 & BC1F_FILL_XOR ? "Xor" : "Or") << " fill mode";
+            else
+                *debug_stream << "\tNormal mode";
+            *debug_stream << " minterm: D = " << minterm_desc[s_.bltcon0 & 0xff] << "\t";
+            if (s_.bltcon0 & BC0F_SRCA)
+                *debug_stream << " SRCA";
+            if (s_.bltcon0 & BC0F_SRCB)
+                *debug_stream << " SRCB";
+            if (s_.bltcon0 & BC0F_SRCC)
+                *debug_stream << " SRCC";
+            if (s_.bltcon0 & BC0F_DEST)
+                *debug_stream << " DEST";
+            *debug_stream << "\n";
+        }
+    }
+
+    void blitdone()
+    {
+        assert(s_.blitstate == custom_state::blit_final);
+        assert(s_.blth == 0);
+        s_.intreq |= INTF_BLIT;
+        s_.dmacon &= ~DMAF_BLTDONE;
+        s_.bltw = s_.blth = 0;
+        s_.blitstate = custom_state::blit_stopped;
     }
 
     void do_copper()
@@ -1565,8 +1779,7 @@ public:
                 }
                 
                 // Blitter
-                if (s_.blth) {
-                    do_blit();
+                if (do_blitter()) {
                     break;
                 }
 
@@ -1848,13 +2061,7 @@ public:
             s_.bltpt[3] &= ~1U;
             return;
         case BLTSIZE:        
-            assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTDONE));
-            s_.bltsize = val;
-            s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
-            s_.blth = val >> 6 ? val >> 6 : 0x400;
-            s_.bltaold = 0;
-            s_.bltbold = 0;
-            s_.dmacon |= DMAF_BLTDONE;
+            blitstart(val);
             return;
         case BLTCMOD:
             s_.bltmod[2] = val & ~1U;
