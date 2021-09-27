@@ -325,11 +325,6 @@ public:
         throw std::runtime_error { "TODO: Write config byte $" + hexstring(offset) + " val $" + hexstring(val) };
     }
 
-    uint8_t interrupt_pending() const
-    {
-        return 0;
-    }
-
     void shutup()
     {
         assert(mode_ == mode::autoconf);
@@ -511,6 +506,141 @@ private:
     }
 };
 
+class builder {
+public:
+    explicit builder()
+    {
+    }
+
+    uint32_t ofs() const
+    {
+        return static_cast<uint32_t>(data_.size());
+    }
+
+    const std::vector<uint8_t>& data() const
+    {
+        return data_;
+    }
+
+    void u8(uint8_t val)
+    {
+        data_.push_back(val);
+    }
+
+    void u16(uint16_t val)
+    {
+        data_.push_back(static_cast<uint8_t>(val >> 8));
+        data_.push_back(static_cast<uint8_t>(val));
+    }
+
+    void u32(uint32_t val)
+    {
+        data_.push_back(static_cast<uint8_t>(val >> 24));
+        data_.push_back(static_cast<uint8_t>(val >> 16));
+        data_.push_back(static_cast<uint8_t>(val >> 8));
+        data_.push_back(static_cast<uint8_t>(val));
+    }
+
+    void str(const std::string& str)
+    {
+        data_.insert(data_.end(), str.begin(), str.end());
+    }
+
+    void even()
+    {
+        if (data_.size() & 1)
+            data_.push_back(0);
+    }
+
+private:
+    std::vector<uint8_t> data_;
+};
+
+
+class test_board : public memory_area_handler, public autoconf_device {
+public:
+    explicit test_board(memory_handler& mem)
+        : autoconf_device { mem, *this, config }
+    {
+
+        #if 0
+    UBYTE	da_Config;	/* see below for definitions */
+    UBYTE	da_Flags;	/* see below for definitions */
+    UWORD	da_Size;	/* the size (in bytes) of the total diag area */
+    UWORD	da_DiagPoint;	/* where to start for diagnostics, or zero */
+    UWORD	da_BootPoint;	/* where to start for booting */
+    UWORD	da_Name;	/* offset in diag area where a string */
+				/*   identifier can be found (or zero if no */
+				/*   identifier is present). */
+
+    UWORD	da_Reserved01;	/* two words of reserved data.	must be zero. */
+    UWORD	da_Reserved02;
+        #endif
+    
+        const uint16_t diag_size = 0x200;
+        builder b {};
+        b.u8(0x90); // da_Config = DAC_WORDWIDE|DAC_CONFIGTIME
+        b.u8(0x00); // da_Flags = 0
+        b.u16(diag_size); // da_Size (in bytes)
+        b.u16(0x00a0); // da_DiagPoint (0 = none)
+        b.u16(0x0080); // da_BootPoint
+        b.u16(0x0010); // da_Name (offset of ID string)
+        b.u16(0x0000); // da_Reserved01
+        b.u16(0x0000); // da_Reserved02
+
+        b.u16(0x0000); // Pad (Size = 16 now)
+        b.str("test.device");
+        b.even();
+
+        while (b.ofs() < diag_size)
+            b.u16(0x4e70); // RESET
+
+        diag_area_ = b.data();
+    }
+
+private:
+    static constexpr board_config config {
+        .type = ERTF_DIAGVALID,
+        .size = 64 << 10,
+        .product_number = 0x88,
+        .hw_manufacturer = 1337,
+        .serial_no = 1,
+        .rom_vector_offset = 16,
+    };
+    std::vector<uint8_t> diag_area_;
+
+
+    uint8_t read_u8(uint32_t, uint32_t offset) override
+    {
+        if (offset >= config.rom_vector_offset && offset < config.rom_vector_offset + diag_area_.size()) {
+            return diag_area_[offset - config.rom_vector_offset];
+        }
+
+        std::cerr << "Test board: Read U8 offset $" << hexfmt(offset) << "\n";
+        return 0;
+    }
+
+    uint16_t read_u16(uint32_t, uint32_t offset) override
+    {
+        if (offset >= config.rom_vector_offset && offset + 1 < config.rom_vector_offset + diag_area_.size()) {
+            offset -= config.rom_vector_offset;
+            return static_cast<uint16_t>(diag_area_[offset] << 8 | diag_area_[offset+1]);
+        }
+        std::cerr << "Test board: Read U16 offset $" << hexfmt(offset) << "\n";
+        return 0;
+    }
+
+    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
+    {
+        std::cerr << "Test board: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
+    }
+
+    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
+    {
+        std::cerr << "Test board: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
+    }
+};
+
 int main(int argc, char* argv[])
 {
     constexpr uint32_t testmode_stable_frames = 5*50;
@@ -538,6 +668,11 @@ int main(int argc, char* argv[])
             fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
             autoconf.add_device(*fast_ram);
         }
+
+        #if 0
+        test_board b { mem };
+        autoconf.add_device(b);
+        #endif
 
         m68000 cpu { mem };
 
@@ -1097,7 +1232,6 @@ unknown_command:
                     idle_count = 0;
                 }
 
-    
 #ifdef TRACE_LOG
                 if (cpu.instruction_count() == trace_start_inst) {
                     std::cout << "Starting trace\n";
