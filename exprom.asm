@@ -304,6 +304,10 @@ initRoutine:
         move.l  #0, devn_memBufType(a3)
         move.l  #$44483000, devn_dName(a3) ; 'DH0\0'
 
+        lea     RomCodeEnd(pc), a0
+        move.l  a3, (a0)
+        move.w  #$fedf, 4(a0)
+
         move.l  a3, a0
         jsr     _LVOMakeDosNode(a6)
 
@@ -454,23 +458,10 @@ BeginIO: ; ( iob: a1, device:a6 )
         ;bsr     DebugMsg
 
         move.b  #NT_MESSAGE, LN_TYPE(a1)
-        move.l  IO_UNIT(a1), a3
-        move.w  IO_COMMAND(a1), d0
 
-        cmp.w   #$16, d0
-        bcs.b   BeginIO_DoCmd
-        move.b  #IOERR_NOCMD, IO_ERROR(a1)
-        bra.b   BeginIO_End
-
-BeginIO_DoCmd:
-        moveq   #0, d0
-        move.b  d0, IO_ERROR(a1)
-        move.W  IO_COMMAND(a1), d0
-        add.w   d0, d0
-        lea     CmdTab(pc), a0
-        add.w   0(a0,d0.w), a0
-        jsr     (a0)
-        move.b  d0, IO_ERROR(a1)
+        lea     RomCodeEnd(pc), a0
+        move.l  a1, (a0)
+        move.w  #$fede, 4(a0)
 
         btst    #IOB_QUICK, IO_FLAGS(a1)
         bne.b   BeginIO_End
@@ -487,62 +478,5 @@ BeginIO_End:
 AbortIO:
         moveq   #6, d0
         bra.b   AbortIO
-
-CmdInvalid:
-CmdRawRead:
-CmdRawWrite:
-        move.b  #IOERR_NOCMD, IO_ERROR(a1)
-        rts
-
-CmdReset:
-CmdUpdate:
-CmdClear:
-CmdMotor:
-CmdSeek:
-CmdRemove:
-CmdChangeNum:   ; 0=disk not changed
-CmdChangeState: ; 0=disk inserted
-CmdProtStatus:  ; 0=unprotected
-CmdAddChangeInt:
-CmdRemChangeInt:
-        clr.l   IO_ACTUAL(a1)
-        rts
-
-CmdRead:
-CmdWrite:
-CmdStop:
-CmdStart:
-CmdFlush:
-CmdFormat:
-CmdGetDriveType:
-CmdGetNumTracks:
-        lea     RomCodeEnd(pc), a0
-        move.l  a1, (a0)
-        move.w  #$fede, 4(a0)
-        rts
-
-CmdTab:
-        dc.w CmdInvalid-CmdTab          ;00 CMD_INVALID
-        dc.w CmdReset-CmdTab            ;01 CMD_RESET
-        dc.w CmdRead-CmdTab             ;02 CMD_READ
-        dc.w CmdWrite-CmdTab            ;03 CMD_WRITE
-        dc.w CmdUpdate-CmdTab           ;04 CMD_UPDATE
-        dc.w CmdClear-CmdTab            ;05 CMD_CLEAR
-        dc.w CmdStop-CmdTab             ;06 CMD_STOP
-        dc.w CmdStart-CmdTab            ;07 CMD_START
-        dc.w CmdFlush-CmdTab            ;08 CMD_FLUSH
-        dc.w CmdMotor-CmdTab            ;09 TD_MOTOR
-        dc.w CmdSeek-CmdTab             ;0A TD_SEEK
-        dc.w CmdFormat-CmdTab           ;0B TD_FORMAT
-        dc.w CmdRemove-CmdTab           ;0C TD_REMOVE
-        dc.w CmdChangeNum-CmdTab        ;0D TD_CHANGENUM
-        dc.w CmdChangeState-CmdTab      ;0E TD_CHANGESTATE
-        dc.w CmdProtStatus-CmdTab       ;0F TD_PROTSTATUS
-        dc.w CmdRawRead-CmdTab          ;10 TD_RAWREAD
-        dc.w CmdRawWrite-CmdTab         ;11 TD_RAWWRITE
-        dc.w CmdGetDriveType-CmdTab     ;12 TD_GETDRIVETYPE
-        dc.w CmdGetNumTracks-CmdTab     ;13 TD_GETNUMTRACKS
-        dc.w CmdAddChangeInt-CmdTab     ;14 TD_ADDCHANGEINT
-        dc.w CmdRemChangeInt-CmdTab     ;15 TD_REMCHANGEINT
 
 RomCodeEnd:
