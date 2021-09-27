@@ -466,6 +466,7 @@ struct custom_state {
 
     uint32_t dskpt;
     uint16_t dsklen;
+    uint16_t dskwait; // HACK
 
     uint16_t dsklen_act;
 
@@ -1025,21 +1026,30 @@ public:
 
                 // Disk
                 if ((colclock == 7 || colclock == 9 || colclock == 11) && (s_.dmacon & DMAF_DISK) && (s_.dsklen & 0x8000) && s_.dsklen_act) {
-                    const uint16_t nwords = s_.dsklen_act & 0x3FFF;
-                    TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
-                    TODO_ASSERT(nwords > 0);
+                    // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
+                    ++s_.dskwait;
+                    if (s_.dskwait == 10) {
 #ifdef DISK_DMA_DEBUG
-                    std::cout << "Disk DMA: Reading $" << hexfmt(nwords) << " words from drive\n";
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Setting DSKSYNC\n";
 #endif
-                    std::vector<uint8_t> data(nwords * 2);
-                    cia_.active_drive().read_mfm_track(&data[0], nwords);                    
+                        s_.intreq |= INTF_DSKSYNC;
+                    } else if (s_.dskwait >= 20) {
+                        const uint16_t nwords = s_.dsklen_act & 0x3FFF;
+                        TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
+                        TODO_ASSERT(nwords > 0);
+#ifdef DISK_DMA_DEBUG
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading $" << hexfmt(nwords) << " words\n";
+#endif
+                        std::vector<uint8_t> data(nwords * 2);
+                        cia_.active_drive().read_mfm_track(&data[0], nwords);
 
-                    for (uint16_t i = 0; i < nwords; ++i)
-                        mem_.write_u16(s_.dskpt + i * 2, get_u16(&data[i * 2]));
+                        for (uint16_t i = 0; i < nwords; ++i)
+                            mem_.write_u16(s_.dskpt + i * 2, get_u16(&data[i * 2]));
 
-                    s_.intreq |= INTF_DSKBLK; // TODO: INTF_DSKSYNC etc..
-                    s_.dsklen_act = 0;
-                    break;
+                        s_.intreq |= INTF_DSKBLK;
+                        s_.dsklen_act = 0;
+                        break;
+                    }
                 }
 
                 // TODO: Audio
@@ -1346,8 +1356,9 @@ public:
         case DSKLEN: // $024
             s_.dsklen_act = s_.dsklen == val ? val : 0;
             s_.dsklen = val;
+            s_.dskwait = 0;
 #ifdef DISK_DMA_DEBUG
-            std::cout << "Write to DSKLEN val=$" << hexfmt(val)<< "\n";
+            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Write to DSKLEN: $" << hexfmt(val) << (s_.dsklen_act ? " - Active!" : "") << "\n";
 #endif
             return;
         case VPOSW:  // $02A
