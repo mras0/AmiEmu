@@ -2144,7 +2144,7 @@ public:
                 return 0x80;
             auto v = s_.vpos;
             auto h = (s_.hpos >> 1) & 0xff;
-            h += 3;
+            h += hpos_cycle_shift;
             if (h >= hpos_max) {
                 h -= hpos_max;
                 // VPOS changes at shifted hpos=1 NOT 0
@@ -2152,7 +2152,8 @@ public:
                     if (++v >= vpos_per_field)
                         v = 0;
             }
-            h = (h + 1) % hpos_max;
+            // Need to return hpos == 0 for many vamiga tests
+            //h = (h + 1) % hpos_max;
             return static_cast<uint16_t>((v & 0xff) << 8 | h);
         }
         case DSKDATR: // $008
