@@ -1447,26 +1447,46 @@ private:
 
         auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
 
-        const auto q = static_cast<int32_t>(reg) / d;
-        const auto r = static_cast<int32_t>(reg) % d;
-        uint16_t ccr = 0;
+        const auto dividend = static_cast<int32_t>(reg);
+        const auto divisor  = static_cast<int16_t>(d);
+        const auto adividend = static_cast<uint32_t>(dividend < 0 ? -dividend : dividend);
+        const auto adivisor = static_cast<uint16_t>(divisor < 0 ? -divisor : divisor);
 
         //.Best case : 120-122 cycles depending on dividend sign.                       
         //.Worst case : 156 (158 ?) cycles.                                             
-
-        add_cycles(d < 0 ? 118 : 116);
-
-        if (q > 0x7fff || q < -0x8000) {
-            //  .Overflow cost 16 or 18 cycles depending on dividend sign (n nn nn (n)n np).  
-            add_cycles(16);
+        uint8_t cycles = 12;
+        uint16_t ccr = 0;
+        if (dividend < 0)
+            cycles += 2;
+        if (adividend >> 16 >= adivisor) {
+            // Absolute overflow is detected early
+            // .Overflow cost 16 or 18 cycles depending on dividend sign (n nn nn (n)n np).
+            cycles += 2;
             ccr = srm_v | srm_n;
         } else {
-            if (q & 0x8000)
-                ccr |= srm_n;
-            if (!q)
-                ccr |= srm_z;
-            reg = (q & 0xffff) | (r & 0xffff) << 16;
+            //  .for each iteration of the loop : shift quotient to the left by 1 bit.
+            // .MSB = most significant bit : bit at the far left of the quotient.
+            cycles += 104 + 2 * num_bits_set(~static_cast<uint16_t>(adividend / adivisor) & 0xfffe);
+            if (divisor > 0) {
+                if (dividend < 0)
+                    cycles += 4;
+            } else {
+                cycles += 2;
+            }
+            const auto q = dividend / divisor;
+            if (q > 0x7fff || q < -0x8000) {
+                ccr = srm_v | srm_n;
+            } else {
+                const auto r = dividend % divisor;
+                if (q & 0x8000)
+                    ccr |= srm_n;
+                if (!q)
+                    ccr |= srm_z;
+                reg = (q & 0xffff) | (r & 0xffff) << 16;
+            }
         }
+
+        add_cycles(cycles);
         state_.update_sr(srm_ccr_no_x, ccr);
     }
 

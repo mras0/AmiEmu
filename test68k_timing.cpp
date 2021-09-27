@@ -1461,9 +1461,8 @@ bool run_timing_tests()
         { "DIVU D3, D0"                     , 136, 1 },
         { "DIVU #123, D0"                   , 140, 2 },
         { "DIVU D5, D0"                     , 38, 7 }, // Division by zero
-        // The following is not 100% correct (also need division by zero)
-        { "DIVS D3, D0", 120, 1 },
-        { "DIVS #123, D0"                   , 124, 2 },
+        { "DIVS D3, D0"                     , 150, 1 },
+        { "DIVS #123, D0"                   , 154, 2 },
         { "DIVS D5, D0"                     , 38, 7 }, // Division by zero
 
         { "MULS D5, D0"                     , 38, 1 },
