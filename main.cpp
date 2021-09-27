@@ -154,6 +154,12 @@ uint32_t copper_disasm(memory_handler& mem, uint32_t start, uint32_t count)
 } // unnamed namespace
 
 
+std::ostream& operator<<(std::ostream& os, const mem_access_info& mai)
+{
+    return os << (mai.write ? 'W' : 'R') << " " << (mai.size == 1 ? 'B' : mai.size == 2 ? 'W' : 'L') <<  " addr=$" << hexfmt(mai.addr) << " data=$" << hexfmt(mai.data, mai.size*2);
+}
+
+
 #if 0
 void rom_tag_scan(const std::vector<uint8_t>& rom)
 {
@@ -362,10 +368,9 @@ int main(int argc, char* argv[])
         uint8_t pending_disk_drive = 0xff;
         uint32_t disk_chosen_countdown = 0;
         constexpr uint32_t invalid_pc = ~0U;
+        enum {wait_none, wait_next_inst, wait_exact_pc, wait_non_rom_pc, wait_vpos} wait_mode = wait_none;
+        uint32_t wait_arg = 0;
         bool debug_mode = false;
-        uint32_t wait_for_pc = invalid_pc;
-        uint32_t wait_for_vpos = ~0U;
-        bool wait_next_inst = false;
         custom_handler::step_result custom_step {};
         m68000::step_result cpu_step {}; // Records memory/cycle "deficit" of CPU compared to custom chips
         std::unique_ptr<std::ofstream> trace_file;
@@ -414,7 +419,7 @@ int main(int argc, char* argv[])
                     const auto& s = cpu.state();
                     g.set_debug_memory(mem.ram(), custom.get_regs());
                     g.set_debug_windows_visible(true);
-                    g.update_image(custom.frame());
+                    g.update_image(custom_step.frame);
                     cpu.show_state(std::cout);
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
@@ -438,6 +443,9 @@ int main(int argc, char* argv[])
                             }
                         } else if (args[0] == "e") {
                             custom.show_registers(std::cout);
+                        } else if (args[0] == "f") {
+                            wait_mode = wait_non_rom_pc;
+                            break;
                         } else if (args[0] == "g") {
                             break;
                         } else if (args[0] == "m") {
@@ -472,7 +480,7 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "r") {
                             cpu.show_state(std::cout);
                         } else if (args[0] == "t") {
-                            wait_next_inst = true;
+                            wait_mode = wait_next_inst;
                             break;
                         } else if (args[0] == "trace_file") {
                             if (args.size() > 1) {
@@ -511,11 +519,13 @@ int main(int argc, char* argv[])
                             }
 
                         } else if (args[0] == "z") {
-                            wait_for_pc = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
+                            wait_mode = wait_exact_pc;
+                            wait_arg = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
                             break;
                         } else if (args[0] == "zf") {
                             // Wait for next frame
-                            wait_for_vpos = 0;
+                            wait_mode = wait_vpos;
+                            wait_arg = 0;
                             break;
                         } else if (args[0] == "zv") {
                             // Wait for video position
@@ -523,10 +533,10 @@ int main(int argc, char* argv[])
                                 uint32_t waitpos = 0;
                                 auto vpos = from_hex(args[1]);
                                 if (vpos.first && vpos.second <= 313) {
-                                    waitpos = vpos.second << 8;
+                                    waitpos = vpos.second << 9;
                                     if (args.size() > 2) {
                                         auto hpos = from_hex(args[2]);
-                                        if (hpos.first && hpos.second <= 0xE3) {
+                                        if (hpos.first && hpos.second < 455) {
                                             waitpos |= hpos.second;
                                         } else {
                                             std::cout << "Invalid hpos\n";
@@ -534,7 +544,8 @@ int main(int argc, char* argv[])
                                         }
                                     }
                                     if (waitpos != ~0U) {
-                                        wait_for_vpos = waitpos;
+                                        wait_mode = wait_vpos;
+                                        wait_arg = waitpos;
                                         break;
                                     }
                                 } else {
@@ -554,33 +565,46 @@ unknown_command:
                 }
 
                 custom_step = custom.step();
+                (void)mem.access_list(); // Discard access list for now
 
                 // "Pay off" cycle/mem deficit, not correct but should match speed better
-                if (custom_step.free_mem_cycle && cpu_step.mem_accesses) {
+                if (custom_step.free_chip_cycle && cpu_step.mem_accesses) {
                     assert(cpu_step.clock_cycles);
                     --cpu_step.mem_accesses;
                     --cpu_step.clock_cycles;
-                } else if (cpu_step.clock_cycles > 4 * cpu_step.mem_accesses)
+                } else if (cpu_step.clock_cycles >= 4 * cpu_step.mem_accesses) {
                     --cpu_step.clock_cycles;
+                }
 
 
                 if (!cpu_step.clock_cycles) {
                     assert(!cpu_step.mem_accesses);
-                    cpu_step = cpu.step(custom.current_ipl());
-
-                    if (wait_next_inst || (wait_for_pc != invalid_pc && cpu.state().pc == wait_for_pc)) {
+                    cpu_step = cpu.step(custom_step.ipl);
+                    assert(cpu_step.clock_cycles >= 4 * cpu_step.mem_accesses); 
+                   
+                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu.state().pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu.state().pc < 0xf00000)) {
                         g.set_active(false);
                         debug_mode = true;
-                        wait_for_pc = invalid_pc;
-                        wait_next_inst = false;
+                        wait_mode = wait_none;
                     }
 
+                    // Only count chip accesses (for now, this is everything non-rom)
+                    const auto ma_list = mem.access_list();
+                    uint8_t chip_accesses = 0;
+                    for (const auto& ma : ma_list) {
+                        if (ma.addr < 0x00F0'0000) {
+                            chip_accesses += ma.size == 4 ? 2 : 1;
+                        }
+                    }
+                    assert(cpu_step.mem_accesses >= chip_accesses);
+                    assert(cpu_step.clock_cycles >= 4 * chip_accesses); 
+                    cpu_step.mem_accesses = chip_accesses;
                 }
     
-                if (wait_for_vpos == custom_step.vhpos) {
+                if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos)<<9|custom_step.hpos)) {
                     g.set_active(false);
                     debug_mode = true;
-                    wait_for_vpos = ~0U;
+                    wait_mode = wait_none;
                 }
 
 #ifdef TRACE_LOG
@@ -595,7 +619,7 @@ unknown_command:
                 }
 #endif
 
-                if (custom_step.vhpos == 0) {
+                if (custom_step.vpos == 0 && custom_step.hpos == 0) {
                     if (disk_chosen_countdown) {
                         if (--disk_chosen_countdown == 0) {
                             std::cout << drives[pending_disk_drive]->name() << " Inserting disk\n";
@@ -607,7 +631,7 @@ unknown_command:
                 }
                 if (!steps_to_update--) {
                 update:
-                    g.update_image(custom.frame());
+                    g.update_image(custom_step.frame);
                     g.led_state(cias.power_led_on());
                     serdata_flush();
                     auto new_events = g.update();

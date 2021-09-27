@@ -218,11 +218,9 @@ public:
             for (int t = 0; t < 2; ++t) {
                 if (s.cr[t] & CIACRAF_START) {
                     if (!(s.timer_val[t]--)) {
-                        if (s.cr[t] & CIACRAF_RUNMODE) {
+                        s.timer_val[t] = s.timer_latch[t];
+                        if (s.cr[t] & CIACRAF_RUNMODE)
                             s.cr[t] &= ~CIACRAF_START;
-                        } else {
-                            s.timer_val[t] = s.timer_latch[t];
-                        }
                         s.trigger_int(t ? CIAICRB_TB : CIAICRB_TA);
                     }
                 }

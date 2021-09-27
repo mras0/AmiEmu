@@ -19,14 +19,14 @@ public:
 
     using serial_data_handler = std::function<void(uint8_t numbits, uint8_t data)>;
     struct step_result {
-        uint32_t vhpos;
-        bool free_mem_cycle;
+        const uint32_t* frame;
+        uint16_t vpos;
+        uint16_t hpos;
+        uint8_t ipl;
+        bool free_chip_cycle;
     };
 
     step_result step();
-    const uint32_t* frame();
-
-    uint8_t current_ipl() const; // 0..7
 
     void set_serial_data_handler(const serial_data_handler& handler);
     void set_rbutton_state(bool pressed);

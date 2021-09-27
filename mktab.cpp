@@ -400,8 +400,11 @@ void output_plain(uint16_t inst, const char* name)
     } else if (!strcmp(name, "NOP")) {
         ai.memory_accesses = 1;
         ai.base_cycles = 4;
+    } else if (!strcmp(name, "ILLEGAL")) {
+        ai.memory_accesses = 7;
+        ai.base_cycles = 34;
     }
-    // ILLEGAL, RESET, TRAPV
+    // RESET, TRAPV
     ai.type = ai.name = name;
 }
 
@@ -791,6 +794,10 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             ai.base_cycles += 72;
         else if (desc.type == inst_type::DIVS)
             ai.base_cycles += 116;
+        else if (desc.type == inst_type::TRAP) {
+            ai.memory_accesses += 6;
+            ai.base_cycles += 6;
+        }
         
         ai.memory_accesses += 1 + ai.ea_words;
 
@@ -1164,8 +1171,8 @@ int main(int argc, char* argv[])
         auto& ai = all_instructions[i];
         if (ai.name.empty()) {
             ai.type = ai.name = "ILLEGAL";
-            ai.base_cycles = 4;
-            ai.memory_accesses = 1;
+            ai.base_cycles = 34;
+            ai.memory_accesses = 7;
         } else if (ai.base_cycles == 0) {
             ai.memory_accesses = 1 + ai.ea_words;
             ai.base_cycles = 4 * ai.memory_accesses;

@@ -1439,7 +1439,7 @@ bool run_timing_tests()
         { "MOVEM.L D0-D7, $12.W"            , 76, 19 },
         { "MOVEM.L D0-D7, $12.L"            , 80, 20 },
 
-        // The following is not 100% correct
+        // The following is not 100% correct (also need division by zero)
         { "DIVU D5, D0"                     , 76, 1 },
         { "DIVU #123, D0"                   , 80, 2 },
         { "DIVS D5, D0"                     , 120, 1 },
@@ -1459,7 +1459,12 @@ bool run_timing_tests()
         { "MULU #$0000, D0"                 , 42, 2 }, 
         { "MULU #$FFFF, D0"                 , 74, 2 }, 
         { "MULU #$5555, D0"                 , 58, 2 }, 
-        { "MULU #$AAAA, D0"                 , 58, 2 }, 
+        { "MULU #$AAAA, D0"                 , 58, 2 },
+
+        { "TRAP #0"                         , 34, 7 },
+        { "TRAPV"                           , 34, 8 },
+        { "ILLEGAL"                         , 34, 7 },
+        { "DC.W $4E7B"                      , 34, 7 }, // MOVEC D1, VBR
     };
 
     const uint32_t code_pos = 0x1000;
@@ -1482,7 +1487,7 @@ bool run_timing_tests()
             put_u16(&ram[code_pos + i * 2], insts[i]);
 
         cpu_state input_state {};
-        input_state.sr = 0x2000 | srm_z;
+        input_state.sr = 0x2000 | srm_z | srm_v;
         input_state.pc = code_pos;
         input_state.a[2] = 100;
         input_state.d[2] = 0x100;
@@ -1512,13 +1517,8 @@ bool run_timing_tests()
 // CHK
 // RESET
 // STOP
-// TRAPV
-// ILLEGAL
-// TRAP
 // DIVU
 // DIVS
-// MULU
-// MULS
 // Exceptions/interrupts
 
 bool test_timing()

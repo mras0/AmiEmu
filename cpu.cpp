@@ -112,22 +112,27 @@ public:
 
     step_result step(uint8_t current_ipl)
     {
+        if (state_.stopped && !current_ipl) {
+            return { 0, 0 };
+        }
         assert(current_ipl < 8);
 
-        step_res_ = { 0, 0 };
         ++state_.instruction_count;
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
             state_.stopped = false;
             do_interrupt(current_ipl);
+            if (trace_) {
+                *trace_ << "Interrupt switching to IPL " << static_cast<int>(current_ipl) << "\n";
+                print_cpu_state(*trace_, state_);
+            }
+            step_res_ = { 44, 8 };
+            goto out;
         }
 
+        step_res_ = { 0, 0 };
         if (trace_)
             print_cpu_state(*trace_, state_);
-
-        if (state_.stopped) {
-            return { 0, 0 };
-        }
 
         start_pc_ = state_.pc;
         iwords_[0] = mem_.read_u16(state_.pc);
@@ -152,6 +157,7 @@ public:
         if ((inst_->extra & extra_priv_flag) && !(state_.sr & srm_s)) {
             state_.pc = start_pc_; // "The saved value of the program counter is the address of the first word of the instruction causing the privilege violation.
             do_trap(interrupt_vector::privililege_violation);
+            step_res_ = { 34, 7 };
             goto out;
         }
 
@@ -1619,12 +1625,15 @@ private:
     {
         assert(inst_->nea == 1 && ea_data_[0] < 16);
         do_trap(static_cast<interrupt_vector>(32 + (ea_data_[0] & 0xf)));
+        step_res_ = { 34, 7 };
     }
 
     void handle_TRAPV()
     {
-        if (state_.sr & srm_v)
+        if (state_.sr & srm_v) {
             do_trap(interrupt_vector::trapv_instruction);
+            step_res_ = { 34, 8 };
+        }
     }
 
     void handle_TST()

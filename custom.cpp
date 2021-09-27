@@ -1415,7 +1415,9 @@ public:
         const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
         const uint16_t colclock = s_.hpos >> 1;
 
-        step_result res {};
+        step_result res {
+            .frame = gfx_buf_,
+        };
 
         uint8_t spriteidx[8];
         for (uint8_t spr = 0; spr < 8; ++spr) {
@@ -1783,10 +1785,10 @@ public:
                     break;
                 }
 
-                res.free_mem_cycle = true;
+                res.free_chip_cycle = true;
             } while (0);
         } else if (!(s_.hpos & 1))
-            res.free_mem_cycle = true;
+            res.free_chip_cycle = true;
         
 
         // CIA tick rate is 1/10th of (base) CPU speed
@@ -1829,7 +1831,9 @@ public:
             }
         }
 
-        res.vhpos = s_.vpos << 8 | s_.hpos >> 1;
+        res.vpos = s_.vpos;
+        res.hpos = s_.hpos;
+        res.ipl = current_ipl();
         return res;
     }
 
@@ -2181,11 +2185,6 @@ public:
         return 0;
     }
 
-    const uint32_t* frame()
-    {
-        return gfx_buf_;
-    }
-
     std::vector<uint16_t> get_regs()
     {
         std::vector<uint16_t> regs(0x100);
@@ -2489,16 +2488,6 @@ custom_handler::~custom_handler() = default;
 custom_handler::step_result custom_handler::step()
 {
     return impl_->step();
-}
-
-uint8_t custom_handler::current_ipl() const
-{
-    return impl_->current_ipl();
-}
-
-const uint32_t* custom_handler::frame()
-{
-    return impl_->frame();
 }
 
 void custom_handler::set_serial_data_handler(const serial_data_handler& handler)
