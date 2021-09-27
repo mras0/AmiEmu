@@ -41,6 +41,12 @@ uint32_t get_u32(const uint8_t* d)
     return static_cast<uint32_t>(d[0]) << 24 | d[1] << 16 | d[2] << 8 | d[3];
 }
 
+void put_u16(uint8_t* d, uint16_t val)
+{
+    d[0] = static_cast<uint8_t>(val >> 8);
+    d[1] = static_cast<uint8_t>(val);
+}
+
 class memory_area_handler {
 public:
     virtual uint8_t read_u8(uint32_t addr, uint32_t offset) = 0;
@@ -62,26 +68,65 @@ public:
     uint8_t read_u8(uint32_t addr, uint32_t) override
     {
         std::cerr << "Unhandled read from $" << hexfmt(addr) << "\n";
+        assert(false);
         return 0xff;
     }
     uint16_t read_u16(uint32_t addr, uint32_t) override
     {
         std::cerr << "Unhandled read from $" << hexfmt(addr) << "\n";
+        assert(false);
         return 0xffff;
     }
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override
     {
         std::cerr << "Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
+        assert(false);
     }
     void write_u16(uint32_t addr, uint32_t, uint16_t val) override
     {
         std::cerr << "Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
+        assert(false);
     }
+};
+
+class ram_handler : public memory_area_handler {
+public:
+    explicit ram_handler(uint32_t size)
+    {
+        ram_.resize(size);
+    }
+
+    uint8_t read_u8(uint32_t, uint32_t offset) override
+    {
+        assert(offset < ram_.size());
+        return ram_[offset];
+    }
+
+    uint16_t read_u16(uint32_t, uint32_t offset) override
+    {
+        assert(offset < ram_.size()-1);
+        return get_u16(&ram_[offset]);
+    }
+    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
+    {
+        assert(offset < ram_.size());
+        ram_[offset] = val;
+    }
+    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
+    {
+        assert(offset < ram_.size() - 1);
+        put_u16(&ram_[offset], val);
+    }
+
+private:
+    std::vector<uint8_t> ram_;
 };
 
 class memory_handler {
 public:
-    explicit memory_handler()
+    explicit memory_handler(uint32_t ram_size)
+        : ram_ { ram_size }
+        , ram_area_ { 0, ram_size, &ram_ }
     {
     }
 
@@ -90,9 +135,17 @@ public:
 
     void register_handler(memory_area_handler& h, uint32_t base, uint32_t len)
     {
-        assert(&find_area(base) == &def_area_);
+        auto a = &find_area(base);
+        assert(a == &def_area_ || a == &ram_area_);
         areas_.push_back(area {
             base, len, &h });
+    }
+
+    void unregister_handler(memory_area_handler& h, uint32_t base, uint32_t len)
+    {
+        auto& a = find_area(base);
+        assert(a.base == base && a.len == len && a.handler == &h);
+        areas_.erase(areas_.begin() + (&a - &areas_[0]));
     }
 
     uint8_t read_u8(uint32_t addr)
@@ -141,7 +194,9 @@ private:
     };
     std::vector<area> areas_;
     default_handler def_handler_;
+    ram_handler ram_;
     area def_area_ { 0, 1U << 24, &def_handler_ };
+    area ram_area_;
 
     area& find_area(uint32_t addr)
     {
@@ -150,23 +205,36 @@ private:
             if (addr >= a.base && addr < a.base + a.len)
                 return a;
         }
+        if (addr < ram_area_.len) {
+            return ram_area_;
+        }
         return def_area_;
     }
 };
 
 class rom_area_handler : public memory_area_handler {
 public:
-    explicit rom_area_handler(memory_handler& mh, std::vector<uint8_t>&& data)
-        : rom_data_ { std::move(data) }
+    explicit rom_area_handler(memory_handler& mem_handler, std::vector<uint8_t>&& data)
+        : mem_handler_ { mem_handler }
+        , rom_data_ { std::move(data) }
     {
         const auto size = static_cast<uint32_t>(rom_data_.size());
-        if (size != 256 * 1024 && size != 512*1024) {
-            throw std::runtime_error { "Unexpected size of ROM" };
+        if (size != 256 * 1024 && size != 512 * 1024) {
+            throw std::runtime_error { "Unexpected size of ROM: $" + hexstring(size) };
         }
-        mh.register_handler(*this, 0, size);
-        mh.register_handler(*this, 0xf80000, size);
+        mem_handler_.register_handler(*this, 0xf80000, size);
         if (rom_data_.size() != 512 * 1024)
-            mh.register_handler(*this, 0xfc0000, size);
+            mem_handler_.register_handler(*this, 0xfc0000, size);
+    }
+
+    void set_overlay(bool ovl)
+    {
+        const auto size = static_cast<uint32_t>(rom_data_.size());
+        std::cout << "[ROM handler] Turning overlay " << (ovl ? "on" : "off") << "\n";
+        if (ovl)
+            mem_handler_.register_handler(*this, 0, size);
+        else
+            mem_handler_.unregister_handler(*this, 0, size);
     }
 
     uint8_t read_u8(uint32_t, uint32_t offset) override
@@ -183,18 +251,215 @@ public:
 
     void write_u8(uint32_t addr, uint32_t offset, uint8_t val) override
     {
-        std::cout << "byte write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+        std::cerr << "byte write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
         assert(0);
     }
 
     void write_u16(uint32_t addr, uint32_t offset, uint16_t val) override
     {
-        std::cout << "word write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+        std::cerr << "word write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
         assert(0);
     }
 
 private:
+    memory_handler& mem_handler_;
     std::vector<uint8_t> rom_data_;
+};
+
+// Handles both MOS Technology 8520 Complex Interface Adapter chips
+// CIAA can generate INT2, CIAB can generate INT6
+class cia_handler : public memory_area_handler {
+public:
+    explicit cia_handler(memory_handler& mem_handler, rom_area_handler& rom_handler)
+        : mem_handler_ { mem_handler }
+        , rom_handler_ { rom_handler }
+        , regs_ {}
+    {
+        assert(get_port_output(0, 0) == 0xff);
+        // Since all ports are set to input, OVL in CIA pra is high -> OVL set
+        mem_handler_.register_handler(*this, 0xBF0000, 0x10000);
+        rom_handler_.set_overlay(true);
+    }
+
+    uint8_t read_u8(uint32_t addr, uint32_t) override
+    {
+        std::cerr << "To handle 8-bit read from CIA: addr=$" << hexfmt(addr) << "\n";
+        assert(0);
+        return 0xFF;
+    }
+
+    uint16_t read_u16(uint32_t addr, uint32_t) override
+    {
+        std::cerr << "Invalid 16-bit read from CIA: addr=$" << hexfmt(addr) << "\n";
+        assert(0);
+        return 0xFF;
+    }
+
+    void write_u8(uint32_t addr, uint32_t, uint8_t val) override
+    {
+        if ((addr & 1) && !(addr & 0xF0) && addr >= 0xBFE001 && addr <= 0xBFEF01) {
+            handle_write(0, (addr >> 8) & 0xf, val);
+        } else if (!(addr & 1) && !(addr & 0xF0) && addr >= 0xBFD000 && addr <= 0xBFDF00) {
+            handle_write(1, (addr >> 8) & 0xf, val);
+        } else {
+            std::cerr << "TODO: Invalid CIA byte write : " << hexfmt(addr) << " val = $" << hexfmt(val) << "\n";
+            assert(0);
+        }
+    }
+
+    void write_u16(uint32_t addr, uint32_t, uint16_t val) override
+    {
+        std::cerr << "Invalid 16-bit write to CIA: " << hexfmt(addr) << " val = $" << hexfmt(val) << "\n";
+        assert(0);
+    }
+
+private:
+    memory_handler& mem_handler_;
+    rom_area_handler& rom_handler_;
+    uint8_t regs_[2][16];
+
+    void handle_write(uint8_t idx, uint8_t reg, uint8_t val)
+    {
+        assert(idx < 2 && reg < 16);
+        const uint8_t port_a_before = get_port_output(idx, 0);
+
+        switch (reg) {
+        case pra:
+        case prb:
+        case ddra:
+        case ddrb:
+            regs_[idx][reg] = val;
+            break;
+        default:
+            std::cerr << "TODO: CIA" << static_cast<char>('A' + idx) << "  " << regnames[reg] << " val $" << hexfmt(val) << "\n";
+            assert(0);
+        }
+
+        const uint8_t port_a_after = get_port_output(idx, 0);
+        if (idx == 0 && ((port_a_before ^ port_a_after) & 1)) {
+            // OVL changed
+            rom_handler_.set_overlay(!!(port_a_after & 1));
+        }
+    }
+
+    uint8_t get_port_output(uint8_t idx, uint8_t port)
+    {
+        assert(idx < 2 && port < 2);
+        const uint8_t ddr = regs_[idx][ddra + port];
+        return (regs_[idx][pra + port] & ddr) | (0xff & ~ddr);
+    }
+
+    // CIAA Port A: /FIR1 /FIR0  /RDY /TK0  /WPRO /CHNG /LED  OVL
+    // CIAA Port B: Parallel port
+
+    // CIAB Port A: /DTR  /RTS  /CD   /CTS  /DSR   SEL   POUT  BUSY
+    // CIAB Port B: /MTR  /SEL3 /SEL2 /SEL1 /SEL0 /SIDE  DIR  /STEP
+
+    static constexpr const char* const regnames[16] = {
+        "pra",
+        "prb",
+        "ddra",
+        "ddrb",
+        "talo",
+        "tahi",
+        "tblo",
+        "tbhi",
+        "todlo",
+        "todmid",
+        "todhi",
+        "unused",
+        "sdr",
+        "icr",
+        "cra",
+        "crb",
+    };
+
+    enum regnum {
+        pra     = 0x0, // Port A
+        prb     = 0x1, // Port B
+        ddra    = 0x2, // Direction for port A (0=input, 1=output)
+        ddrb    = 0x3, // Direction for port B (input -> read as 0xff if not driven due to pull-ups)
+        talo    = 0x4, // Timer A low byte (.715909 Mhz NTSC; .709379 Mhz PAL)
+        tahi    = 0x5, // Timer A high byte
+        tblo    = 0x6, // Timer B low byte
+        tbhi    = 0x7, // Timer B high byte
+        todlo   = 0x8, // Event counter bits 7-0 (CIAA: vsync, CIAB: hsync)
+        todmid  = 0x9, // Event counter bits 15-8
+        todhi   = 0xA, // Event counter bits 23-16
+        unused  = 0xB, // not connected
+        sdr     = 0xC, // Serial data register (CIAA: connected to keyboard, CIAB: not used)
+        icr     = 0xD, // Interrupt control register
+        cra     = 0xE, // Control register A
+        crb     = 0xF, // Control register B
+    };
+};
+
+class custom_handler : public memory_area_handler {
+public:
+    explicit custom_handler(memory_handler& mem_handler)
+        : mem_handler_ { mem_handler }
+    {
+        mem_handler_.register_handler(*this, 0xDFF000, 0x1000);
+    }
+
+    uint8_t read_u8(uint32_t, uint32_t offset) override
+    {
+        std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
+        assert(false);
+        return 0xff;
+    }
+    uint16_t read_u16(uint32_t, uint32_t offset) override
+    {
+        std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
+        assert(false);
+        return 0xffff;
+    }
+    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
+    {
+        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
+                  << " val $" << hexfmt(val) << "\n";
+        assert(false);
+    }
+    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
+    {
+        switch (offset) {
+        case INTENA:
+        case INTREQ:
+        case DMACON:
+            if (val != 0x7fff)
+                break;
+            std::cout << "[CUSTOM] Ignoring write to " << regname(offset) << " val $" << hexfmt(val) << "\n";
+            return;
+        }
+
+        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
+        assert(false);
+    }
+
+private:
+    memory_handler& mem_handler_;
+
+    // Name, Offset, R(=0)/W(=1)
+#define CUSTOM_REGS(X) \
+    X(DMACON, 0x096, 1) /* DMA control write (clear or set)           */ \
+    X(INTENA, 0x09A, 1) /* Interrupt enable bits (clear or set bits)  */ \
+    X(INTREQ, 0x09C, 1) /* Interrupt request bits (clear or set bits) */ \
+
+    static std::string regname(uint32_t offset)
+    {
+        switch (offset) {
+    #define CHECK_NAME(name, offset, _) case offset: return #name;
+            CUSTOM_REGS(CHECK_NAME)
+    #undef CHECK_NAME
+        }
+        return "$" + hexstring(offset, 3);
+    }
+
+    enum regnum {
+    #define REG_NUM(name, offset, _) name = offset,
+        CUSTOM_REGS(REG_NUM)
+    #undef REG_NUM
+    };
 };
 
 enum sr_bit_index {
@@ -429,6 +694,20 @@ private:
         return val;
     }
 
+    uint32_t read_mem(uint32_t addr)
+    {
+        switch (inst_->size) {
+        case opsize::b:
+            return mem_.read_u8(addr);
+        case opsize::w:
+            return mem_.read_u16(addr);
+        case opsize::l:
+            return mem_.read_u32(addr);
+        }
+        assert(!"invalid opsize");
+        return 0;
+    }
+
     void handle_ea(uint8_t idx)
     {
         assert(idx < inst_->nea);
@@ -517,22 +796,16 @@ private:
         case ea_m_A_ind:
         case ea_m_A_ind_post:
         case ea_m_A_ind_pre:
-            // TODO: Read correct size at (val)
-            break;
         case ea_m_A_ind_disp16:
-            break;
         case ea_m_A_ind_index:
-            break;
+            return read_mem(val);
         case ea_m_Other:
             switch (ea & ea_xn_mask) {
             case ea_other_abs_w:
             case ea_other_abs_l:
-                // TODO: Read correct size at (val)
-                break;
             case ea_other_pc_disp16:
-                break;
             case ea_other_pc_index:
-                break;
+                return read_mem(val);
             case ea_other_imm:
                 return val;
             }
@@ -745,8 +1018,10 @@ private:
 int main()
 {
     try {
-        memory_handler mem {};
+        memory_handler mem { 1U<<20 };
         rom_area_handler rom { mem, read_file("../../rom.bin") };
+        cia_handler cias { mem, rom };
+        custom_handler custom { mem };
         //rom_area_handler rom { mem, read_file("../../Misc/DiagROM/DiagROM") };
         m68000 cpu { mem };
 
