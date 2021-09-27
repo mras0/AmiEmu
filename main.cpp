@@ -368,18 +368,49 @@ int main(int argc, char* argv[])
         std::vector<uint32_t> breakpoints;
         bool debug_mode = false;
         custom_handler::step_result custom_step {};
-        m68000::step_result cpu_step {}; // Records memory/cycle "deficit" of CPU compared to custom chips
-        uint8_t pending_ipl = 0;
+        m68000::step_result cpu_step {};
         std::unique_ptr<std::ofstream> trace_file;
+        bool new_frame = false;
+        bool cpu_active = true;
+        uint32_t cycles_todo = 0;
 
-        uint8_t chip_accesses = 0;
-        constexpr uint32_t min_rom_addr = 0x00e0'0000;
-        mem.set_memory_interceptor([&chip_accesses](uint32_t addr, uint32_t /*data*/, uint8_t size, bool /*write*/) {            
-            if (addr < min_rom_addr) {
-                ++chip_accesses;
-                if (size == 4)
-                    ++chip_accesses;
+        cpu.set_cycle_handler([&](uint8_t cycles) {
+            assert(cpu_active);
+            cycles_todo += cycles;
+        });
+
+        auto cstep = [&]() {
+            cpu_active = false;
+            custom_step = custom.step();
+            if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
+                g.set_active(false);
+                debug_mode = true;
+                wait_mode = wait_none;
+            } else if (!(custom_step.vpos | custom_step.hpos))
+                new_frame = true;
+            cpu_active = true;
+        };
+
+        auto do_all_custom_cylces = [&]() {
+            while (cycles_todo) {
+                cstep();
+                --cycles_todo;
             }
+        };
+
+        constexpr uint32_t min_rom_addr = 0x00e0'0000;
+        mem.set_memory_interceptor([&](uint32_t addr, uint32_t /*data*/, uint8_t size, bool /*write*/) {
+            if (!cpu_active)
+                return;
+            assert(size == 1 || size == 2); (void)size;
+            if (addr >= min_rom_addr)
+                return;
+            cycles_todo += 2;
+            do_all_custom_cylces();
+            while (!custom_step.free_chip_cycle) {
+                cstep();
+            } 
+            cycles_todo = 2;
         });
 
         //cpu.trace(&std::cout);
@@ -637,54 +668,27 @@ unknown_command:
                     g.set_active(true);
                 }
 
-                custom_step = custom.step();
-                
-
-                // "Pay off" cycle/mem deficit, not correct but should match speed better
-                if (custom_step.free_chip_cycle && cpu_step.mem_accesses) {
-                    assert(cpu_step.clock_cycles);
-                    --cpu_step.mem_accesses;
-                    --cpu_step.clock_cycles;
-                } else if (cpu_step.clock_cycles >= 4 * cpu_step.mem_accesses) {
-                    --cpu_step.clock_cycles;
-                }
-
-
-                if (!cpu_step.clock_cycles) {
-                    // HACK: Delay IPL change by one instruction to make buggy loops like this
-                    // (where system interrupts are still enabled..) actuallly complete (zoom/wait.s):
-                    // _waitVERTBLoop:
-                    //      move.w INTREQR(a5), d0
-                    //      btst #5, d0
-                    //      beq _waitVERTBLoop
-
-                    assert(!cpu_step.mem_accesses);
-                    chip_accesses = 0;
-                    cpu_step = cpu.step(pending_ipl);
-                    pending_ipl = custom_step.ipl;
-                    assert(cpu_step.clock_cycles >= 4 * cpu_step.mem_accesses); 
+                cpu_step = cpu.step(custom_step.ipl);
                    
-                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr)) {
-                        g.set_active(false);
-                        debug_mode = true;
-                        wait_mode = wait_none;
-                    } else if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
-                        g.set_active(false);
-                        debug_mode = true;
-                        std::cout << "Breakpoint hit\n";
-                    }
-
-                    assert(cpu_step.mem_accesses >= chip_accesses);
-                    assert(cpu_step.clock_cycles >= 4 * chip_accesses); 
-                    cpu_step.mem_accesses = chip_accesses;
-                }
-    
-                if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos)<<9|custom_step.hpos)) {
+                if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr)) {
                     g.set_active(false);
                     debug_mode = true;
                     wait_mode = wait_none;
+                } else if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
+                    g.set_active(false);
+                    debug_mode = true;
+                    std::cout << "Breakpoint hit\n";
                 }
 
+                if (cpu_step.clock_cycles == 0) {
+                    // CPU is stopped
+                    do {
+                        cstep();
+                    } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
+                }
+                else
+                    do_all_custom_cylces();
+    
 #ifdef TRACE_LOG
                 if (cpu.instruction_count() == trace_start_inst) {
                     std::cout << "Starting trace\n";
@@ -697,7 +701,7 @@ unknown_command:
                 }
 #endif
 
-                if (custom_step.vpos == 0 && custom_step.hpos == 0) {
+                if (new_frame) {
                     if (disk_chosen_countdown) {
                         if (--disk_chosen_countdown == 0) {
                             std::cout << drives[pending_disk_drive]->name() << " Inserting disk\n";
@@ -705,6 +709,7 @@ unknown_command:
                             pending_disk_drive = 0xff;
                         }
                     }
+                    new_frame = false;
                     goto update;
                 }
                 if (!steps_to_update--) {
