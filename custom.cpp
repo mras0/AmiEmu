@@ -120,6 +120,7 @@
     X(BPLCON3  , 0x106 , 1) /* Bitplane control register  (ECS only)                   */ \
     X(BPLMOD1  , 0x108 , 1) /* Bitplane modulo (odd planes)                            */ \
     X(BPLMOD2  , 0x10A , 1) /* Bitplane modulo (even planes)                           */ \
+    X(BPLCON4  , 0x10C , 1) /* Bitplane control (bitplane and sprite-masks) (AGA only) */ \
     X(BPL1DAT  , 0x110 , 1) /* Bitplane 1 data (parallel-to-serial convert)            */ \
     X(BPL2DAT  , 0x112 , 1) /* Bitplane 2 data (parallel-to-serial convert)            */ \
     X(BPL3DAT  , 0x114 , 1) /* Bitplane 3 data (parallel-to-serial convert)            */ \
@@ -206,6 +207,7 @@
     X(COLOR29  , 0x1BA , 1) /* Color table 29                                          */ \
     X(COLOR30  , 0x1BC , 1) /* Color table 30                                          */ \
     X(COLOR31  , 0x1BE , 1) /* Color table 31                                          */ \
+    X(BEAMCON0 , 0x1DC , 1) /* Beam counter control register (SHRES,UHRES,PAL) (AGA)   */ \
     X(DIWHIGH  , 0x1E4 , 1) /* Display window - upper bits for start/stop (AGA)        */ \
     X(FMODE    , 0x1FC , 1) /* Fetch mode (AGA)                                        */ \
 // keep this line clear (for macro continuation)
@@ -1477,15 +1479,15 @@ public:
                 }
                 break;
             case custom_state::audio_channel_state::dma_samp1:
-                if (ch.percnt == 0) {
+                if (ch.percnt == 1) {
                     ch.state = custom_state::audio_channel_state::dma_samp2;
                     ch.percnt = ch.per;
-                } else {
+                } else if (ch.percnt) {
                     ch.percnt--;
                 }
                 break;
             case custom_state::audio_channel_state::dma_samp2:
-                if (ch.percnt == 0) {
+                if (ch.percnt == 1) {
                     ch.percnt = ch.per;
                     ch.dmareq = true;
                     if (ch.actlen == 1) {
@@ -1497,7 +1499,7 @@ public:
                     } else {
                         ch.actlen--;
                     }
-                } else {
+                } else if (ch.percnt) {
                     ch.percnt--;
                 }
                 break;
@@ -1548,7 +1550,7 @@ public:
             else
                 continue;
             // -128..127 * 128 (max) = -16384..16383 (and then two channels)
-            dat *= static_cast<int16_t>(std::min(128, ch.vol * 2));
+            dat *= ch.vol * 2;
 
             if (idx == 0 || idx == 3)
                 l += dat;
@@ -2154,13 +2156,15 @@ public:
                 ch.len = val;
                 return;
             case 3: // PER
-                if (val < 124) {
-                    DBGOUT << "Audio write to " << custom_regname(offset) << " val $" << hexfmt(val) << " -- Warning period value is too low!\n";
+                if (val && val < 124) {
+                    DBGOUT << "Audio write to " << custom_regname(offset) << " val " << (int)val << " -- Warning period value is too low!\n";
                 }
                 ch.per = val;
                 return;
             case 4: // VOL
-                ch.vol = val;
+                ch.vol = val & 0x7f;
+                if (ch.vol > 64)
+                    ch.vol = 64;
                 return;
             case 5: // DAT
                 DBGOUT << "Audio unspported write to " << custom_regname(offset) << " val $" << hexfmt(val) << "\n";
@@ -2389,11 +2393,13 @@ public:
         case BPLMOD2: // $10A
             s_.bplmod2 = val;
             return;
+        case BPLCON4: // $10C:
         case 0x0F8:  // BPL7PTH
         case 0x0FA:  // BPL7PTL
         case 0x0FC:  // BPL8PTH
         case 0x0FE:  // BPL8PTL
         case 0x1C0:  // HTOTAL (ignored unless VARBEAMEN=1)
+        case BEAMCON0: // $1DC
         case DIWHIGH: // $1E4
         case FMODE:   // $1FC
         case 0x1fe:   // NO-OP
