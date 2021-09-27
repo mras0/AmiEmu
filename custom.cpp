@@ -478,6 +478,7 @@ struct custom_state {
     uint32_t copper_pt;
     uint16_t copper_inst[2];
     uint8_t copper_inst_ofs;
+    bool cdang;
 
     sprite_dma_state spr_dma_states[8];
     sprite_vpos_state spr_vpos_states[8];
@@ -816,19 +817,24 @@ public:
 #ifdef COPPER_DEBUG
                     std::cout << "Warning: SKIP processed\n";
 #endif
-                    assert(0);
+                    TODO_ASSERT(!"Skip not implemented");
                 }
             }
 
         } else {
-            // TODO: Check which register is accessed ($20+ is ok, $10+ ok only with copper danger)
             const auto reg = s_.copper_inst[0] & 0x1ff;
-            if (reg != 0 || s_.copper_inst[1] != 0) // Seems to be used as a kind of NOP in the kickstart copper list?
-                write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+            if (reg >= 0x80 || (s_.cdang && reg >= 0x40)) {
 #ifdef COPPER_DEBUG
-            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos>>1,4) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
 #endif
-            s_.copper_inst_ofs = 0; // Fetch next instruction
+                write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+                s_.copper_inst_ofs = 0; // Fetch next instruction
+            } else {
+#ifdef COPPER_DEBUG
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << " - Illegal. Pausing copper.\n";
+#endif
+                pause_copper();
+            }
         }
     }
 
@@ -1491,6 +1497,12 @@ public:
             return;
         case VPOSW:  // $02A
             return;  // Ignore for now
+        case COPCON: // $02E
+            s_.cdang = !!(val & 2);
+#ifdef COPPER_DEBUG
+            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") CDANG " << (s_.cdang ? "enabled" : "disabled") << "\n";
+#endif
+            return;
         case SERDAT: // $030
             if (serial_data_handler_) {
                 uint8_t numbits = 9;
