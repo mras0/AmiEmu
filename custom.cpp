@@ -1872,20 +1872,44 @@ public:
     {
         offset &= 0xffe;
 
+        // V(H)POSR is shifted compared to the actual value (this is needed for the winuae cputest cycle accuracy tests)
+        constexpr uint16_t hpos_cycle_shift = 3;
+        constexpr uint16_t hpos_max = (hpos_per_line >> 1);
+
         switch (offset) {
         case DMACONR: // $002
             return s_.dmacon;
-        case VPOSR: // $004
+        case VPOSR: { // $004
             // Hack: Just return a fixed V/HPOS when external sync is enabled (needed for KS1.2)
             if (s_.bplcon0 & BPLCON0F_ERSY)
                 return 0x8040;
 
-            return (s_.long_frame ? 0x8000 : 0) | ((s_.vpos >> 8) & 1);
-        case VHPOSR:  // $006
+            auto v = s_.vpos;
+            auto h = (s_.hpos >> 1) & 0xff;
+            if (h + hpos_cycle_shift >= hpos_max + 1) {
+                if (++v >= vpos_per_field)
+                    v = 0;
+            }
+
+            return (s_.long_frame ? 0x8000 : 0) | ((v >> 8) & 1);
+        }
+        case VHPOSR: { // $006
             // Hack: Just return a fixed V/HPOS when external sync is enabled (needed for KS1.2)
             if (s_.bplcon0 & BPLCON0F_ERSY)
                 return 0x80;
-            return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
+            auto v = s_.vpos;
+            auto h = (s_.hpos >> 1) & 0xff;
+            h += 3;
+            if (h >= hpos_max) {
+                h -= hpos_max;
+                // VPOS changes at shifted hpos=1 NOT 0
+                if (h >= 1)
+                    if (++v >= vpos_per_field)
+                        v = 0;
+            }
+            h = (h + 1) % hpos_max;
+            return static_cast<uint16_t>((v & 0xff) << 8 | h);
+        }
         case DSKDATR: // $008
             break;
         case JOY0DAT: // $00A
