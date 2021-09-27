@@ -746,6 +746,7 @@ enum class sprite_vpos_state {
 
 enum class copper_state {
     halted,
+    vblank,
     read_inst,
     need_free_cycle,
     wait,
@@ -1374,6 +1375,15 @@ public:
         switch (s_.copstate) {
         case copper_state::halted:
             return false;
+        case copper_state::vblank:
+            // copper doesn't load COP1LC until DMA has been started after vblank ("ham" test)
+            s_.copper_pt = s_.coplc[0];
+            s_.copper_inst_ofs = 0;
+            s_.copper_skip_next = false;
+            s_.copstate = copper_state::read_inst;
+            if (DEBUG_COPPER)
+                DBGOUT << "Copper starting IP=$" << hexfmt(s_.copper_pt) << "\n";
+            return true; // seems like copper does use this DMA slot
         case copper_state::read_inst:
             assert(s_.copper_inst_ofs < 2);
             s_.copper_inst[s_.copper_inst_ofs++] = chip_read(s_.copper_pt);
@@ -2092,10 +2102,7 @@ public:
                 memset(s_.spr_dma_states, 0, sizeof(s_.spr_dma_states));
                 memset(s_.spr_vpos_states, 0, sizeof(s_.spr_vpos_states));
                 memset(s_.spr_armed, 0, sizeof(s_.spr_armed));
-                s_.copper_pt = s_.coplc[0];
-                s_.copper_inst_ofs = 0;
-                s_.copper_skip_next = false;
-                s_.copstate = copper_state::read_inst;
+                s_.copstate = copper_state::vblank;
                 s_.vpos = 0;
                 s_.long_frame = (s_.bplcon0 & BPLCON0F_LACE ? !s_.long_frame : true);
                 s_.intreq |= INTF_VERTB;
