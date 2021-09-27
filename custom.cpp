@@ -1890,21 +1890,20 @@ public:
                     }
                     return col32_[idx];
                 } else if ((s_.bplcon0 & BPLCON0F_HOMOD) && nbpls >= 5) { // HAM is only active if 5 or 6 bitplanes
-                    const int ibits = ((nbpls + 1) & ~1) - 2;
-                    const int val = (pf1 & 0xf) << (8 - ibits);
+                    const uint32_t val = pf1 & 0xf;
                     auto& col = s_.ham_color;
-                    switch (pf1 >> ibits) {
+                    switch (pf1 >> 4) {
                     case 0: // Palette entry
-                        col = col32_[pf1 & 0xf];
+                        col = col32_[val];
                         break;
                     case 1: // Modify B
-                        col = (col & 0xffff00) | val;
+                        col = (col & 0xffff00) | val << 4 | val;
                         break;
                     case 2: // Modify R
-                        col = (col & 0x00ffff) | val << 16;
+                        col = (col & 0x00ffff) | val << 20 | val << 16;
                         break;
                     case 3: // Modify G
-                        col = (col & 0xff00ff) | val << 8;
+                        col = (col & 0xff00ff) | val << 12 | val << 8;
                         break;
                     default:
                         assert(false);
