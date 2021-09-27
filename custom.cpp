@@ -1682,6 +1682,14 @@ public:
         return nullptr;
     }
 
+    std::vector<uint16_t> get_regs()
+    {
+        std::vector<uint16_t> regs(0x100);
+        for (uint16_t i = 0; i < 0x100; ++i)
+            regs[i] = internal_read(i * 2);
+        return regs;
+    }
+
 private:
     memory_handler& mem_;
     cia_handler& cia_;
@@ -2018,6 +2026,12 @@ uint32_t custom_handler::copper_ptr(uint8_t idx)
 {
     return impl_->copper_ptr(idx);
 }
+
+std::vector<uint16_t> custom_handler::get_regs()
+{
+    return impl_->get_regs();
+}
+
 
 std::string custom_regname(uint32_t offset)
 {

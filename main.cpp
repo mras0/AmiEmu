@@ -415,12 +415,12 @@ int main(int argc, char* argv[])
 
                 if (debug_mode) {
                     const auto& s = cpu.state();
-
+                    g.set_debug_memory(mem.ram(), custom.get_regs());
                     cpu.show_state(std::cout);
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
                         std::string line;
-                        if (!debug_prompt(line)) {
+                        if (!g.debug_prompt(line)) {
                             debug_mode = false;
                             quit = true;
                             break;

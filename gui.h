@@ -48,12 +48,12 @@ public:
     void led_state(uint8_t s);
     void serial_data(const std::vector<uint8_t>& data);
     void set_active(bool act);
+    bool debug_prompt(std::string& line);
+    void set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom);
 
 private:
     class impl;
     impl* impl_;
 };
-
-bool debug_prompt(std::string& line);
 
 #endif

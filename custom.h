@@ -31,6 +31,7 @@ public:
     void show_debug_state(std::ostream& os);
     void show_registers(std::ostream& os);
     uint32_t copper_ptr(uint8_t idx); // 0=current
+    std::vector<uint16_t> get_regs();
 
 private:
     class impl;

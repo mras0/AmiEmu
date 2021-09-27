@@ -161,6 +161,50 @@ struct gdi_deleter {
 };
 using font_ptr = std::unique_ptr<HFONT__, gdi_deleter>;
 
+constexpr uint32_t rgb4_to_8(const uint16_t rgb4)
+{
+    const uint32_t r = (rgb4 >> 8) & 0xf;
+    const uint32_t g = (rgb4 >> 4) & 0xf;
+    const uint32_t b = rgb4 & 0xf;
+    return r << 20 | r << 16 | g << 12 | g << 8 | b << 4 | b;
+}
+
+
+constexpr const uint32_t default_palette[32] = {
+    0x5D8AA8,
+    0xF0F8FF,
+    0xE32636,
+    0xE52B50,
+    0xFFBF00,
+    0xA4C639,
+    0x8DB600,
+    0xFBCEB1,
+    0x7FFFD4,
+    0x4B5320,
+    0x3B444B,
+    0xE9D66B,
+    0xB2BEB5,
+    0x87A96B,
+    0xFF9966,
+    0x6D351A,
+    0x007FFF,
+    0x89CFF0,
+    0xA1CAF1,
+    0xF4C2C2,
+    0xFFD12A,
+    0x848482,
+    0x98777B,
+    0xF5F5DC,
+    0x3D2B1F,
+    0x000000,
+    0x318CE7,
+    0xFAF0BE,
+    0x0000FF,
+    0xDE5D83,
+    0x79443B,
+    0xCC0000,
+};
+
 template <typename Derived>
 class window_base {
 public:
@@ -230,6 +274,7 @@ private:
     MAKE_DETECTOR(on_paint);
     MAKE_DETECTOR(on_erase_background);
     MAKE_DETECTOR(on_size);
+    MAKE_DETECTOR(on_close);
 
     #undef MAKE_DETECTOR
 
@@ -267,8 +312,14 @@ private:
                 }
                 break;
             case WM_SIZE:
-                if constexpr (has_on_size<Derived>) {
+                if constexpr (has_on_size<>) {
                     self->on_size(hwnd, LOWORD(lParam), HIWORD(lParam));
+                    return 0;
+                }
+                break;
+            case WM_CLOSE:
+                if constexpr (has_on_close<>) {
+                    self->on_close(hwnd);
                     return 0;
                 }
                 break;
@@ -350,6 +401,10 @@ private:
     {
         SetWindowPos(edit_window_, nullptr, 0, 0, client_width, client_height, SWP_NOZORDER);
     }
+
+    void on_close(HWND)
+    {
+    }
 };
 
 class bitmap_window : public window_base<bitmap_window> {
@@ -360,6 +415,37 @@ public:
         std::unique_ptr<bitmap_window> wnd { new bitmap_window { width, height } };
         wnd->do_create(L"", WS_CHILD|WS_VISIBLE, x, y, width, height, parent);
         return wnd.release();
+    }
+
+    int width() const
+    {
+        return width_;
+    }
+
+    int height() const
+    {
+        return width_;
+    }
+
+    bool set_size(int width, int height)
+    {
+        HWND hwnd = handle();
+        destroy();
+        width_ = width;
+        height_ = height;
+        if (HDC hdc = GetWindowDC(hwnd)) {
+            if ((hdc_ = CreateCompatibleDC(hdc)) != nullptr) {
+                if ((hbm_ = CreateCompatibleBitmap(hdc, width_, height_)) != nullptr) {
+                    if (SelectObject(hdc_, hbm_)) {
+                        ReleaseDC(hwnd, hdc);
+                        return true;
+                    }
+                }
+                DeleteDC(hdc_);
+            }
+            ReleaseDC(hwnd, hdc);
+        }
+        return false;
     }
 
     void update_image(const uint32_t* data)
@@ -376,14 +462,14 @@ public:
         u.bmi.bmiHeader.biBitCount = 32;
         u.bmi.bmiHeader.biCompression = BI_RGB;
         SetDIBits(hdc_, hbm_, 0, height_, data, &u.bmi, DIB_RGB_COLORS);
-        RedrawWindow(handle(), nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        InvalidateRect(handle(), nullptr, FALSE);
     }
 
 private:
     friend window_base;
     static constexpr const wchar_t* const class_name_ = L"bitmap_window";
-    const int width_;
-    const int height_;
+    int width_;
+    int height_;
     HDC hdc_ = nullptr;
     HBITMAP hbm_ = nullptr;
 
@@ -393,28 +479,25 @@ private:
     {
     }
 
+    void destroy()
+    {
+        if (hbm_)
+            DeleteObject(hbm_);
+        hbm_ = nullptr;
+        if (hdc_)
+            DeleteDC(hdc_);
+        hdc_ = nullptr;
+    }
+
     bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
-        if (HDC hdc = GetWindowDC(hwnd)) {
-            if ((hdc_ = CreateCompatibleDC(hdc)) != nullptr) {
-                if ((hbm_ = CreateCompatibleBitmap(hdc, width_, height_)) != nullptr) {
-                    if (SelectObject(hdc_, hbm_)) {
-                        ReleaseDC(hwnd, hdc);
-                        EnableWindow(hwnd, FALSE); // Let input messages through to parent
-                        return true;
-                    }
-                }
-                DeleteDC(hdc_);
-            }
-            ReleaseDC(hwnd, hdc);
-        }
-        return false;
+        EnableWindow(hwnd, FALSE); // Let input messages through to parent
+        return set_size(width_, height_);
     }
 
     void on_destroy(HWND)
     {
-        DeleteObject(hbm_);
-        DeleteDC(hdc_);
+        destroy();
     }
 
     void on_erase_background(HWND, HDC)
@@ -431,6 +514,247 @@ private:
             BitBlt(ps.hdc, 0, 0, width_, height_, hdc_, 0, 0, SRCCOPY);
             EndPaint(hwnd, &ps);
         }
+    }
+
+    void on_close(HWND)
+    {
+    }
+};
+
+class memory_visualizer_window : public window_base<memory_visualizer_window> {
+public:
+    static memory_visualizer_window* create(int x, int y)
+    {
+        std::unique_ptr<memory_visualizer_window> wnd { new memory_visualizer_window {} };
+        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, 800, 600, nullptr);
+        return wnd.release();
+    }
+
+    void set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom)
+    {
+        assert(custom.size() == 0x100);
+        mem_ = mem;
+        custom_ = custom;
+        update();
+    }
+
+private:
+    friend window_base;
+    static constexpr const wchar_t* const class_name_ = L"memory_visualizer_window";
+    static constexpr int toolbar_margin_x = 10;
+    static constexpr int toolbar_margin_y = 10;
+    static constexpr int toolbar_width_ = 200;
+    static constexpr uint8_t maxplanes = 5;
+
+    enum field {
+        F_WIDTH,
+        F_HEIGHT,
+        F_PLANES,
+        F_MODULO,
+        F_PL1,
+        F_PL2,
+        F_PL3,
+        F_PL4,
+        F_PL5,
+    };
+    static constexpr struct {
+        const wchar_t* const name;
+        int val;
+    } fields[] = {
+        { L"Width", 320 },
+        { L"Height", 256 },
+        { L"Planes", 1 },
+        { L"Modulo", 0 },
+        { L"Plane1", 0 },
+        { L"Plane2", 0 },
+        { L"Plane3", 0 },
+        { L"Plane4", 0 },
+        { L"Plane5", 0 },
+    };
+    uint32_t palette_[32];
+    static constexpr auto num_fields = sizeof(fields) / sizeof(*fields);
+    bitmap_window* bitmap_window_;
+    HWND field_combo_[num_fields];
+    HWND update_button_;
+    HWND last_focus_ = nullptr;
+    std::vector<uint8_t> mem_;
+    std::vector<uint16_t> custom_;
+
+    memory_visualizer_window()
+    {
+        custom_.resize(0x100);
+    }
+
+    bool on_create(HWND hwnd, const CREATESTRUCT&)
+    {
+        bitmap_window_ = bitmap_window::create(toolbar_width_, 0, fields[0].val, fields[0].val, hwnd);
+        memcpy(palette_, default_palette, sizeof(palette_));
+
+        const auto hInstance = GetModuleHandle(nullptr);
+        const int w = toolbar_width_ - 2 * toolbar_margin_x;
+        const int elem_y = 16;
+        int y = toolbar_margin_y;
+        for (size_t i = 0; i < num_fields; ++i) {
+            const auto& f = fields[i];
+            wchar_t text[256];
+            if (i >= F_PL1)
+                wsprintfW(text, L"$%X", f.val);
+            else
+                wsprintfW(text, L"%d", f.val);
+
+            CreateWindow(L"STATIC", f.name, WS_CHILD | WS_VISIBLE, toolbar_margin_x, y, w, elem_y, hwnd, nullptr, hInstance, nullptr);
+            y += toolbar_margin_y + elem_y;
+            field_combo_[i] = CreateWindow(L"EDIT", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP, toolbar_margin_x, y, w, elem_y, hwnd, reinterpret_cast<HMENU>(101+i), hInstance, nullptr);
+            y += toolbar_margin_y + elem_y;
+        }
+
+        y += toolbar_margin_y;
+        update_button_ = CreateWindow(L"BUTTON", L"Update", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
+
+        y += toolbar_margin_y*2 + elem_y;
+        update_button_ = CreateWindow(L"BUTTON", L"From custom", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(300), hInstance, nullptr);
+
+        update();
+
+        return true;
+    }
+
+    void on_close(HWND)
+    {
+    }
+
+    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        switch (uMsg) {
+        case WM_ACTIVATE:
+            if (LOWORD(wParam) == WA_INACTIVE)
+                last_focus_ = GetFocus();
+            break;
+        case WM_SETFOCUS:
+            SetFocus(last_focus_);
+            break;
+        case WM_COMMAND: {
+            const auto id = LOWORD(wParam);
+            const auto code = HIWORD(wParam);
+            if (id == IDOK && code == BN_CLICKED) {
+                update();
+            } else if (id == 300 && code == BN_CLICKED) {
+                update_from_custom();
+            }
+            break;
+        }
+        case WM_KEYUP:
+            if (wParam == VK_RETURN)
+                std::cout << "Enter\n";
+            break;
+        }
+        return window_base::wndproc(hwnd, uMsg, wParam, lParam);
+    }
+
+    int get_field(enum field f)
+    {
+        assert(static_cast<size_t>(f) < num_fields);
+        char buf[256];
+        GetWindowTextA(field_combo_[f], buf, sizeof(buf));
+        int val;
+        if (buf[0] == '$') {
+            if (!sscanf(buf + 1, "%X", &val)) {
+                throw std::runtime_error("Could not convert \"" + std::string(buf) + "\" to value (hex)");
+            }
+        } else {
+            if (!sscanf(buf, "%d", &val)) {
+                throw std::runtime_error("Could not convert \"" + std::string(buf) + "\" to value (hex)");
+            }
+        }
+        return val;
+    }
+
+    void update()
+    {
+        if (mem_.empty())
+            return;
+
+        try {
+            const int width = get_field(F_WIDTH);
+            const int height = get_field(F_HEIGHT);
+            const int nbpls = get_field(F_PLANES);
+            const int16_t mod = static_cast<int16_t>(get_field(F_MODULO));
+            uint32_t pt[maxplanes];
+
+            for (size_t i = 0; i < maxplanes; ++i)
+                pt[i] = get_field(static_cast<field>(F_PL1 + i));
+
+
+            if (nbpls > maxplanes)
+                throw std::runtime_error("bpls=" + std::to_string(nbpls) + " is not supported");
+            
+            if (width != bitmap_window_->width() || height != bitmap_window_->height()) {
+                bitmap_window_->set_size(width, height);
+                SetWindowPos(bitmap_window_->handle(), nullptr, toolbar_width_, 0, width, height, SWP_NOZORDER);
+            }
+
+            std::vector<uint32_t> bitmap(static_cast<size_t>(width * height));
+            const uint32_t ptmask = static_cast<uint32_t>(mem_.size() - 1);
+            for (int y = 0; y < height; ++y) {
+                uint16_t data[maxplanes];
+
+
+                for (int x = 0; x < width; ++x) {
+                    if ((x & 15) == 0) {
+                        for (int p = 0; p < nbpls; ++p) {
+                            pt[p] &= ptmask;
+                            data[p] = mem_[pt[p]] << 8 | mem_[pt[p] + 1];
+                            pt[p] += 2;
+                        }
+                    }
+
+                    uint8_t idx = 0;
+                    for (int p = 0; p < nbpls; ++p) {
+                        if (data[p] & 0x8000)
+                            idx |= 1 << p;
+                        data[p] <<= 1;
+                    }
+
+                    bitmap[x + y * width] = palette_[idx];
+                }
+
+                for (int p = 0; p < nbpls; ++p)
+                    pt[p] += mod;
+            }
+
+            bitmap_window_->update_image(bitmap.data());
+        } catch (const std::exception& e) {
+            MessageBoxA(handle(), e.what(), "Error", MB_ICONSTOP);
+        }
+    }
+
+    void update_from_custom()
+    {
+        char temp[256];
+        // BPLxPT
+        for (int i = 0; i < maxplanes; ++i) {
+            const auto ofs = 0xe0/2 + i * 2;
+            snprintf(temp, sizeof(temp), "$%0X", custom_[ofs]<<16|custom_[ofs+1]);
+            SetWindowTextA(field_combo_[F_PL1 + i], temp);
+        }
+
+        // COLOR
+        for (int i = 0; i < 32; ++i) {
+            palette_[i] = rgb4_to_8(custom_[0x180/2 + i]);
+        }
+
+        const auto bplcon0 = custom_[0x100 / 2];
+        if ((bplcon0 & (0x8c00)) || (bplcon0 & 0x7000) > 0x6000) {
+            std::cout << "Warning: unsupported things in BPLCON0\n";
+        } else {
+            const int nbpls = (bplcon0>>12) & 7;
+            snprintf(temp, sizeof(temp), "%d", nbpls);
+            SetWindowTextA(field_combo_[F_PLANES], temp);
+        }
+
+
+        InvalidateRect(handle(), nullptr, FALSE);
+        update();
     }
 };
 
@@ -455,9 +779,10 @@ public:
         // Position serial data window to the right of the main window
         GetWindowRect(wnd->handle(), &r);
         wnd->ser_data_ = serial_data_window::create(r.right + 10, r.top);
+        wnd->mem_vis_window_ = memory_visualizer_window::create(r.right + 10, r.top);
+        SetFocus(wnd->handle());
 
         return wnd.release();
-
     }
 
     std::vector<event> update()
@@ -468,8 +793,7 @@ public:
             if (msg.message == WM_QUIT) {
                 return { event { event_type::quit } };
             }
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            handle_message(msg);
         }
         return std::move(events_);
     }
@@ -492,7 +816,6 @@ public:
     void serial_data(const std::vector<uint8_t>& data)
     {
         ser_data_->append_text(std::string { data.begin(), data.end() });
-        SetFocus(handle());
     }
 
     void set_active(bool act)
@@ -510,6 +833,19 @@ public:
         }
     }
 
+    void handle_message(MSG& msg)
+    {
+        if (!IsDialogMessage(mem_vis_window_->handle(), &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    void set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom)
+    {
+        mem_vis_window_->set_debug_memory(mem, custom);
+    }
+
 private:
     friend window_base<impl>;
     static constexpr const wchar_t* const class_name_ = L"Display";
@@ -520,6 +856,7 @@ private:
     uint8_t led_state_ = 0;
     bitmap_window* bitmap_window_ = nullptr;
     serial_data_window* ser_data_ = nullptr;
+    memory_visualizer_window* mem_vis_window_ = nullptr;
     POINT last_mouse_pos_ { 0, 0 };
     bool mouse_captured_ = false;
     bool active_ = true;
@@ -691,8 +1028,6 @@ private:
     {
         PAINTSTRUCT ps;
         if (BeginPaint(hwnd, &ps) && !IsRectEmpty(&ps.rcPaint)) {
-            std::cout << ps.rcPaint.left << ", " << ps.rcPaint.top << " -> " << ps.rcPaint.right << ", " << ps.rcPaint.bottom << "\n";
-
             RECT bck { 0, height_, width_, height_ + extra_height };
             FillRect(ps.hdc, &bck, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 
@@ -737,7 +1072,7 @@ void gui::set_active(bool act)
     impl_->set_active(act);
 }
 
-bool debug_prompt(std::string& line)
+bool gui::debug_prompt(std::string& line)
 {
     const DWORD gui_thread = GetCurrentThreadId();
 
@@ -754,8 +1089,7 @@ bool debug_prompt(std::string& line)
     while (GetMessage(&msg, nullptr, 0, 0) && msg.message != WM_QUIT) {
         if (msg.message == WM_APP)
             break;
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        impl_->handle_message(msg);
     }
 
     if (msg.message == WM_QUIT) {
@@ -766,4 +1100,9 @@ bool debug_prompt(std::string& line)
     }
 
     return !!std::cin && msg.message != WM_QUIT;
+}
+
+void gui::set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom)
+{
+    impl_->set_debug_memory(mem, custom);
 }
