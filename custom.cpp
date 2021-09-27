@@ -1453,21 +1453,21 @@ public:
         const auto hp = s_.copper_inst[0] & 0xfe;
         const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
         const auto he = s_.copper_inst[1] & 0xfe;
-        const bool reached = (cvp & ve) > (vp & ve) || ((cvp & ve) == (vp & ve) && (chp & he) >= (hp & he)) && ((s_.copper_inst[1] & 0x8000) || !(s_.dmacon & DMAF_BLTBUSY));
+        const bool reached = ((s_.copper_inst[1] & 0x8000) || !(s_.dmacon & DMAF_BLTBUSY)) && ((cvp & ve) > (vp & ve) || ((cvp & ve) == (vp & ve) && (chp & he) >= (hp & he)));
 
         if (s_.copstate == copper_state::skip) {
             s_.copper_inst_ofs = 0; // Fetch next instruction
             s_.copper_skip_next = reached;
             s_.copstate = copper_state::read_inst;
             if (DEBUG_COPPER)
-                DBGOUT << "Skip processed, reached = " << reached << "\n";
+                    DBGOUT << "Skip processed, reached=" << reached << " VP=$" << hexfmt(vp, 2) << " VE=$" << hexfmt(ve, 2) << " HP=" << hexfmt(hp, 2) << " HE=" << hexfmt(he) << " BFD=" << (s_.copper_inst[1] & 0x8000 ? 1 : 0) << "\n";
         } else if (reached) {
             assert(s_.copstate == copper_state::wait);
             s_.copper_inst_ofs = 0; // Fetch next instruction
             s_.copper_skip_next = false;
             s_.copstate = copper_state::read_inst;
             if (DEBUG_COPPER)
-                DBGOUT << "Wait done\n";
+                DBGOUT << "Wait done VP=$ " << hexfmt(vp, 2) << " VE=$ " << hexfmt(ve, 2) << " HP=$" << hexfmt(hp, 2) << " HE=$" << hexfmt(he) << " BFD=" << (s_.copper_inst[1] & 0x8000 ? 1 : 0) << "\n ";
         }
 
         return false;
