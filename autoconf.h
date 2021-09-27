@@ -83,6 +83,7 @@ private:
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override;
     void reset() override;
+    void handle_state(state_file& sf) override;
 };
 
 #endif

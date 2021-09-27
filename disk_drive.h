@@ -16,6 +16,8 @@ constexpr uint8_t DSKF_ALL        = 0xf << 2;
 constexpr uint16_t MFM_SECTOR_SIZE_WORDS = 0x220;  // Number of words in a MFM sector
 constexpr uint16_t MFM_TRACK_SIZE_WORDS  = 0x1900; // Number of words in a MFM track
 
+class state_file;
+
 class disk_drive {
 public:
     explicit disk_drive(const std::string& name);
@@ -34,6 +36,8 @@ public:
     void read_mfm_track(uint8_t* dest); // Need to be able to hold MFM_TRACK_SIZE words
     void set_disk_activity_handler(const disk_activity_handler& handler);
     void show_debug_state(std::ostream& os);
+
+    void handle_state(state_file& sf);
 
 private:
     class impl;

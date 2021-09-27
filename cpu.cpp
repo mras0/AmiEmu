@@ -3,6 +3,7 @@
 #include "instruction.h"
 #include "memory.h"
 #include "disasm.h"
+#include "state_file.h"
 
 #include <sstream>
 #include <stdexcept>
@@ -57,7 +58,7 @@ void print_cpu_state(std::ostream& os, const cpu_state& s)
         os << "A" << i << "=" << hexfmt(s.A(i));
     }
     os << "\n";
-    os << "PC=" << hexfmt(s.pc) << " SR=" << hexfmt(s.sr) << " SSP=" << hexfmt(s.ssp) << " USP=" << hexfmt(s.usp) << " CCR: " << ccr_string(s.sr);
+    os << "PC=" << hexfmt(s.pc) << " SR=" << hexfmt(s.sr) << " SSP=" << hexfmt(s.ssp) << " USP=" << hexfmt(s.usp) << " CCR: " << ccr_string(s.sr) << " Prefetch: $" << hexfmt(s.prefecth_val) << " ($" << hexfmt(s.prefetch_address) << ")";
 
     if (s.stopped)
         os << " (stopped)";
@@ -79,7 +80,6 @@ public:
         : mem_ { mem }
         , state_ { state }
     {
-        prefetch();
     }
 
     explicit impl(memory_handler& mem)
@@ -95,6 +95,12 @@ public:
         state_.ssp = mem_.read_u32(0);
         state_.pc = mem_.read_u32(4);
         prefetch();
+    }
+
+    void handle_state(state_file& sf)
+    {
+        const state_file::scope scope { sf, "CPU", 1 };
+        sf.handle_blob(&state_, sizeof(state_));        
     }
 
     const cpu_state& state() const
@@ -377,7 +383,6 @@ found:
     }
 
 private:
-    static constexpr uint32_t invalid_prefetch_address = ~0U;
     struct address_error_exception {
     };
 
@@ -392,8 +397,6 @@ private:
     const instruction* inst_ = &instructions[illegal_instruction_num];
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     bool ea_calced_[2];
-    uint32_t prefetch_address_ = invalid_prefetch_address;
-    uint16_t prefecth_val_ = 0;    
     std::ostream* trace_ = nullptr;
     uint32_t invalid_access_address_ = 0;
     uint16_t invalid_access_info_ = 0;
@@ -451,11 +454,11 @@ private:
     uint16_t read_iword()
     {
         uint16_t val;
-        if (prefetch_address_ == state_.pc)
-            val = prefecth_val_;
+        if (state_.prefetch_address == state_.pc)
+            val = state_.prefecth_val;
         else
             val = mem_read16(state_.pc);
-        prefetch_address_ = invalid_prefetch_address;
+        state_.prefetch_address = invalid_prefetch_address;
         state_.pc += 2;
         assert(iword_idx_ < inst_->ilen);
         iwords_[iword_idx_++] = val;
@@ -464,12 +467,12 @@ private:
 
     void prefetch()
     {
-        if (prefetch_address_ == state_.pc)
+        if (state_.prefetch_address == state_.pc)
             return;
         if (state_.pc & 1)
             throw std::runtime_error { "Prefetch from odd address: $" + hexstring(state_.pc) };
-        prefetch_address_ = state_.pc;
-        prefecth_val_ = mem_read16(prefetch_address_);
+        state_.prefetch_address = state_.pc;
+        state_.prefecth_val = mem_read16(state_.prefetch_address);
     }
 
     void useless_prefetch()
@@ -480,7 +483,7 @@ private:
             throw address_error_exception {};
         }
         mem_read16(state_.pc);
-        prefetch_address_ = invalid_prefetch_address;
+        state_.prefetch_address = invalid_prefetch_address;
     }
 
     uint32_t read_reg(uint32_t val)
@@ -2135,4 +2138,9 @@ m68000::step_result m68000::step(uint8_t current_ipl)
 void m68000::reset()
 {
     impl_->reset();
+}
+
+void m68000::handle_state(state_file& sf)
+{
+    impl_->handle_state(sf);
 }

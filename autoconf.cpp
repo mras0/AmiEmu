@@ -1,5 +1,6 @@
 #include "autoconf.h"
 #include "ioutil.h"
+#include "state_file.h"
 #include <cassert>
 #include <stdexcept>
 #include <iostream>
@@ -175,4 +176,11 @@ void autoconf_handler::write_u8(uint32_t, uint32_t offset, uint8_t val)
 void autoconf_handler::write_u16(uint32_t, uint32_t offset, uint16_t val)
 {
     std::cerr << "[AUTOCONF] Unhandled write offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
+}
+
+void autoconf_handler::handle_state(state_file& sf)
+{
+    const state_file::scope scope { sf, "Autoconf", 1 };
+    if (!devices_.empty() || !configured_devices_.empty())
+        std::cerr << "\n\n**** WARNING : AUTCONF not handled!!! *** \n\n";
 }

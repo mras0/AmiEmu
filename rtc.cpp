@@ -1,6 +1,7 @@
 #include "rtc.h"
 #include "memory.h"
 #include "ioutil.h"
+#include "state_file.h"
 #include <chrono>
 #include <iostream>
 
@@ -28,6 +29,12 @@ private:
 
     void reset() override
     {
+    }
+
+    void handle_state(state_file& sf) override
+    {
+        const state_file::scope scope { sf, "RTC", 1 };
+        sf.handle_blob(cr_, sizeof(cr_));
     }
 
     uint8_t read_u8(uint32_t, uint32_t offset) override

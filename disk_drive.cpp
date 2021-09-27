@@ -5,6 +5,7 @@
 #include "ioutil.h"
 #include "memory.h"
 #include "debug.h"
+#include "state_file.h"
 
 namespace {
 
@@ -179,6 +180,19 @@ public:
         os << "motor " << (motor_ ? "on" : "off") << " cylinder " << (int)cyl_ << " side " << (int)side_ << " (" << (side_ ? "upper" : "lower") << ")" << " dir " << (int)seek_dir_ << " (towards " << (seek_dir_ ? "outside(0)" : "center(79)") << ")\n";
     }
 
+    void handle_state(state_file& sf)
+    {
+        const state_file::scope scope { sf, ("Drive " + name_).c_str(), 1 };
+        uint32_t state = cyl_ | motor_ << 8 | side_ << 9 | seek_dir_ << 10;
+        sf.handle(state);
+        if (sf.loading()) {
+            cyl_ = state & 0xff;
+            motor_ = !!(state & (1 << 8));
+            side_ = !!(state & (1 << 9));
+            seek_dir_ = !!(state & (1 << 10));
+        }
+    }
+
 private:
     std::string name_;
     std::vector<uint8_t> data_;
@@ -239,4 +253,9 @@ void disk_drive::set_disk_activity_handler(const disk_activity_handler& handler)
 void disk_drive::show_debug_state(std::ostream& os)
 {
     impl_->show_debug_state(os);
+}
+
+void disk_drive::handle_state(state_file& sf)
+{
+    impl_->handle_state(sf);
 }

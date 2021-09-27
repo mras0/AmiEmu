@@ -28,6 +28,7 @@
 #include "autoconf.h"
 #include "harddisk.h"
 #include "rtc.h"
+#include "state_file.h"
 
 namespace {
 
@@ -202,6 +203,7 @@ struct memwatch {
 };
 
 struct command_line_arguments {
+    std::string state_filename;
     std::string rom;
     std::string df0;
     std::string df1;
@@ -212,11 +214,23 @@ struct command_line_arguments {
     uint8_t cpu_scale;
     bool test_mode;
     bool nosound;
+
+    void handle_state(state_file& sf)
+    {
+        const state_file::scope scope { sf, "Command line arguments", 0 };
+        sf.handle(rom);
+        sf.handle(df0);
+        sf.handle(df1);
+        sf.handle(hd);
+        sf.handle(chip_size);
+        sf.handle(slow_size);
+        sf.handle(fast_size);
+    }
 };
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-state statefile] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -272,6 +286,8 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_size_arg("fast", args.fast_size, max_fast_size))
                 continue;
+            else if (get_string_arg("state", args.state_filename))
+                continue;
             else if (!strcmp(&argv[i][1], "cpuscale")) {
                 std::string s = args.cpu_scale ? " " : ""; // Non-empty if already specified so get_string_arg will warn
                 if (get_string_arg("cpuscale", s)) {
@@ -319,7 +335,13 @@ int main(int argc, char* argv[])
     constexpr uint32_t testmode_min_instructions = 5'000'000;
 
     try {
-        const auto cmdline_args = parse_command_line_arguments(argc, argv);
+        auto cmdline_args = parse_command_line_arguments(argc, argv);
+        std::unique_ptr<state_file> state;
+        if (!cmdline_args.state_filename.empty()) {
+            state = std::make_unique<state_file>(state_file::dir::load, cmdline_args.state_filename);
+            cmdline_args.handle_state(*state);
+        }
+
         disk_drive df0 {"DF0:"}, df1 {"DF1:"};
         disk_drive* drives[max_drives] = { &df0, &df1 };
         std::unique_ptr<ram_handler> slow_ram;
@@ -500,6 +522,11 @@ int main(int argc, char* argv[])
             autoconf.add_device(hd->autoconf_dev());
         }
 
+        if (state) {
+            mem.handle_state(*state);
+            cpu.handle_state(*state);
+        }
+
         auto cstep = [&](bool cpu_waiting) {
             const bool cpu_was_active = cpu_active;
             cpu_active = false;
@@ -670,6 +697,13 @@ int main(int argc, char* argv[])
                             std::cout << "Reading " << evt.disk_inserted.filename << "\n";
                             pending_disk = read_file(evt.disk_inserted.filename);
                             pending_disk_drive = evt.disk_inserted.drive;
+                        }
+                        // Hack overwrite cmdline args for disk file
+                        if (evt.disk_inserted.drive == 0) {
+                            cmdline_args.df0 = evt.disk_inserted.filename;
+                        } else {
+                            assert(evt.disk_inserted.drive == 1);
+                            cmdline_args.df1 = evt.disk_inserted.filename;
                         }
                         break;
                     case gui::event_type::debug_mode:
@@ -931,8 +965,10 @@ int main(int argc, char* argv[])
                             }
                         } else if (args[0] == "write_mem") {
                             if (args.size() > 1) {
+                                // TODO: Also fast and slow mem (if present)
                                 std::ofstream f(args[1], std::ofstream::binary);
                                 if (f) {
+                                    std::cout << "Warning: Only writing chipmem\n";
                                     f.write(reinterpret_cast<const char*>(mem.ram().data()), mem.ram().size());
                                 } else {
                                     std::cout << "Error creating \"" << args[1] << "\"\n";
@@ -940,7 +976,17 @@ int main(int argc, char* argv[])
                             } else {
                                 std::cout << "Missing argument (file)\n";
                             }
+                        } else if (args[0] == "write_state") {
+                            if (args.size() > 1) {
+                                assert(cycles_todo == 0);
+                                state_file sf { state_file::dir::save, args[1] };
 
+                                cmdline_args.handle_state(sf);
+                                mem.handle_state(sf);
+                                cpu.handle_state(sf);
+                            } else {
+                                std::cout << "Missing argument (file)\n";
+                            }
                         } else if (args[0] == "z") {
                             wait_mode = wait_exact_pc;
                             wait_arg = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;

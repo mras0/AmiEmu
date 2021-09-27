@@ -12,6 +12,8 @@ constexpr uint32_t max_chip_size = fast_base;
 constexpr uint32_t max_fast_size = 0x800000;
 constexpr uint32_t max_slow_size = 0xdc0000 - slow_base;
 
+class state_file;
+
 constexpr uint16_t get_u16(const uint8_t* d)
 {
     return d[0] << 8 | d[1];
@@ -55,6 +57,7 @@ public:
     }
 
     virtual void reset() = 0;
+    virtual void handle_state(state_file& sf) = 0;
 };
 
 class default_handler : public memory_area_handler {
@@ -64,6 +67,7 @@ public:
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t, uint16_t val) override;
     void reset() override { }
+    void handle_state(state_file&) override { }
 };
 
 class ram_handler : public memory_area_handler {
@@ -79,6 +83,7 @@ public:
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override;
     void reset() override { }
+    void handle_state(state_file& sf) override;
 
 private:
     std::vector<uint8_t> ram_;
@@ -100,6 +105,7 @@ public:
     void write_u8(uint32_t addr, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t offset, uint16_t val) override;
     void reset() override { }
+    void handle_state(state_file&) override { }
 
 private:
     memory_handler& mem_handler_;
@@ -138,6 +144,7 @@ public:
     void write_u32(uint32_t addr, uint32_t val);
 
     void reset();
+    void handle_state(state_file& sf);
 
 private:
     struct area {

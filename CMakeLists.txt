@@ -40,12 +40,13 @@ add_library(m68k
     instruction.cpp instruction.h
     memory.cpp memory.h
     asm.cpp asm.h
+    state_file.cpp state_file.h
     ${CMAKE_CURRENT_BINARY_DIR}/instruction_table.h
     )
 target_link_libraries(m68k PRIVATE utils)
 target_include_directories(m68k PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
-add_executable(test68k test68k.cpp test68k.h test68k_timing.cpp)
+add_executable(test68k test68k.cpp test68k.h test68k_timing.cpp test_state_file.cpp)
 target_link_libraries(test68k PRIVATE utils m68k)
 
 add_executable(testasm testasm.cpp)

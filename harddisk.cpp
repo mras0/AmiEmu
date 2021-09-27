@@ -55,6 +55,13 @@ private:
         ptr_hold_ = 0;
     }
 
+    void handle_state(state_file& sf)
+    {
+        (void)sf;
+        std::cerr << "\n\n**** WARNING : Harddisk state not handled!!! *** \n\n";
+    }
+
+
     uint8_t read_u8(uint32_t, uint32_t offset) override
     {
         if (offset >= config.rom_vector_offset && offset < config.rom_vector_offset + sizeof(exprom)) {

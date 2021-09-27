@@ -79,6 +79,8 @@ enum class interrupt_vector : uint8_t {
     level7 = 31,
 };
 
+constexpr uint32_t invalid_prefetch_address = ~0U;
+
 struct cpu_state {
     uint32_t d[8];
     uint32_t a[7];
@@ -86,7 +88,8 @@ struct cpu_state {
     uint32_t usp;
     uint32_t pc;
     uint16_t sr;
-
+    uint32_t prefetch_address;
+    uint16_t prefecth_val;
     bool stopped;
     uint64_t instruction_count;
 
@@ -159,6 +162,7 @@ std::string ccr_string(uint16_t sr);
 void print_cpu_state(std::ostream& os, const cpu_state& s);
 
 class memory_handler;
+class state_file;
 
 class m68000 {
 public:
@@ -182,6 +186,7 @@ public:
     step_result step(uint8_t current_ipl = 0);
 
     void reset();
+    void handle_state(state_file& sf);
 
 private:
     class impl;

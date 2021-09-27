@@ -1,5 +1,6 @@
 #include "memory.h"
 #include "ioutil.h"
+#include "state_file.h"
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
@@ -77,6 +78,15 @@ void ram_handler::write_u16([[maybe_unused]] uint32_t addr, uint32_t offset, uin
 #endif
 
     put_u16(&ram_[offset], val);
+}
+
+void ram_handler::handle_state(state_file& sf)
+{
+    const auto old_size = ram_.size();
+    const state_file::scope scope { sf, "RAM", 1 };
+    sf.handle(ram_);
+    if (ram_.size() != old_size)
+        throw std::runtime_error { "RAM restore error" };
 }
 
 memory_handler::memory_handler(uint32_t ram_size)
@@ -249,5 +259,19 @@ void memory_handler::reset()
             continue;
         already_reset.push_back(a.handler);
         a.handler->reset();
+    }
+}
+
+void memory_handler::handle_state(state_file& sf)
+{
+    const state_file::scope scope { sf, "MEM", 1 };
+    ram_.handle_state(sf);
+    // XXX: Unify handling with reset
+    std::vector<memory_area_handler*> already_handled;
+    for (auto& a : areas_) {
+        if (std::find(already_handled.begin(), already_handled.end(), a.handler) != already_handled.end())
+            continue;
+        already_handled.push_back(a.handler);
+        a.handler->handle_state(sf);
     }
 }

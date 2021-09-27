@@ -903,6 +903,8 @@ struct tester {
                     input_state.a[2] = 8;
                     input_state.usp = 0x400;
                     input_state.ssp = 0x400;
+                    input_state.prefetch_address = input_state.pc;
+                    input_state.prefecth_val = mem.read_u16(input_state.pc);
 
                     m68000 cpu { mem, input_state };
                     cpu_mem_accesses = 0;
@@ -1525,6 +1527,8 @@ bool run_timing_tests()
         input_state.d[4] = 17;
         input_state.usp = 64;
         input_state.ssp = 32;
+        input_state.prefetch_address = input_state.pc;
+        input_state.prefecth_val = mem.read_u16(input_state.pc);
 
         m68000 cpu { mem, input_state };
         cpu.set_cycle_handler([&cpu_cyclces](uint8_t cycles) { cpu_cyclces += cycles; });

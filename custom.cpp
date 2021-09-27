@@ -3,6 +3,7 @@
 #include "cia.h"
 #include "debug.h"
 #include "color_util.h"
+#include "state_file.h"
 
 #include <cassert>
 #include <utility>
@@ -935,6 +936,13 @@ public:
         s_.long_frame = true;
         s_.copstate = copper_state::halted;
     }
+
+    void handle_state(state_file& sf) override
+    {
+        const state_file::scope scope { sf, "Custom", 1 };
+        sf.handle_blob(&s_, sizeof(s_));
+    }
+
 
     void set_serial_data_handler(const serial_data_handler& handler)
     {

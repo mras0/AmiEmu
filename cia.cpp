@@ -1,6 +1,7 @@
 #include "cia.h"
 #include "ioutil.h"
 #include "debug.h"
+#include "state_file.h"
 #include <cassert>
 #include <iostream>
 
@@ -398,6 +399,21 @@ private:
         kbd_buffer_head_ = kbd_buffer_tail_ = 0;
         kbd_ack_ = true;
         rom_handler_.set_overlay(true);
+    }
+
+    void handle_state(state_file& sf) override
+    {
+        const state_file::scope scope { sf, "CIA", 1 };
+        sf.handle_blob(&s_[0], sizeof(state));
+        sf.handle_blob(&s_[1], sizeof(state));
+        for (auto d : drives_)
+            if (d)
+                d->handle_state(sf);
+
+        if (sf.loading())
+            rom_handler_.set_overlay(!!(s_[0].port_value(0) & CIAF_OVERLAY));
+
+        std::cerr << "\n\n**** WARNING : CIA keyboard state not handled!!! *** \n\n";
     }
 
     static constexpr bool valid_address(uint32_t addr)

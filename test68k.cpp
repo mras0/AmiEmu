@@ -41,7 +41,7 @@ void run_test_case(const std::string& filename)
     unsigned state_pos = 0;
     unsigned test_count = 0;
 
-    auto build_state = [](const test_state& s, const uint32_t pc_add = 0) {
+    auto build_state = [&](const test_state& s, const uint32_t pc_add = 0) {
         cpu_state st {};
         st.pc = code_pos + pc_add;
         st.sr = s.ccr;
@@ -58,6 +58,9 @@ void run_test_case(const std::string& filename)
         }
         if (pc_add)
             st.instruction_count = 1;
+
+        st.prefetch_address = st.pc;
+        st.prefecth_val = mem.read_u16(st.prefetch_address); 
         return st;
     };
 
@@ -73,13 +76,14 @@ void run_test_case(const std::string& filename)
             case 1: { // Run test
                 assert(state_pos == 3);
                 ++test_count;
-                const cpu_state input_state    = build_state(states[0]);
-                const cpu_state expected_state = build_state(states[1], static_cast<uint32_t>(2 * inst_words.size())); 
 
                 memset(&ram[0], 0, ram.size());
                 for (unsigned i = 0; i < inst_words.size(); ++i)
                     put_u16(&ram[code_pos + i * 2], inst_words[i]);
 
+                const cpu_state input_state = build_state(states[0]);
+                const cpu_state expected_state = build_state(states[1], static_cast<uint32_t>(2 * inst_words.size()));
+ 
                 m68000 cpu { mem, input_state };
                 const auto& outst = cpu.state();
                 try {
@@ -1098,12 +1102,14 @@ bool run_simple_tests()
         },
     };
 
-    auto make_state = [](const uint32_t d[8], uint16_t ccr, uint32_t pc, uint64_t icount) {
+    auto make_state = [&](const uint32_t d[8], uint16_t ccr, uint32_t pc, uint64_t icount) {
         cpu_state st {};
         memcpy(st.d, d, sizeof(st.d));
         st.sr = ccr;
         st.pc = pc;
         st.instruction_count = icount;
+        st.prefetch_address = st.pc;
+        st.prefecth_val = mem.read_u16(st.pc);
         return st;
     };
 
@@ -1149,6 +1155,9 @@ bool run_simple_tests()
 int main()
 {
     try {
+        if (!test_state_file())
+            return 1;
+
         if (!run_simple_tests())
             return 1;
 
