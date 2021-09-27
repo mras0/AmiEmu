@@ -16,6 +16,7 @@ constexpr uint8_t opsize_mask_w    = 1 << 1;
 constexpr uint8_t opsize_mask_l    = 1 << 2;
 constexpr uint8_t opsize_mask_bw   = opsize_mask_b | opsize_mask_w;
 constexpr uint8_t opsize_mask_bl   = opsize_mask_b | opsize_mask_l;
+constexpr uint8_t opsize_mask_wl   = opsize_mask_w | opsize_mask_l;
 constexpr uint8_t opsize_mask_bwl  = opsize_mask_b | opsize_mask_w | opsize_mask_l;
 
 constexpr bool range8(uint32_t val)
@@ -36,13 +37,22 @@ constexpr bool range16(uint32_t val)
     X(BSET  , bl   , none , 2) \
     X(BTST  , bl   , none , 2) \
     X(BRA   , bw   , none , 1) \
+    X(CLR   , bwl  , w    , 1) \
     X(CMP   , bwl  , w    , 2) \
     X(EOR   , bwl  , w    , 2) \
+    X(EXT   , wl   , w    , 1) \
     X(MOVE  , bwl  , w    , 2) \
     X(MOVEQ , l    , l    , 2) \
+    X(NBCD  , b    , b    , 1) \
+    X(NEG   , bwl  , w    , 1) \
+    X(NEGX  , bwl  , w    , 1) \
+    X(NOT   , bwl  , w    , 1) \
     X(OR    , bwl  , w    , 2) \
+    X(PEA   , l    , l    , 1) \
     X(RTS   , none , none , 0) \
     X(SUB   , bwl  , w    , 2) \
+    X(SWAP  , w    , w    , 1) \
+    X(TST   , bwl  , w    , 1) \
 
 constexpr struct instruction_info_type {
     const char* const name;
@@ -622,7 +632,7 @@ number:
 
 operands_done:
         skip_to_eol();
-        
+
         uint16_t iwords[max_instruction_words];
         uint8_t iword_cnt = 1;
 
@@ -672,6 +682,9 @@ operands_done:
                 iwords[iword_cnt++] = disp & 0xffff;
             goto done;
         }
+        case token_type::CLR:
+            iwords[0] = encode_unary(info, ea[0], osize, 0x4200);
+            break;
         case token_type::CMP:
             // Normal: 0xB000, Imm: 0x0C00
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0C00, 0xB000);
@@ -679,6 +692,12 @@ operands_done:
         case token_type::EOR:
             iwords[0] = encode_binop(info, ea, osize, 0x0A00, 0xB000);
             break;
+        case token_type::EXT:
+            assert(osize == opsize::w || osize == opsize::l);
+            if (ea[0].type >> ea_m_shift != ea_m_Dn)
+                ASSEMBLER_ERROR("Invalid operand to EXT");
+            iwords[0] = 0x4800 | (osize == opsize::w ? 0b010 : 0b011) << 6 | (ea[0].type & 7);
+            goto done;
         case token_type::MOVE: {
             constexpr uint8_t size_encoding[4] = { 0b00, 0b01, 0b11, 0b10 };
             const auto sz = size_encoding[static_cast<uint8_t>(osize)];
@@ -693,14 +712,53 @@ operands_done:
             iwords[0] = 0x7000 | (ea[1].type & 7) << 9 | (ea[0].val & 0xff);
             goto done;
         }
+        case token_type::NBCD:
+            assert(osize == opsize::b);
+            iwords[0] = encode_unary(info, ea[0], opsize::b, 0x4800);
+            break;
+        case token_type::NEG:
+            iwords[0] = encode_unary(info, ea[0], osize, 0x4400);
+            break;
+        case token_type::NEGX:
+            iwords[0] = encode_unary(info, ea[0], osize, 0x4000);
+            break;
+        case token_type::NOT:
+            iwords[0] = encode_unary(info, ea[0], osize, 0x4600);
+            break;
         case token_type::OR:
             iwords[0] = encode_binop(info, ea, osize, 0x0000, 0x8000);
+            break;
+        case token_type::PEA:
+            assert(osize == opsize::l);
+            switch (ea[0].type >> ea_m_shift) {
+            case ea_m_Dn:
+            case ea_m_An:
+            case ea_m_A_ind_post:
+            case ea_m_A_ind_pre:
+                ASSEMBLER_ERROR("Invalid operand to PEA");
+            case ea_m_Other:
+                if ((ea[0].type & 7) == ea_other_imm)
+                    ASSEMBLER_ERROR("Invalid operand to PEA");
+                break;
+            default:
+                break;
+            }
+            iwords[0] = 0x4840 | (ea[0].type & 0x3f);
             break;
         case token_type::RTS:
             iwords[0] = 0x4e75;
             break;
         case token_type::SUB:
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0400, 0x9000);
+            break;
+        case token_type::SWAP:
+            assert(osize == opsize::w && info.num_operands == 1);
+            if (ea[0].type >> ea_m_shift != ea_m_Dn)
+                ASSEMBLER_ERROR("Invalid operand to SWAP");
+            iwords[0] = 0x4840 | (ea[0].type & 7);
+            goto done;
+        case token_type::TST:
+            iwords[0] = encode_unary(info, ea[0], osize, 0x4A00);
             break;
         default:
             ASSEMBLER_ERROR("TODO: Encode " << info.name);
@@ -824,7 +882,7 @@ done:
     {
         constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
 
-        if (ea[0].type >> ea_m_shift == ea_m_An || ea[1].type >> ea_m_shift == ea_m_An)
+        if (/*ea[0].type >> ea_m_shift == ea_m_An || */ea[1].type >> ea_m_shift == ea_m_An)
             ASSEMBLER_ERROR("Address register not allowed for " << info.name);
         if (ea[0].type == ea_immediate)
             return imm_code | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[1].type & 0x3f);
@@ -863,6 +921,18 @@ done:
         } else {
             ASSEMBLER_ERROR("First operand to " << info.name << " is illegal");
         }
+    }
+
+    uint16_t encode_unary(const instruction_info_type& info, const ea_result& ea, opsize osize, uint16_t opcode)
+    {
+        if (ea.type >> ea_m_shift == ea_m_An)
+            ASSEMBLER_ERROR("Address register not allowed for " << info.name);
+        if (ea.type >> ea_m_shift == ea_m_Other && ((ea.type & 7) == ea_other_imm || (ea.type & 7) == ea_other_pc_disp16 || (ea.type & 7) == ea_other_pc_index))
+            ASSEMBLER_ERROR("Invalid operand to " << info.name);
+
+        constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
+
+        return opcode | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea.type & 0x3f);
     }
 };
 

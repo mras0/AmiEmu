@@ -36,9 +36,8 @@ constexpr const unsigned priv_inst    = 1U << 30;
 constexpr const unsigned block_Imm    = 1U << 31;
 
 constexpr uint8_t cycle_none = 0;
-constexpr uint8_t cycle_ro   = 1;
-constexpr uint8_t cycle_rw   = 2;
-constexpr uint8_t cycle_rmw  = 3;
+constexpr uint8_t cycle_norm = 1;
+constexpr uint8_t cycle_rmw  = 2;
 
 
 struct inst_desc {
@@ -65,16 +64,16 @@ constexpr const inst_desc insts[] = {
 //
     {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" , cycle_none , ~priv_inst, ea_ccr << 8 }, // ORI to CCR
     {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , cycle_none , ~0U, ea_sr << 8 }, // ORI to SR
-    {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , cycle_none , block_An|block_Imm|block_PC },
+    {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
     {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" , cycle_none , ~priv_inst, ea_ccr << 8 }, // ANDI to CCR
     {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" , cycle_none , ~0U, ea_sr << 8 }, // ANDI to SR
-    {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , cycle_none , block_An|block_Imm|block_PC },
-    {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , cycle_none , block_An|block_Imm|block_PC },
+    {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
+    {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
     {"ADD"               , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
     {"EOR"               , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" , cycle_none , ~priv_inst, ea_ccr << 8 }, // EORI to CCR
     {"EOR"               , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" , cycle_none , ~0U, ea_sr << 8 }, // EORI to SR
-    {"EOR"               , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , cycle_none , block_An|block_Imm|block_PC },
-    {"CMP"               , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , cycle_none , block_An|block_Imm|block_PC },
+    {"EOR"               , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
+    {"CMP"               , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , cycle_norm , block_An|block_Imm|block_PC },
     {"BTST"              , "B L" , "0 0 0 0 1 0 0 0 0 0 M     Xn   " , "B N" , cycle_none , block_An|block_Imm },
     {"BCHG"              , "B L" , "0 0 0 0 1 0 0 0 0 1 M     Xn   " , "B N" , cycle_none , block_An|block_Imm|block_PC },
     {"BCLR"              , "B L" , "0 0 0 0 1 0 0 0 1 0 M     Xn   " , "B N" , cycle_none , block_An|block_Imm|block_PC },
@@ -84,22 +83,22 @@ constexpr const inst_desc insts[] = {
     {"BCLR"              , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" , cycle_none , block_An|block_Imm|block_PC|block_swap },
     {"BSET"              , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" , cycle_none , block_An|block_Imm|block_PC|block_swap },
     //{"MOVEP"             , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" },
-    {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , cycle_rw   , 0 },
-    {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , cycle_rw   , 0 },
+    {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , cycle_norm , 0 },
+    {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , cycle_norm , 0 },
     {"MOVE"              , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC, ea_sr }, // Move from SR
     {"MOVE"              , " W " , "0 1 0 0 0 1 0 0 1 1 M     Xn   " , "   " , cycle_none , block_An, ea_ccr << 8 }, // Move to CCR
     {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " , cycle_none , block_An | priv_inst, ea_sr << 8 }, // Move to SR
-    {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC },
-    {"CLR"               , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC },
-    {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC },
-    {"NOT"               , "BWL" , "0 1 0 0 0 1 1 0 Sx  M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC },
-    {"EXT"               , " WL" , "0 1 0 0 1 0 0 0 1 Sz0 0 0 Dn   " , "   " , cycle_none , block_An | block_Imm | block_PC },
-    {"NBCD"              , "B  " , "0 1 0 0 1 0 0 0 0 0 M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC },
+    {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC },
+    {"CLR"               , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC },
+    {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC },
+    {"NOT"               , "BWL" , "0 1 0 0 0 1 1 0 Sx  M     Xn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC },
+    {"EXT"               , " WL" , "0 1 0 0 1 0 0 0 1 Sz0 0 0 Dn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC },
+    {"NBCD"              , "B  " , "0 1 0 0 1 0 0 0 0 0 M     Xn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC },
     {"SWAP"              , " W " , "0 1 0 0 1 0 0 0 0 1 0 0 0 Dn   " , "   " , cycle_none , block_Imm | block_PC },
-    {"PEA"               , "  L" , "0 1 0 0 1 0 0 0 0 1 M     Xn   " , "   " , cycle_none , 0b0011011 | block_Imm },
+    {"PEA"               , "  L" , "0 1 0 0 1 0 0 0 0 1 M     Xn   " , "   " , cycle_norm , 0b0011011 | block_Imm },
     {"ILLEGAL"           , "   " , "0 1 0 0 1 0 1 0 1 1 1 1 1 1 0 0" , "   " , cycle_none , },
     {"TAS"               , "B  " , "0 1 0 0 1 0 1 0 1 1 M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC },
-    {"TST"               , "BWL" , "0 1 0 0 1 0 1 0 Sx  M     Xn   " , "   " , cycle_none , },
+    {"TST"               , "BWL" , "0 1 0 0 1 0 1 0 Sx  M     Xn   " , "   " , cycle_norm , },
     {"TRAP"              , "   " , "0 1 0 0 1 1 1 0 0 1 0 0 Data4  " , "   " , cycle_none , },
     {"LINK"              , " W " , "0 1 0 0 1 1 1 0 0 1 0 1 0 An   " , "   " , cycle_none , 0 , ea_imm << 8},
     {"UNLK"              , "  L" , "0 1 0 0 1 1 1 0 0 1 0 1 1 An   " , "   " , cycle_none , }, // Formally unsized
@@ -129,9 +128,9 @@ constexpr const inst_desc insts[] = {
     {"DIVS"              , " W " , "1 0 0 0 Dn    1 1 1 M     Xn   " , "   " , cycle_none , },
     {"SBCD"              , "B  " , "1 0 0 0 Xn    1 0 0 0 0 m Xn   " , "   " , cycle_none , },
     {"OR"                , "BWL" , "1 0 0 0 Dn    DzSx  M     Xn   " , "   " , cycle_none , },
-    {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   " , cycle_none , 0 },
+    {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   " , cycle_rmw  , 0 },
     {"SUBX"              , "BWL" , "1 0 0 1 Xn    1 Sx  0 0 m Xn   " , "   " , cycle_none , },
-    {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   " , cycle_none , 0 },
+    {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   " , cycle_rmw  , 0 },
     {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC | block_swap },
     {"CMPM"              , "BWL" , "1 0 1 1 An    1 Sx  0 0 1 An   " , "   " , cycle_none , },
     {"CMP"               , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " , cycle_none , 0 },
@@ -143,7 +142,7 @@ constexpr const inst_desc insts[] = {
     {"AND"               , "BWL" , "1 1 0 0 Dn    DzSx  M     Xn   " , "   " , cycle_none , },
     {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   " , cycle_rmw  , 0 },
     {"ADDX"              , "BWL" , "1 1 0 1 Xn    1 Sx  0 0 m Xn   " , "   " , cycle_none , },
-    {"ADDA"              , " WL" , "1 1 0 1 An    Sz1 1 M     Xn   " , "   " , cycle_none , 0},
+    {"ADDA"              , " WL" , "1 1 0 1 An    Sz1 1 M     Xn   " , "   " , cycle_rmw  , 0},
     {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " , cycle_none , block_Dn | block_An | block_Imm | block_PC | word_if_none },
     {"LSd"               , "BWL" , "1 1 1 0 0 0 1 d 1 1 M     Xn   " , "   " , cycle_none , block_Dn | block_An | block_Imm | block_PC | word_if_none },
     {"ROXd"              , "BWL" , "1 1 1 0 0 1 0 d 1 1 M     Xn   " , "   " , cycle_none , block_Dn | block_An | block_Imm | block_PC | word_if_none },
@@ -521,17 +520,10 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         if (ai.extra & extra_disp_flag)
             ++ai.ea_words;
 
-        bool print = false; //desc.cycle != cycle_none && ai.nea;
-
-        if (print)
-            std::cout << name << "(memwords=" << (int)memwords << ")";
+        const bool is_move = !strncmp(desc.name, "MOVE", 4);
 
         for (int i = 0; i < ai.nea; ++i) {
-            bool memacc = false;
-            if (i == 0 && (desc.cycle == cycle_ro || desc.cycle == cycle_rw || desc.cycle == cycle_rmw))
-                memacc = true;
-            else if (i == 1 && (desc.cycle == cycle_rw || desc.cycle == cycle_rmw))
-                memacc = true;
+            bool memacc = desc.cycle == cycle_norm || desc.cycle == cycle_rmw;
 
             switch (ai.ea[i] >> 3) {
             case 0b000: // Dn
@@ -543,15 +535,14 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             case 0b011: // (An)+
                 break;
             case 0b100: // -(An)
-                if (memacc && (i != 1 || strncmp(desc.name, "MOVE", 4))) // Cost reduction only for MOVE?
+                if (i != 1 || !is_move) // Cost reduction only for MOVE?
                     ai.base_cycles += 2;
                 break;
             case 0b101: // (d16, An)
                 ++ai.ea_words;
                 break;
             case 0b110: // (d8, An, Xn)
-                if (memacc)
-                    ai.base_cycles += 2;
+                ai.base_cycles += 2;
                 ++ai.ea_words;
                 break;
             case 0b111:
@@ -566,8 +557,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                     ++ai.ea_words;
                     break;
                 case 0b011: // (d8, PC, Xn)
-                    if (memacc)
-                        ai.base_cycles += 2;
+                    ai.base_cycles += 2;
                     ++ai.ea_words;
                     break;
                 case 0b100: // immmediate
@@ -583,8 +573,6 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                 memacc = false; // Don't count reglist here...
                 break;
             }
-            if (print)
-                std::cout << (i ? ", " : "\t") << fmtea(ai.ea[i]) << "[" << memacc << "]";
 
             if (memacc) {
                 ai.memory_accesses += memwords;
@@ -593,14 +581,28 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             }
         }
 
-        if (desc.cycle == cycle_rmw && ai.osize == opsize::l && ai.nea == 2 && (ai.ea[1]>>3 == 0 || ai.ea[1]>>3==1))
-            ai.base_cycles += 4;
+        if (ai.osize == opsize::l && ai.nea == 2 && (ai.ea[1] >> 3 == 0 || ai.ea[1] >> 3 == 1)) {
+            if (is_move) {
+                //if (ai.ea[0] >> 3 != 0 && ai.ea[0] >> 3 != 1)
+                //    ai.base_cycles += 4;
+            } else {
+                if (ai.ea[0] >> 3 != 0 && ai.ea[0] >> 3 != 1 && (ai.ea[0] != ea_imm || desc.cycle == cycle_norm))
+                    ai.base_cycles += 2;
+                else
+                    ai.base_cycles += 4;
+            }
+        } else if (ai.osize == opsize::l && ai.nea == 1 && ai.ea[0] >> 3 == 0 && desc.cycle == cycle_rmw) {
+            ai.base_cycles += 2;
+        }
+
+        // HACKS
+        if (!strcmp(desc.name, "NBCD") && ai.ea[0] >> 3 == 0)
+            ai.base_cycles += 2;
+        else if (!strcmp(desc.name, "PEA") && ai.ea[0] >> 3 == 0b110)
+            ai.base_cycles += 2;
 
         ai.memory_accesses += 1 + ai.ea_words;
         ai.base_cycles += 4 * ai.memory_accesses;
-
-        if (print)
-            std::cout << "\t= " << (int)ai.base_cycles << "/" << (int)ai.memory_accesses << "\n";
 
         if (desc.block & priv_inst)
             ai.extra |= extra_priv_flag;
@@ -975,6 +977,9 @@ int main(int argc, char* argv[])
             ai.type = ai.name = "ILLEGAL";
             ai.base_cycles = 4;
             ai.memory_accesses = 1;
+        } else if (ai.base_cycles == 0) {
+            ai.memory_accesses = 1 + ai.ea_words;
+            ai.base_cycles = 4 * ai.memory_accesses;
         }
 
         auto n = "\"" + ai.name + "\"";

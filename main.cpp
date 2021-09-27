@@ -22,16 +22,6 @@
 #include "debug.h"
 
 namespace {
-std::string trim(const std::string& line)
-{
-    const size_t l = line.length();
-    size_t s, e;
-    for (s = 0; s < l && isspace(line[s]); ++s)
-        ;
-    for (e = l; e-- && isspace(line[e]);)
-        ;
-    return line.substr(s, e + 1 - s);
-}
 
 std::vector<std::string> split_line(const std::string& line)
 {

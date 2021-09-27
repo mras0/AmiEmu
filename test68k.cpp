@@ -1,3 +1,4 @@
+#include "test68k.h"
 #include <iostream>
 #include <filesystem>
 #include "ioutil.h"
@@ -1361,11 +1362,11 @@ bool run_timing_tests()
         { "MOVE.L 0.L, A0"                  , 20, 5 },
         { "MOVE.L #$12, A0"                 , 12, 3 },
 
-        // ADDI (should be same for EORI, ORI, ANDI and SUBI)
+        // Line 0000: ADDI (should be same for EORI, ORI, ANDI and SUBI)
         { "ADD.B #$12, D0"                  ,  8, 2 },
         { "ADD.W #$12, (A0)"                , 16, 4 },
         { "ADD.B #$12, (A0)+"               , 16, 4 },
-        { "ADD.W #$12, -(A0)"               , 18, 4 },
+        { "ADD.W #$12, -(A2)"               , 18, 4 },
         { "ADD.W #$12, 2(A0)"               , 20, 5 },
         { "ADD.B #$12, 2(A0,D2.L)"          , 22, 5 },
         { "ADD.W #$12, $10.W"               , 20, 5 },
@@ -1374,11 +1375,19 @@ bool run_timing_tests()
         { "ADD.L #$12, D0"                  , 16, 3 },
         { "ADD.L #$12, (A0)"                , 28, 7 },
         { "ADD.L #$12, (A0)+"               , 28, 7 },
-        { "ADD.L #$12, -(A0)"               , 30, 7 },
-        { "ADD.L #$12, 2(A0)"               , 32, 8 },
+        { "ADD.L #$12, -(A2)"               , 30, 7 },
         { "ADD.L #$12, 2(A0,D2.L)"          , 34, 8 },
         { "ADD.L #$12, $10.W"               , 32, 8 },
         { "ADD.L #$12, $10.L"               , 36, 9 },
+
+        { "EOR.L #$12, 2(A0)"               , 32, 8 },
+        { "EOR.W #$12, $10.W"               , 20, 5 },
+        { "OR.L #$12, 2(A0)"                , 32, 8 },
+        { "OR.W #$12, $10.W"                , 20, 5 },
+        { "AND.L #$12, 2(A0)"               , 32, 8 },
+        { "AND.W #$12, $10.W"               , 20, 5 },
+        { "SUB.L #$12, 2(A0)"               , 32, 8 },
+        { "SUB.W #$12, $10.W"               , 20, 5 },
     };
 
     const uint32_t code_pos = 0x1000;
@@ -1414,8 +1423,6 @@ bool run_timing_tests()
         }
     }
 
-    //throw std::runtime_error("PASS");
-
     return true;
 }
 
@@ -1426,6 +1433,9 @@ int main()
             return 1;
 
         if (!run_timing_tests())
+            return 1;
+
+        if (!test_timing())
             return 1;
 
         if (!run_winuae_tests())

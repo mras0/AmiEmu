@@ -119,6 +119,9 @@ public:
             iwords_[i] = mem_.read_u16(state_.pc);
             state_.pc += 2;
         }
+#ifndef NDEBUG
+        mem_accesses_ = inst_->ilen;
+#endif
 
         step_res_.clock_cycles += inst_->base_cycles;
         step_res_.mem_accesses += inst_->memory_accesses;
@@ -254,6 +257,8 @@ public:
         if (trace_)
             *trace_ << "\n";
 
+        //assert(mem_accesses_ == step_res_.mem_accesses); // TODO: Re-enable
+
         return step_res_;
     }
 
@@ -269,6 +274,9 @@ private:
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     std::ostream* trace_ = nullptr;
     step_result step_res_ { 0, 0 };
+#ifndef NDEBUG
+    uint8_t mem_accesses_ = 0;
+#endif
 
     uint32_t read_reg(uint32_t val)
     {
@@ -285,12 +293,18 @@ private:
 
     uint32_t read_mem(uint32_t addr)
     {
+#ifndef NDEBUG
+        ++mem_accesses_;
+#endif
         switch (inst_->size) {
         case opsize::b:
             return mem_.read_u8(addr);
         case opsize::w:
             return mem_.read_u16(addr);
         case opsize::l:
+#ifndef NDEBUG
+            ++mem_accesses_;
+#endif
             return mem_.read_u32(addr);
         }
         throw std::runtime_error { "Invalid opsize" };
@@ -457,6 +471,9 @@ private:
 
     void write_mem(uint32_t addr, uint32_t val)
     {
+#ifndef NDEBUG
+        ++mem_accesses_;
+#endif
         switch (inst_->size) {
         case opsize::b:
             mem_.write_u8(addr, static_cast<uint8_t>(val));
@@ -465,6 +482,9 @@ private:
             mem_.write_u16(addr, static_cast<uint16_t>(val));
             return;
         case opsize::l:
+#ifndef NDEBUG
+            ++mem_accesses_;
+#endif
             mem_.write_u32(addr, val);
             return;
         }
@@ -635,6 +655,9 @@ private:
         auto& a7 = state_.A(7);
         a7 -= 2;
         mem_.write_u16(a7, val);
+#ifndef  NDEBUG
+        mem_accesses_++;
+#endif
     }
 
     void push_u32(uint32_t val)
@@ -642,6 +665,9 @@ private:
         auto& a7 = state_.A(7);
         a7 -= 4;
         mem_.write_u32(a7, val);
+#ifndef NDEBUG
+        mem_accesses_ += 2;
+#endif
     }
 
     uint16_t pop_u16()
@@ -649,6 +675,9 @@ private:
         auto& a7 = state_.A(7);
         const auto val = mem_.read_u16(a7);
         a7 += 2;
+#ifndef NDEBUG
+        mem_accesses_++;
+#endif
         return val;
     }
 
@@ -657,6 +686,9 @@ private:
         auto& a7 = state_.A(7);
         const auto val = mem_.read_u32(a7);
         a7 += 4;
+#ifndef NDEBUG
+        mem_accesses_ += 2;
+#endif
         return val;
     }
 
@@ -858,7 +890,7 @@ private:
     void handle_CLR()
     {
         assert(inst_->nea == 1);
-        // TODO: read cycle?
+        read_ea(0); // 68000 does a superflous read
         write_ea(0, 0);
         state_.update_sr(srm_ccr_no_x, srm_z);
     }

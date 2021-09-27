@@ -87,3 +87,14 @@ void hexdump16(std::ostream& os, uint32_t addr, const uint8_t* data, size_t size
         addr += static_cast<uint32_t>(here);
     }
 }
+
+std::string trim(const std::string& line)
+{
+    const size_t l = line.length();
+    size_t s, e;
+    for (s = 0; s < l && isspace(line[s]); ++s)
+        ;
+    for (e = l; e-- && isspace(line[e]);)
+        ;
+    return line.substr(s, e + 1 - s);
+}

@@ -49,4 +49,6 @@ std::vector<uint8_t> read_file(const std::string& path);
 void hexdump(std::ostream& os, const uint8_t* data, size_t size);
 void hexdump16(std::ostream& os, uint32_t addr, const uint8_t* data, size_t size);
 
+std::string trim(const std::string& line);
+
 #endif
