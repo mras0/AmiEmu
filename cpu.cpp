@@ -129,18 +129,17 @@ public:
         }
 
         if (inst_->type == inst_type::ILLEGAL) {
-            if ((iwords_[0] & 0xfffe) == 0x4e7a) {
-                // For now only handle movec
+            switch (iwords_[0] >> 12) {
+            case 0xA:
+                do_trap(interrupt_vector::line_1010);
+                goto out;
+            case 0xF:
+                do_trap(interrupt_vector::line_1111);
+                goto out;
+            default:
                 do_trap(interrupt_vector::illegal_instruction);
                 goto out;
             }
-            // line 1111
-            if ((iwords_[0] & 0xf000) == 0xf000) {
-                do_trap(interrupt_vector::line_1111);
-                goto out;
-            }
-
-            throw std::runtime_error { "ILLEGAL" };
         }
 
         assert(inst_->nea <= 2);
@@ -230,6 +229,7 @@ public:
             HANDLE_INST(SUBQ);
             HANDLE_INST(SUBX);
             HANDLE_INST(SWAP);
+            HANDLE_INST(TRAPV);
             HANDLE_INST(TST);
             HANDLE_INST(UNLK);
 #undef HANDLE_INST
@@ -1426,6 +1426,12 @@ private:
             ccr |= srm_z;
 
         state_.update_sr(srm_ccr_no_x, ccr);
+    }
+
+    void handle_TRAPV()
+    {
+        if (state_.sr & srm_v)
+            do_trap(interrupt_vector::trapv_instruction);
     }
 
     void handle_TST()

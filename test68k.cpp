@@ -904,7 +904,7 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
                         std::cerr << "\n\nInput state:\n";
                         print_cpu_state(std::cerr, input_state);
                         std::vector<uint16_t> iwords;
-                        for (uint32_t addr = cur_state.pc; addr < cur_state.endpc + 2 /*HACK*/; addr += 2) {
+                        for (uint32_t addr = cur_state.pc; addr < cur_state.endpc + 4 /*HACK*/; addr += 2) {
                             iwords.push_back(get_u16(&ram[addr]));
                         }
 
@@ -943,14 +943,14 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "MVUSP2R.L");
+    //run_winuae_mnemonic_test(basedir / "RTE");
     //assert(0);
 
     const std::vector<const char*> skip = {
-        // Require excpetion handling
-        "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
+        // Not checked
+        "RTE",
         // Not implemented
-        "CHK", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
+        "RESET", "CHK", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
         // TODO (Undefinde flags?)
         "ABCD", "SBCD", "NBCD",
     };

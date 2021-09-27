@@ -29,6 +29,7 @@ constexpr uint8_t extra_priv_flag = 1 << 2; // Instruction is privileged (causes
 
 constexpr const unsigned block_Dn     = 1U << 0;
 constexpr const unsigned block_An     = 1U << 1;
+constexpr const unsigned block_PC     = 1U << 27;
 constexpr const unsigned word_if_none = 1U << 28;
 constexpr const unsigned block_swap   = 1U << 29;
 constexpr const unsigned priv_inst    = 1U << 30;
@@ -57,40 +58,40 @@ constexpr const inst_desc insts[] = {
 //
     {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" , ~priv_inst, ea_ccr << 8 }, // ORI to CCR
     {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ORI to SR
-    {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm|block_PC },
     {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" , ~priv_inst, ea_ccr << 8 }, // ANDI to CCR
     {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ANDI to SR
-    {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    {"ADD"               , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm|block_PC },
+    {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm|block_PC },
+    {"ADD"               , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm|block_PC },
     {"EOR"               , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" , ~priv_inst, ea_ccr << 8 }, // EORI to CCR
     {"EOR"               , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // EORI to SR
-    {"EOR"               , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    {"CMP"               , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    {"BTST"              , "B L" , "0 0 0 0 1 0 0 0 0 0 M     Xn   " , "B N" },
-    {"BCHG"              , "B L" , "0 0 0 0 1 0 0 0 0 1 M     Xn   " , "B N" },
-    {"BCLR"              , "B L" , "0 0 0 0 1 0 0 0 1 0 M     Xn   " , "B N" },
-    {"BSET"              , "B L" , "0 0 0 0 1 0 0 0 1 1 M     Xn   " , "B N" },
+    {"EOR"               , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm|block_PC },
+    {"CMP"               , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm|block_PC },
+    {"BTST"              , "B L" , "0 0 0 0 1 0 0 0 0 0 M     Xn   " , "B N" , block_An|block_Imm },
+    {"BCHG"              , "B L" , "0 0 0 0 1 0 0 0 0 1 M     Xn   " , "B N" , block_An|block_Imm|block_PC },
+    {"BCLR"              , "B L" , "0 0 0 0 1 0 0 0 1 0 M     Xn   " , "B N" , block_An|block_Imm|block_PC },
+    {"BSET"              , "B L" , "0 0 0 0 1 0 0 0 1 1 M     Xn   " , "B N" , block_An|block_Imm|block_PC },
     {"BTST"              , "B L" , "0 0 0 0 Dn    1 0 0 M     Xn   " , "  N" , block_An|block_swap },
-    {"BCHG"              , "B L" , "0 0 0 0 Dn    1 0 1 M     Xn   " , "  N" , block_An|block_swap },
-    {"BCLR"              , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" , block_An|block_swap },
-    {"BSET"              , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" , block_An|block_swap },
+    {"BCHG"              , "B L" , "0 0 0 0 Dn    1 0 1 M     Xn   " , "  N" , block_An|block_Imm|block_PC|block_swap },
+    {"BCLR"              , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" , block_An|block_Imm|block_PC|block_swap },
+    {"BSET"              , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" , block_An|block_Imm|block_PC|block_swap },
     //{"MOVEP"             , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" },
     {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , 0 },
     {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , 0 },
-    {"MOVE"              , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " , block_An, ea_sr }, // Move from SR
+    {"MOVE"              , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " , block_An | block_Imm | block_PC, ea_sr }, // Move from SR
     {"MOVE"              , " W " , "0 1 0 0 0 1 0 0 1 1 M     Xn   " , "   " , block_An, ea_ccr << 8 }, // Move to CCR
     {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " , block_An | priv_inst, ea_sr << 8 }, // Move to SR
-    {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " },
-    {"CLR"               , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " },
-    {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " },
-    {"NOT"               , "BWL" , "0 1 0 0 0 1 1 0 Sx  M     Xn   " , "   " },
-    {"EXT"               , " WL" , "0 1 0 0 1 0 0 0 1 Sz0 0 0 Dn   " , "   " },
-    {"NBCD"              , "B  " , "0 1 0 0 1 0 0 0 0 0 M     Xn   " , "   " },
-    {"SWAP"              , " W " , "0 1 0 0 1 0 0 0 0 1 0 0 0 Dn   " , "   " },
-    {"PEA"               , "  L" , "0 1 0 0 1 0 0 0 0 1 M     Xn   " , "   " , 0b0011011 },
+    {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " , block_An | block_Imm | block_PC },
+    {"CLR"               , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " , block_An | block_Imm | block_PC },
+    {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " , block_An | block_Imm | block_PC },
+    {"NOT"               , "BWL" , "0 1 0 0 0 1 1 0 Sx  M     Xn   " , "   " , block_An | block_Imm | block_PC },
+    {"EXT"               , " WL" , "0 1 0 0 1 0 0 0 1 Sz0 0 0 Dn   " , "   " , block_An | block_Imm | block_PC },
+    {"NBCD"              , "B  " , "0 1 0 0 1 0 0 0 0 0 M     Xn   " , "   " , block_An | block_Imm | block_PC },
+    {"SWAP"              , " W " , "0 1 0 0 1 0 0 0 0 1 0 0 0 Dn   " , "   " , block_Imm | block_PC },
+    {"PEA"               , "  L" , "0 1 0 0 1 0 0 0 0 1 M     Xn   " , "   " , 0b0011011 | block_Imm },
     {"ILLEGAL"           , "   " , "0 1 0 0 1 0 1 0 1 1 1 1 1 1 0 0" , "   " },
-    {"TAS"               , "B  " , "0 1 0 0 1 0 1 0 1 1 M     Xn   " , "   " , block_An | block_Imm },
+    {"TAS"               , "B  " , "0 1 0 0 1 0 1 0 1 1 M     Xn   " , "   " , block_An | block_Imm | block_PC },
     {"TST"               , "BWL" , "0 1 0 0 1 0 1 0 Sx  M     Xn   " , "   " },
     {"TRAP"              , "   " , "0 1 0 0 1 1 1 0 0 1 0 0 Data4  " , "   " },
     {"LINK"              , " W " , "0 1 0 0 1 1 1 0 0 1 0 1 0 An   " , "   " , 0 , ea_imm << 8},
@@ -106,11 +107,11 @@ constexpr const inst_desc insts[] = {
     {"RTR"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 1 1" , "   " },
     {"JSR"               , "   " , "0 1 0 0 1 1 1 0 1 0 M     Xn   " , "   " , block_An | block_Dn | block_Imm | (1<<3) | (1<<4) },
     {"JMP"               , "   " , "0 1 0 0 1 1 1 0 1 1 M     Xn   " , "   " , block_An | block_Dn | block_Imm | (1<<3) | (1<<4) },
-    {"MOVEM"             , " WL" , "0 1 0 0 1 Dy0 0 1 SzM     Xn   " , "W M" , block_An | block_Dn | block_Imm},
-    {"LEA"               , "  L" , "0 1 0 0 An    1 1 1 M     Xn   " , "   " },
+    {"MOVEM"             , " WL" , "0 1 0 0 1 Dy0 0 1 SzM     Xn   " , "W M" , block_An | block_Dn | block_Imm },
+    {"LEA"               , "  L" , "0 1 0 0 An    1 1 1 M     Xn   " , "   " , block_An | block_Dn | block_Imm | (1<<3) | (1<<4) },
     {"CHK"               , " W " , "0 1 0 0 Dn    1 1 0 M     Xn   " , "   " },
-    {"ADDQ"              , "BWL" , "0 1 0 1 Data3 0 Sx  M     Xn   " , "   " , 0 },
-    {"SUBQ"              , "BWL" , "0 1 0 1 Data3 1 Sx  M     Xn   " , "   " , 0 },
+    {"ADDQ"              , "BWL" , "0 1 0 1 Data3 0 Sx  M     Xn   " , "   " , block_Imm | block_PC },
+    {"SUBQ"              , "BWL" , "0 1 0 1 Data3 1 Sx  M     Xn   " , "   " , block_Imm | block_PC },
     {"Scc"               , "B  " , "0 1 0 1 Cond    1 1 M     Xn   " , "   " },
     {"DBcc"              , " W " , "0 1 0 1 Cond    1 1 0 0 1 Dn   " , "W D" },
     {"BRA"               , "BW " , "0 1 1 0 0 0 0 0 Displacement   " , "W d" },
@@ -124,7 +125,7 @@ constexpr const inst_desc insts[] = {
     {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   " , 0 },
     {"SUBX"              , "BWL" , "1 0 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
     {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   " , 0 },
-    {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " , block_An | block_swap },
+    {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " , block_An | block_Imm | block_PC | block_swap },
     {"CMPM"              , "BWL" , "1 0 1 1 An    1 Sx  0 0 1 An   " , "   " },
     {"CMP"               , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " , 0 },
     {"CMPA"              , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   " , 0 },
@@ -136,14 +137,14 @@ constexpr const inst_desc insts[] = {
     {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   " , 0 },
     {"ADDX"              , "BWL" , "1 1 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
     {"ADDA"              , " WL" , "1 1 0 1 An    Sz1 1 M     Xn   " , "   " , 0},
-    {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
-    {"LSd"               , "BWL" , "1 1 1 0 0 0 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
-    {"ROXd"              , "BWL" , "1 1 1 0 0 1 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
-    {"ROd"               , "BWL" , "1 1 1 0 0 1 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
-    {"ASd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 0 Dn   " , "   " , block_An | block_Imm },
-    {"LSd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 1 Dn   " , "   " , block_An | block_Imm },
-    {"ROXd"              , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 0 Dn   " , "   " , block_An | block_Imm },
-    {"ROd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 1 Dn   " , "   " , block_An | block_Imm },
+    {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " , block_Dn | block_An | block_Imm | block_PC | word_if_none },
+    {"LSd"               , "BWL" , "1 1 1 0 0 0 1 d 1 1 M     Xn   " , "   " , block_Dn | block_An | block_Imm | block_PC | word_if_none },
+    {"ROXd"              , "BWL" , "1 1 1 0 0 1 0 d 1 1 M     Xn   " , "   " , block_Dn | block_An | block_Imm | block_PC | word_if_none },
+    {"ROd"               , "BWL" , "1 1 1 0 0 1 1 d 1 1 M     Xn   " , "   " , block_Dn | block_An | block_Imm | block_PC | word_if_none },
+    {"ASd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 0 Dn   " , "   " , block_An | block_Imm | block_PC },
+    {"LSd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 1 Dn   " , "   " , block_An | block_Imm | block_PC },
+    {"ROXd"              , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 0 Dn   " , "   " , block_An | block_Imm | block_PC },
+    {"ROd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 1 Dn   " , "   " , block_An | block_Imm | block_PC },
 };
 
 #define FIELDS(X)      \
@@ -608,8 +609,16 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
     case field_type::M:
         assert(M == -1);
         for (unsigned i = 0; i < 8; ++i) {
-            if (((desc.block >> i) & 1)) {
+            if (i == 1 && osize == opsize::b)
+                continue; // No An for byte sized ops
+            if (((desc.block >> i) & 1))
                 continue;
+            if (!strcmp(desc.name, "MOVEM")) {
+                // MOVEM doesn't allow MOVEM reglist, (An)+ or MOVEM -(An), reglist
+                if (swap_ea && i == 3)
+                    continue;
+                else if (!swap_ea && i == 4)
+                    continue;
             }
             M = i;
             recur(i);
@@ -625,7 +634,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                     continue; // No An
                 for (unsigned x = 0; x < 8; ++x) {
                     if (m == 0b111) {
-                        if (x >= 4)
+                        if (x >= 2)
                             break;
                     }
                     ea[nea++] = static_cast<uint8_t>(m << 3 | x);
@@ -642,12 +651,14 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             if (Mact == 0b111) {
                 if (i > 4)
                     break;
+                if ((i == 2 || i == 3) && ((desc.block & block_PC) || (swap_ea && !strcmp(desc.name, "MOVEM"))))
+                    continue;
                 if (i == 4 && (desc.block & block_Imm))
                     break;
             }
             if (!swap_ea && nea == 1 && ea[0] < 8 && strcmp(desc.name, "EXG")) {
-                // HACK: Block An/Dn and imm for e.g. OR
-                if (Mact == 0 || Mact == 1 || (Mact == 7 && i == 4))
+                // HACK: Block An/Dn/etc. and imm for e.g. OR
+                if (Mact == 0 || Mact == 1 || (Mact == 7 && i >= 2))
                     continue;
             }
             ea[nea++] = static_cast<uint8_t>(Mact << 3 | i);
