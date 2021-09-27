@@ -882,73 +882,15 @@ public:
             if (vert_disp && horiz_disp) {
                 const uint8_t nbpls = (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0;
 
-                // TODO: Use bplcon2 priority fields (and support dual play field mode)
-
 #ifdef BPL_DMA_DEBUG
                 if ((s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
                     std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
 #endif
 
-                auto one_pixel = [&]() {
-                    TODO_ASSERT(!(s_.bplcon0 & BPLCON0F_DBLPF));
 
-                    uint8_t index = 0;
-                    for (int i = 0; i < nbpls; ++i) {
-                        if (s_.bpldat_shift[i] & 0x8000)
-                            index |= 1 << i;
-                        s_.bpldat_shift[i] <<= 1;
-                    }
-
-#ifdef BPL_DMA_DEBUG
-                    rem_pixelsO--;
-                    rem_pixelsE--;
-                    if ((rem_pixelsO|rem_pixelsE) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixelsO << " E=" << rem_pixelsE << "\n";
-                        rem_pixelsO = rem_pixelsE = 0;
-                    }
-#endif
-                    if (nbpls < 6) {
-                        assert(!(s_.bplcon0 & BPLCON0F_HOMOD));
-                        return rgb4_to_8(s_.color[index]);
-                    }
-                    if (s_.bplcon0 & BPLCON0F_HOMOD) {
-                        // TODO: HAM5
-                        const int ibits = ((nbpls + 1) & ~1) - 2;
-                        const int val = (index & 0xf) << (8 - ibits);
-                        auto& col = s_.ham_color;
-                        switch (index >> ibits) {
-                        case 0: // Palette entry
-                            col = rgb4_to_8(s_.color[index & 0xf]);
-                            break;
-                        case 1: // Modify B
-                            col = (col & 0xffff00) | val;
-                            break;
-                        case 2: // Modify R
-                            col = (col & 0x00ffff) | val << 16;
-                            break;
-                        case 3: // Modify G
-                            col = (col & 0xff00ff) | val << 8;
-                            break;
-                        default:
-                            assert(false);
-                        }
-                        return col;
-                    } else {
-                        // EHB bpls=6 && !HAM && !DPU
-                        const auto col = rgb4_to_8(s_.color[index & 0x1f]);
-                        return index & 0x20 ? (col & 0xfefefe) >> 1 : col;
-                    }
-                };
-
-                if (s_.bplcon0 & BPLCON0F_HIRES) {
-                    row[0] = one_pixel();
-                    row[1] = one_pixel();
-                } else {
-                    row[0] = row[1] = one_pixel();
-                }
-
-                // TODO: Handle sprite/playfield priority bits in BPLCON2
                 uint8_t spriteidx[8];
+                uint8_t active_sprite = 0;
+                uint8_t active_sprite_group = 8;
 
                 for (uint8_t spr = 0; spr < 8; ++spr) {
                     uint8_t idx = 0;
@@ -970,14 +912,114 @@ public:
                         // Attached sprite
                         const uint8_t idx = spriteidx[spr] | spriteidx[spr + 1] << 2;
                         if (idx) {
-                            row[0] = row[1] = rgb4_to_8(s_.color[16+idx]);
+                            active_sprite = 16 + idx;
+                            active_sprite_group = spr >> 1;
                             break;
                         }
                         ++spr; // Skip next sprite
                     } else if (spriteidx[spr]) {
-                        row[0] = row[1] = rgb4_to_8(s_.color[16 + (spr >> 1) * 4 + spriteidx[spr]]);
+                        active_sprite = 16 + (spr >> 1) * 4 + spriteidx[spr];
+                        active_sprite_group = spr >> 1;
                         break;
                     }
+                }
+
+
+                auto one_pixel = [&]() {
+                    uint8_t pf1 = 0, pf2 = 0;
+
+                    if (s_.bplcon0 & BPLCON0F_DBLPF) {
+                        for (int i = 0; i < nbpls; ++i) {
+                            if (s_.bpldat_shift[i] & 0x8000) {
+                                if (i & 1)
+                                    pf2 |= 1 << (i >> 1);
+                                else
+                                    pf1 |= 1 << (i >> 1);
+                            }
+                            s_.bpldat_shift[i] <<= 1;
+                        }
+                    } else {
+                        for (int i = 0; i < nbpls; ++i) {
+                            if (s_.bpldat_shift[i] & 0x8000)
+                                pf1 |= 1 << i;
+                            s_.bpldat_shift[i] <<= 1;
+                        }
+                    }
+
+#ifdef BPL_DMA_DEBUG
+                    rem_pixelsO--;
+                    rem_pixelsE--;
+                    if ((rem_pixelsO|rem_pixelsE) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixelsO << " E=" << rem_pixelsE << "\n";
+                        rem_pixelsO = rem_pixelsE = 0;
+                    }
+#endif
+                    const uint8_t pf2p = (s_.bplcon2 >> 3) & 7;
+                    const uint8_t pf1p = s_.bplcon2 & 7;
+
+                    // TODO: Sprites again
+                    if (s_.bplcon0 & BPLCON0F_DBLPF) {
+                        const bool pf1vis = active_sprite_group >= pf1p;
+                        const bool pf2vis = active_sprite_group >= pf2p;
+
+                        uint8_t idx;
+                        if (s_.bplcon2 & 0x40) { // PF2PRI
+                            if (pf2vis && pf2)
+                                idx = pf2 + 8;
+                            else if (!pf1vis || !pf1)
+                                idx = active_sprite;
+                            else
+                                idx = pf1;
+                        } else {
+                            if (pf1vis && pf1)
+                                idx = pf1;
+                            else if (!pf2vis || !pf2)
+                                idx = active_sprite;
+                            else
+                                idx = pf2 + 8;
+                        }
+                        return rgb4_to_8(s_.color[idx]);
+                    } else if (s_.bplcon0 & BPLCON0F_HOMOD) {
+                        // TODO: HAM5
+                        const int ibits = ((nbpls + 1) & ~1) - 2;
+                        const int val = (pf1 & 0xf) << (8 - ibits);
+                        auto& col = s_.ham_color;
+                        switch (pf1 >> ibits) {
+                        case 0: // Palette entry
+                            col = rgb4_to_8(s_.color[pf1 & 0xf]);
+                            break;
+                        case 1: // Modify B
+                            col = (col & 0xffff00) | val;
+                            break;
+                        case 2: // Modify R
+                            col = (col & 0x00ffff) | val << 16;
+                            break;
+                        case 3: // Modify G
+                            col = (col & 0xff00ff) | val << 8;
+                            break;
+                        default:
+                            assert(false);
+                        }
+                        //if (active_sprite_group < pf2p)
+                        if (active_sprite) // How is priority handled here?
+                            return rgb4_to_8(s_.color[active_sprite]);
+                        return col;
+                    } else if (active_sprite_group < pf2p || !pf1) { // no active sprite -> active_sprite=0, so same as pf1
+                        return rgb4_to_8(s_.color[active_sprite]);
+                    } else if (nbpls < 6) {
+                        return rgb4_to_8(s_.color[pf1]);
+                    } else {
+                        // EHB bpls=6 && !HAM && !DPU
+                        const auto col = rgb4_to_8(s_.color[pf1 & 0x1f]);
+                        return pf1 & 0x20 ? (col & 0xfefefe) >> 1 : col;
+                    }
+                };
+
+                if (s_.bplcon0 & BPLCON0F_HIRES) {
+                    row[0] = one_pixel();
+                    row[1] = one_pixel();
+                } else {
+                    row[0] = row[1] = one_pixel();
                 }
             } else {
                 row[0] = row[1] = rgb4_to_8(s_.color[0]);
