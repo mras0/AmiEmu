@@ -2009,26 +2009,24 @@ public:
                 s_.spr_dma_active[spr] = true;
             }
 
-            // Check against hstart+1 to allow shifting out pixels immediately (avoids gap in clouds in Brian the Lion)
-            if (s_.spr_armed[spr] && s_.sprite_hpos_start(spr)+1 == display_hpos) {
+            if (s_.spr_hold_cnt[spr]) {
+                if (s_.spr_hold_a[spr] & 0x8000)
+                    spriteidx[spr] |= 1;
+                if (s_.spr_hold_b[spr] & 0x8000)
+                    spriteidx[spr] |= 2;
+                s_.spr_hold_a[spr] <<= 1;
+                s_.spr_hold_b[spr] <<= 1;
+                --s_.spr_hold_cnt[spr];
+                any_sprite_active_ = true;
+            }
+            // Need to check AFTER shifting out pixels to both avoid gaps in clouds in Brian the Lion and support
+            // sprite overlay in Platon-HAM-Eager-Final which contains copper writes to SPR0POS that align exactly with sprite start
+            if (s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == display_hpos) {
                 if (DEBUG_SPRITE)
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Armed and HPOS ($" << hexfmt(s_.sprite_hpos_start(spr)) << ") matches!\n";
                 s_.spr_hold_a[spr] = s_.sprdata[spr];
                 s_.spr_hold_b[spr] = s_.sprdatb[spr];
                 s_.spr_hold_cnt[spr] = 16;
-            }
-
-            if (s_.spr_hold_cnt[spr]) {
-                if (s_.spr_hold_cnt[spr]) {
-                    if (s_.spr_hold_a[spr] & 0x8000)
-                        spriteidx[spr] |= 1;
-                    if (s_.spr_hold_b[spr] & 0x8000)
-                        spriteidx[spr] |= 2;
-                    s_.spr_hold_a[spr] <<= 1;
-                    s_.spr_hold_b[spr] <<= 1;
-                    --s_.spr_hold_cnt[spr];
-                    any_sprite_active_ = true;
-                }
             }
         }
 
