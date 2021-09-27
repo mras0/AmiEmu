@@ -169,7 +169,7 @@ public:
 
         iword_idx_ = 1;
 
-        // Pre-increment & handle ea, MOVEM handles things on its own
+        // Handle ea, MOVEM handles things on its own
         if (inst_->type != inst_type::MOVEM) {
             for (uint8_t i = 0; i < inst_->nea; ++i) {
                 const auto ea = inst_->ea[i];
@@ -180,6 +180,12 @@ public:
                         state_.A(7)--;
                 }
                 handle_ea(i);
+                if ((ea >> ea_m_shift) == ea_m_A_ind_post) {
+                    state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
+                    // Stack pointer is always kept word aligned
+                    if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
+                        state_.A(7)++;
+                }
             }
         }
 
@@ -257,19 +263,6 @@ public:
         }
 
         assert(iword_idx_ == inst_->ilen);
-
-        // Post-increment, MOVEM handles this on its own
-        if (inst_->type != inst_type::MOVEM) {
-            for (uint8_t i = 0; i < inst_->nea; ++i) {
-                const auto ea = inst_->ea[i];
-                if ((ea >> ea_m_shift) == ea_m_A_ind_post) {
-                    state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
-                    // Stack pointer is always kept word aligned
-                    if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
-                        state_.A(7)++;
-                }
-            }
-        }
 
     out:
         if (trace_)

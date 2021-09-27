@@ -933,7 +933,9 @@ bool run_winuae_tests()
         // TODO (Undefinde flags?)
         "ABCD", "SBCD", "NBCD",
     };
-    bool errors = false;
+    // Failed: BTST.B CMPA.W DIVS.W DIVU.W MVMEL.L MVMEL.W ROL.B ROL.L ROL.W ROLW.W ROR.B ROR.L ROR.W RORW.W
+    std::vector<std::string> failed;
+    int errors = 0;
     for (auto& p : fs::directory_iterator(basedir)) {
         if (!p.is_directory())
             continue;
@@ -941,15 +943,24 @@ bool run_winuae_tests()
             std::cout << "SKIPPING " << p.path().stem().string() << "\n";
             continue;
         }
-        errors |= !run_winuae_mnemonic_test(basedir / p);
+        if (!run_winuae_mnemonic_test(basedir / p)) {
+            failed.push_back(p.path().filename().string());
+            ++errors;
+        }
+
         // Temp:
         //assert(!errors);
     }
-
+    if (errors) {
+        std::cout << "Failed:";
+        for (const auto& f : failed)
+            std::cout << ' ' << f;
+        std::cout << "\n";
+    }
     // Temp:
     assert(!errors);
 
-    return errors;
+    return errors == 0;
 }
 
 bool run_simple_tests()
