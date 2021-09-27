@@ -664,9 +664,11 @@ public:
 
         for (uint16_t cnt = 0; cnt < s_.blth; ++cnt) {
             const uint32_t addr = s_.bltpt[2];
+            const bool draw = !(s_.bltcon1 & BC1F_ONEDOT) || !dot_this_line;
             s_.bltdat[2] = mem_.read_u16(addr);
             s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> ashift, (s_.bltdat[1] & 1) ? 0xFFFF : 0, s_.bltdat[2]);
             s_.bltpt[0] += sign ? s_.bltmod[1] : s_.bltmod[0];
+            dot_this_line = true;
 
             if (!sign) {
                 if (s_.bltcon1 & BC1F_SUD) {
@@ -696,10 +698,8 @@ public:
             sign = static_cast<int16_t>(s_.bltpt[0]) <= 0;
             s_.bltdat[1] = rol(s_.bltdat[1], 1);
             // First pixel is written to D
-            if (!(s_.bltcon1 & BC1F_ONEDOT) || !dot_this_line) {
+            if (draw)
                 mem_.write_u16(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
-                dot_this_line = true;
-            }
         }
         s_.bplpt[3] = s_.bplpt[2];
     }
@@ -714,7 +714,7 @@ public:
             do_blitter_line();
             any = 1; // ?
         } else {
-            TODO_ASSERT(!(s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR | BC1F_FILL_CARRYIN)));
+            TODO_ASSERT(!(s_.bltcon1 & BC1F_FILL_OR));
 
             const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
             const uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
@@ -741,6 +741,7 @@ public:
             uint16_t areg = 0; // Cleared at EOL?
             uint16_t breg = 0; // Cleared at EOL?
             for (uint16_t y = 0; y < s_.blth; ++y) {
+                bool inpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);
                 for (uint16_t x = 0; x < s_.bltw; ++x) {
                     if (s_.bltcon0 & BC0F_SRCA) do_dma(0);
                     if (s_.bltcon0 & BC0F_SRCB) do_dma(1);
@@ -752,9 +753,18 @@ public:
                         amask &= s_.bltalwm;
                     const uint16_t a = shift_val(areg, s_.bltdat[0] & amask, ashift);
                     const uint16_t b = shift_val(breg, s_.bltdat[1], bshift);
-                    const uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), a, b, s_.bltdat[2]);
-
+                    uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), a, b, s_.bltdat[2]);
                     any |= val;
+                    if (s_.bltcon1 & BC1F_FILL_XOR) {
+                        for (uint8_t bit = 0; bit < 16; ++bit) {
+                            const uint16_t mask = 1U << bit;
+                            if (val & mask)
+                                inpoly = !inpoly;
+
+                            if (inpoly)
+                                val |= mask;
+                        }
+                    }
                     if (s_.bltcon0 & BC0F_DEST) {
                         mem_.write_u16(s_.bltpt[3], val);
                         incr_ptr(s_.bltpt[3]);
