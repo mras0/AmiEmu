@@ -933,7 +933,7 @@ bool run_winuae_tests()
         // TODO (Undefinde flags?)
         "ABCD", "SBCD", "NBCD",
     };
-    // Failed: BTST.B CMPA.W DIVS.W DIVU.W MVMEL.L MVMEL.W ROL.B ROL.L ROL.W ROLW.W ROR.B ROR.L ROR.W RORW.W
+    // Failed: BTST.B DIVS.W DIVU.W MVMEL.L MVMEL.W ROL.B ROL.L ROL.W ROLW.W ROR.B ROR.L ROR.W RORW.W
     std::vector<std::string> failed;
     int errors = 0;
     for (auto& p : fs::directory_iterator(basedir)) {

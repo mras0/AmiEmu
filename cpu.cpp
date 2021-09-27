@@ -557,10 +557,9 @@ private:
         throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea) + " val = $" + hexstring(val) };
     }
 
-    void update_flags(sr_mask srmask, uint32_t res, uint32_t carry)
+    void update_flags_size(sr_mask srmask, uint32_t res, uint32_t carry, opsize size)
     {
-        assert(inst_->size != opsize::none);
-        const uint32_t mask = opsize_msb_mask(inst_->size);
+        const uint32_t mask = opsize_msb_mask(size);
         uint16_t ccr = 0;
         if (carry & mask) {
             ccr |= srm_c;
@@ -568,12 +567,17 @@ private:
         }
         if (((carry << 1) ^ carry) & mask)
             ccr |= srm_v;
-        if (!(res & opsize_all_mask(inst_->size)))
+        if (!(res & opsize_all_mask(size)))
             ccr |= srm_z;
         if (res & mask)
             ccr |= srm_n;
 
         state_.update_sr(srmask, (ccr & srmask));
+    }
+
+    void update_flags(sr_mask srmask, uint32_t res, uint32_t carry)
+    {
+        update_flags_size(srmask, res, carry, inst_->size);
     }
 
     void update_flags_rot(uint32_t res, uint32_t cnt, bool carry)
@@ -886,7 +890,7 @@ private:
         const uint32_t l = state_.A(inst_->ea[1] & ea_xn_mask);
         // And the performed on the full 32-bit value
         const auto res = l - r;
-        update_flags(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res));
+        update_flags_size(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res), opsize::l);
     }
 
     void handle_CMPM()
@@ -1205,7 +1209,6 @@ private:
 
     void handle_NOP()
     {
-        return;
     }
 
     void handle_OR()
