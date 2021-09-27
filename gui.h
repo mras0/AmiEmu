@@ -20,6 +20,7 @@ public:
         mouse_move,
         disk_inserted,
         debug_mode,
+        joystick,
     };
     struct keyboard_event {
         bool pressed;
@@ -37,6 +38,14 @@ public:
         uint8_t drive;
         char filename[260];
     };
+    struct joystick_event {
+        bool left;
+        bool right;
+        bool up;
+        bool down;
+        bool button1;
+        bool button2;
+    };
     struct event {
         event_type type;
         union {
@@ -44,6 +53,7 @@ public:
             mouse_button_event mouse_button;
             mouse_move_event mouse_move;
             disk_inserted_event disk_inserted;
+            joystick_event joystick;
         };
     };
 

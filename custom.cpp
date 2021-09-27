@@ -41,6 +41,7 @@
     X(SERDAT   , 0x030 , 1) /* Serial port data and stop bits write                    */ \
     X(SERPER   , 0x032 , 1) /* Serial port period and control                          */ \
     X(POTGO    , 0x034 , 1) /* Pot port data write and start                           */ \
+    X(JOYTEST  , 0x036 , 1) /* Write to all 4 joystick-mouse counters at once          */ \
     X(BLTCON0  , 0x040 , 1) /* Blitter control register 0                              */ \
     X(BLTCON1  , 0x042 , 1) /* Blitter control register 1                              */ \
     X(BLTAFWM  , 0x044 , 1) /* Blitter first word mask for source A                    */ \
@@ -773,6 +774,7 @@ struct custom_state {
     bool rmb_pressed;
     uint8_t cur_mouse_x;
     uint8_t cur_mouse_y;
+    uint16_t joydat;
 
     uint32_t dskpt;
     uint16_t dsklen;
@@ -946,6 +948,12 @@ public:
     {
         s_.cur_mouse_x = static_cast<uint8_t>(s_.cur_mouse_x + dx);
         s_.cur_mouse_y = static_cast<uint8_t>(s_.cur_mouse_y + dy);
+    }
+
+    void set_joystate(uint16_t dat, bool button_state)
+    {
+        (void)button_state; // Ignore for now
+        s_.joydat = dat;
     }
 
     void show_debug_state(std::ostream& os)
@@ -2172,7 +2180,7 @@ public:
         case JOY0DAT: // $00A
             return s_.cur_mouse_y << 8 | s_.cur_mouse_x;
         case JOY1DAT: // $00C
-            return 0;
+            return s_.joydat;
         case CLXDAT:  // $00E
             break;
         case ADKCONR: // $010
@@ -2371,10 +2379,10 @@ public:
                 serial_data_handler_(numbits, val & ((1 << numbits) - 1));
             }
             return;
-        case SERPER: // $032
-            return;  // Ignore for now
-        case POTGO:  // $034 
-            return;  // Ignore for now
+        case SERPER:  // $032
+        case POTGO:   // $034 
+        case JOYTEST: // $036
+            return;   // Ignore for now
         case BLTCON0:
             s_.bltcon0 = val;
             return;
@@ -2872,6 +2880,11 @@ void custom_handler::mouse_move(int dx, int dy)
     impl_->mouse_move(dx, dy);
 }
 
+void custom_handler::set_joystate(uint16_t dat, bool button_state)
+{
+    impl_->set_joystate(dat, button_state);
+}
+
 void custom_handler::show_debug_state(std::ostream& os)
 {
     impl_->show_debug_state(os);
@@ -2891,7 +2904,6 @@ std::vector<uint16_t> custom_handler::get_regs()
 {
     return impl_->get_regs();
 }
-
 
 std::string custom_regname(uint32_t offset)
 {

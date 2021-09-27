@@ -294,12 +294,14 @@ public:
         kbd_buffer_[(kbd_buffer_head_++) % sizeof(kbd_buffer_)] = (pressed & 1) | (~raw) << 1;
     }
 
-    void set_lbutton_state(bool pressed)
+    void set_button_state(uint8_t idx, bool pressed)
     {
+        assert(idx < 1);
+        const uint8_t mask = 1 << (CIAB_GAMEPORT0 + idx);
         if (pressed)
-            s_[0].port_input[0] &= ~CIAF_GAMEPORT0;
+            s_[0].port_input[0] &= ~mask;
         else
-            s_[0].port_input[0] |= CIAF_GAMEPORT0;
+            s_[0].port_input[0] |= mask;
     }
 
     bool power_led_on() const
@@ -673,9 +675,9 @@ void cia_handler::keyboard_event(bool pressed, uint8_t raw)
     impl_->keyboard_event(pressed, raw);
 }
 
-void cia_handler::set_lbutton_state(bool pressed)
+void cia_handler::set_button_state(uint8_t idx, bool pressed)
 {
-    impl_->set_lbutton_state(pressed);
+    impl_->set_button_state(idx, pressed);
 }
 
 bool cia_handler::power_led_on() const

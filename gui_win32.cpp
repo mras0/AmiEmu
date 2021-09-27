@@ -996,10 +996,10 @@ private:
 
 class config_dialog : public window_base<config_dialog> {
 public:
-    static void run(HWND parent, std::array<std::string, 4>& disk_filenames)
+    static void run(HWND parent, std::array<std::string, 4>& disk_filenames, bool& joystick_mode)
     {
         bool done = false;
-        auto wnd = new config_dialog { done, disk_filenames };
+        auto wnd = new config_dialog { done, disk_filenames, joystick_mode };
         EnableWindow(parent, FALSE);
         wnd->do_create(L"Configuration", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
 
@@ -1022,12 +1022,15 @@ private:
     HWND parent_ = nullptr;
     HWND last_focus_ = nullptr;
     std::array<std::string, 4>& disk_filenames_;
+    bool& joystick_mode_;
     static constexpr int max_disks = 2;
     HWND filename_edit_[max_disks];
+    HWND joystick_mode_ctrl_;
 
-    config_dialog(bool& done, std::array<std::string, 4>& disk_filenames)
+    config_dialog(bool& done, std::array<std::string, 4>& disk_filenames, bool& joystick_mode)
         : done_ { done }
         , disk_filenames_ { disk_filenames }
+        , joystick_mode_ { joystick_mode }
     {
     }
 
@@ -1057,6 +1060,12 @@ private:
         }
 
         const int button_w = 100;
+
+        joystick_mode_ctrl_ = CreateWindowA("BUTTON", "&Joystick mode", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, xmargin, y, button_w*2, h, hwnd, reinterpret_cast<HMENU>(400), hInstance, nullptr);
+        if (joystick_mode_)
+            SendMessage(joystick_mode_ctrl_, BM_SETCHECK, 1, 0);
+        y += h + ymargin;
+
         int x = xmargin;
         HWND hwndOK = CreateWindow(L"BUTTON", L"&Ok", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, xmargin, y, button_w, h, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
         x += button_w + xmargin;
@@ -1098,6 +1107,7 @@ private:
                         disk_filenames_[i].clear();
                     }
                 }
+                joystick_mode_ = !!SendMessage(joystick_mode_ctrl_, BM_GETCHECK, 0, 0);
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
             } else if (id == IDCANCEL && code == BN_CLICKED) {
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
@@ -1237,6 +1247,7 @@ private:
     bool mouse_captured_ = false;
     bool active_ = true;
     std::array<std::string, 4> disk_filenames_;
+    bool joystick_mode_ = false;
     on_pause_callback on_pause_;
 
     impl(int width, int height, const std::array<std::string, 4>& disk_filenames)
@@ -1248,6 +1259,28 @@ private:
 
     void do_enqueue_keyboard_event(bool pressed, WPARAM vk)
     {
+        if (joystick_mode_) {
+            switch (vk) {
+            case VK_LEFT:
+            case VK_RIGHT:
+            case VK_UP:
+            case VK_DOWN:
+            case VK_LCONTROL:
+            case VK_LMENU:
+                events_.push_back(event {
+                    .type = event_type::joystick,
+                    .joystick = {
+                        .left = GetKeyState(VK_LEFT) < 0,
+                        .right = GetKeyState(VK_RIGHT) < 0,
+                        .up = GetKeyState(VK_UP) < 0,
+                        .down = GetKeyState(VK_DOWN) < 0,
+                        .button1 = GetKeyState(VK_LCONTROL) < 0,
+                        .button2 = GetKeyState(VK_LMENU) < 0,
+                    } });
+                return;
+            }
+        }
+
         const auto key = vk_to_scan[static_cast<uint8_t>(vk)];
         if (key == 0xff) {
             std::cerr << "Unhandled virtual key " << vk << " ($" << hexfmt(static_cast<uint8_t>(vk)) << ")\n";
@@ -1352,7 +1385,7 @@ private:
                     if (on_pause_)
                         on_pause_(true);
                     std::array<std::string, 4> disk_filenames = disk_filenames_;
-                    config_dialog::run(hwnd, disk_filenames);
+                    config_dialog::run(hwnd, disk_filenames, joystick_mode_);
                     for (int i = 0; i < 4; ++i) {
                         if (disk_filenames[i] == disk_filenames_[i])
                             continue;

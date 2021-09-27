@@ -36,6 +36,7 @@ public:
     void set_serial_data_handler(const serial_data_handler& handler);
     void set_rbutton_state(bool pressed);
     void mouse_move(int dx, int dy);
+    void set_joystate(uint16_t dat, bool button_state);
 
     void show_debug_state(std::ostream& os);
     void show_registers(std::ostream& os);

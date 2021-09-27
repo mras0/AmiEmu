@@ -615,7 +615,7 @@ int main(int argc, char* argv[])
                         break;
                     case gui::event_type::mouse_button:
                         if (evt.mouse_button.left)
-                            cias.set_lbutton_state(evt.mouse_button.pressed);
+                            cias.set_button_state(0, evt.mouse_button.pressed);
                         else
                             custom.set_rbutton_state(evt.mouse_button.pressed);
                         break;
@@ -636,6 +636,20 @@ int main(int argc, char* argv[])
                     case gui::event_type::debug_mode:
                         debug_mode = true;
                         break;
+                    case gui::event_type::joystick: {
+                        cias.set_button_state(1, evt.joystick.button1);
+                        uint16_t dat = 0;
+                        if (evt.joystick.left)
+                            dat |= 1 << 9;
+                        if (evt.joystick.right)
+                            dat |= 1 << 1;
+                        if (evt.joystick.up ^ evt.joystick.left)
+                            dat |= 1 << 8;
+                        if (evt.joystick.down ^ evt.joystick.right)
+                            dat |= 1 << 0;
+                        custom.set_joystate(dat, evt.joystick.button2);
+                        break;
+                    }
                     default:
                         assert(0);
                     }
