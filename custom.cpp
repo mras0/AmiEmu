@@ -1084,7 +1084,7 @@ public:
                     incy();
             } 
 
-            sign = static_cast<int16_t>(s_.bltpt[0]) <= 0;
+            sign = static_cast<int16_t>(s_.bltpt[0]) < 0;
             s_.bltdat[1] = rol(s_.bltdat[1], 1);
             // First pixel is written to D
             if (draw)
