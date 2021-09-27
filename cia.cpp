@@ -2,6 +2,7 @@
 #include "ioutil.h"
 #include "debug.h"
 #include "state_file.h"
+#include "debug.h"
 #include <cassert>
 #include <iostream>
 
@@ -225,6 +226,17 @@ public:
                     }
                 }
             }
+        }
+
+        for (auto d : drives_) {
+            if (!d)
+                continue;
+            if (!d->step())
+                continue;
+            // TODO: Only from selected drive(s)??
+            if (DEBUG_CIA)
+                *debug_stream << "Disk index pulse from drive " << d->name() << "\n";
+            s_[1].trigger_int(CIAICRB_FLG);
         }
 
         if (kbd_.buffer_head_ != kbd_.buffer_tail_ && kbd_.ack_ && !(s_[0].cr[0] & CIACRAF_SPMODE)) {
@@ -496,6 +508,10 @@ private:
         auto& s = s_[idx];
         const uint8_t port_a_before = s.port_value(0);
         const uint8_t port_b_before = s.port_value(1);
+
+        if (DEBUG_CIA)
+            *debug_stream << "CIA write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
+
 
         switch (reg) {
         case pra:

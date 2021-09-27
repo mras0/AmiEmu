@@ -3,6 +3,7 @@
 #include <string>
 #include <ostream>
 #include <cassert>
+#include <iomanip>
 
 #include "instruction.h"
 #include "ioutil.h"
@@ -130,7 +131,7 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
     if (inst.type == inst_type::ILLEGAL && iwords[0] != illegal_instruction_num)
         os << "DC.W\t$" << hexfmt(iwords[0]);
     else
-        os << inst.name;
+        os << std::setw(4) << std::left << inst.name;
 
     unsigned eaw = 1;
 
@@ -214,6 +215,8 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
                 }
                 os << hexfmt(static_cast<uint16_t>(n));
                 os << "(PC)";
+                if (inst.type == inst_type::JSR)
+                    os << " == $" << hexfmt(pc + (eaw - 1) * 2 + n);
                 break;
             }
             case ea_other_pc_index: {

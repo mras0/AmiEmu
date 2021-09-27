@@ -1015,6 +1015,8 @@ int main(int argc, char* argv[])
                                             debug_flags |= debug_flag_blitter;
                                         else if (args[i] == "audio")
                                             debug_flags |= debug_flag_audio;
+                                        else if (args[i] == "cia")
+                                            debug_flags |= debug_flag_cia;
                                         else
                                             std::cerr << "Unknown trace flag \"" << args[i] << "\"\n";
                                     }

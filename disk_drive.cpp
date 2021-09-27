@@ -15,7 +15,12 @@ constexpr uint16_t TD_SECTOR      = 512;                 // bytes per sector
 constexpr uint16_t TRACK_SIZE     = NUMSECS*TD_SECTOR;   // bytes per track
 constexpr uint16_t MFM_SYNC       = 0x4489;              // MFM sync value
 constexpr uint16_t NUM_CYLINDERS  = 80;                  // There are 80 cylinders on a Amiga floppy disk
-constexpr uint32_t DISK_SIZE      = NUM_CYLINDERS * 2 * TRACK_SIZE; // Each cylinder has 2 MFM tracks, 1 on each side 
+constexpr uint32_t DISK_SIZE      = NUM_CYLINDERS * 2 * TRACK_SIZE; // Each cylinder has 2 MFM tracks, 1 on each side
+
+// EClock is color clock frequency/5 = 708.240KHz
+constexpr uint32_t ECLOCK_FREQ    = 708240;
+constexpr uint32_t DISK_INDEX_CNT = ECLOCK_FREQ / 5;  // 300RPM (=5Hz)
+constexpr uint32_t MOTOR_ON_CNT   = ECLOCK_FREQ / 20; // 50ms
 
 static_assert(DISK_SIZE == 901120); // 880K
 
@@ -78,13 +83,33 @@ public:
         }
     }
 
+    bool step()
+    {
+        if (s_.motor_cnt) {
+            --s_.motor_cnt;
+            if (DEBUG_DISK && !s_.motor_cnt) {
+                *debug_stream << name_ << " Motor is now " << (s_.motor ? "running at full speed" : "off") << "\n";
+            }
+        }
+        // TODO: If motor isn't spinning at full speed the count should probably be different...
+        if (s_.motor && s_.index_cnt) {
+            if (--s_.index_cnt == 0) {
+                // Disk completed a revolution
+                s_.index_cnt = DISK_INDEX_CNT;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     uint8_t cia_state() const
     {
         uint8_t flags = DSKF_ALL;
         if (data_.empty()) {
             flags &= ~(DSKF_CHANGE | DSKF_TRACK0);
         } else {
-            if (cyl_ == 0)
+            if (s_.cyl == 0)
                 flags &= ~DSKF_TRACK0;
             flags &= ~DSKF_PROT;
         }
@@ -93,7 +118,8 @@ public:
         // always be reset (active low). If proper drive ID is to be supported
         // we need to shift out one bit from a 32-bit register.
         // See http://amigadev.elowar.com/read/ADCD_2.1/Hardware_Manual_guide/node01AB.html
-        flags &= ~DSKF_RDY;
+        if (!s_.motor || !s_.motor_cnt)
+            flags &= ~DSKF_RDY;
         if (DEBUG_DISK) {
             *debug_stream << name_ << " State";
             if (!(flags & DSKF_RDY))
@@ -104,41 +130,46 @@ public:
                 *debug_stream << " /PROT";
             if (!(flags & DSKF_CHANGE))
                 *debug_stream << " /CHANGE";
-            *debug_stream << "\n";
+            *debug_stream << " motor_cnt=" << s_.motor_cnt << "\n";
         }
         return flags;
     }
     
     void set_motor(bool enabled)
     {
-        if (DEBUG_DISK && motor_ != enabled)
-            *debug_stream << name_ << " Motor turning " << (enabled ? "on" : "off") << "\n";
-        motor_ = enabled;
+        if (DEBUG_DISK && s_.motor != enabled)
+            *debug_stream << name_ << " Motor turning " << (enabled ? "on" : "off") << " motor_cnt=" << s_.motor_cnt << "\n";
+        if (s_.motor != enabled) {
+            // If the motor is already spinning up/down, just reuse the count. Not accurate but oh well
+            if (!s_.motor_cnt)
+                s_.motor_cnt = MOTOR_ON_CNT; // Just use same speed for starting/stopping
+        }
+        s_.motor = enabled;
     }
 
     void set_side_dir(bool side, bool dir)
     {
-        if (DEBUG_DISK && (side != side_ || seek_dir_ != dir))
-            *debug_stream << name_ << " Changing side/stp direction cyl = " << (int)cyl_ << " new side = " << (side ? "lower" : "upper") << " new direction = " << (dir ? "out (towards 0)" : "in (towards 79)") << "\n";
-        side_ = side;
-        seek_dir_ = dir;
+        if (DEBUG_DISK && (side != s_.side || s_.seek_dir != dir))
+            *debug_stream << name_ << " Changing side/stp direction cyl = " << (int)s_.cyl << " new side = " << (side ? "lower" : "upper") << " new direction = " << (dir ? "out (towards 0)" : "in (towards 79)") << "\n";
+        s_.side = side;
+        s_.seek_dir = dir;
     }
 
     void dir_step()
     {
         if (DEBUG_DISK)
-            *debug_stream << name_ << " Stepping cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
-        if (!seek_dir_ && cyl_ < NUM_CYLINDERS - 1)
-            ++cyl_;
-        else if (seek_dir_ && cyl_)
-            --cyl_;
+            *debug_stream << name_ << " Stepping cyl = " << (int)s_.cyl << " side = " << (s_.side ? "lower" : "upper") << " direction = " << (s_.seek_dir ? "out (towards 0)" : "in (towards 79)") << "\n";
+        if (!s_.seek_dir && s_.cyl < NUM_CYLINDERS - 1)
+            ++s_.cyl;
+        else if (s_.seek_dir && s_.cyl)
+            --s_.cyl;
         if (DEBUG_DISK)
-            *debug_stream << name_ << " New cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
+            *debug_stream << name_ << " New cyl = " << (int)s_.cyl << " side = " << (s_.side ? "lower" : "upper") << " direction = " << (s_.seek_dir ? "out (towards 0)" : "in (towards 79)") << "\n";
     }
 
     void read_mfm_track(uint8_t* dest)
     {
-        if (!motor_)
+        if (!s_.motor)
             throw std::runtime_error { name_ + " Reading while motor is not on" };
 
         if (data_.empty()) {
@@ -147,10 +178,10 @@ public:
         }
 
         // Lower side=first
-        const uint8_t tracknum = !side_ + cyl_ * 2;
+        const uint8_t tracknum = !s_.side + s_.cyl * 2;
 
         if (DEBUG_DISK)
-            *debug_stream << name_ << " Reading track $" << hexfmt(tracknum) << " cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << "\n";
+            *debug_stream << name_ << " Reading track $" << hexfmt(tracknum) << " cyl = " << (int)s_.cyl << " side = " << (s_.side ? "lower" : "upper") << "\n";
 
         if (disk_activity_handler_)
             disk_activity_handler_(tracknum, false);
@@ -187,29 +218,26 @@ public:
 
     void show_debug_state(std::ostream& os)
     {
-        os << "motor " << (motor_ ? "on" : "off") << " cylinder " << (int)cyl_ << " side " << (int)side_ << " (" << (side_ ? "upper" : "lower") << ")" << " dir " << (int)seek_dir_ << " (towards " << (seek_dir_ ? "outside(0)" : "center(79)") << ")\n";
+        os << "motor " << (s_.motor ? "on" : "off") << " cylinder " << (int)s_.cyl << " side " << (int)s_.side << " (" << (s_.side ? "upper" : "lower") << ")" << " dir " << (int)s_.seek_dir << " (towards " << (s_.seek_dir ? "outside(0)" : "center(79)") << ")\n";
     }
 
     void handle_state(state_file& sf)
     {
         const state_file::scope scope { sf, ("Drive " + name_).c_str(), 1 };
-        uint32_t state = cyl_ | motor_ << 8 | side_ << 9 | seek_dir_ << 10;
-        sf.handle(state);
-        if (sf.loading()) {
-            cyl_ = state & 0xff;
-            motor_ = !!(state & (1 << 8));
-            side_ = !!(state & (1 << 9));
-            seek_dir_ = !!(state & (1 << 10));
-        }
+        sf.handle_blob(&s_, sizeof(s_));
     }
 
 private:
     std::string name_;
     std::vector<uint8_t> data_;
-    bool motor_ = false;
-    bool side_ = false;      // false = upper head, true = lower head
-    bool seek_dir_ = false;  // false = towards center, true = towards outside (0 is the outermost cylinder)
-    uint8_t cyl_ = 0;
+    struct state {
+        bool motor         = false;
+        bool side          = false;          // false = upper head, true = lower head
+        bool seek_dir      = false;          // false = towards center, true = towards outside (0 is the outermost cylinder)
+        uint8_t cyl        = 0;
+        uint32_t motor_cnt = 0;              // Countdown until motor is on/off
+        uint32_t index_cnt = DISK_INDEX_CNT; // Countdown to next DSKINDEX event (once per revolution)
+    } s_;
     disk_activity_handler disk_activity_handler_;
 };
 
@@ -268,4 +296,9 @@ void disk_drive::show_debug_state(std::ostream& os)
 void disk_drive::handle_state(state_file& sf)
 {
     impl_->handle_state(sf);
+}
+
+bool disk_drive::step()
+{
+    return impl_->step();
 }

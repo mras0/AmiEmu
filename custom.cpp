@@ -1194,7 +1194,7 @@ public:
 
     bool do_blitter()
     {
-#if 1
+#if 0
         if (1)
             return do_immedite_blit();
 #endif

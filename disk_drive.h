@@ -39,6 +39,10 @@ public:
 
     void handle_state(state_file& sf);
 
+    // Call with EClock frequency (CCKFreq / 5)
+    // returns true if the disk has completed a revolution
+    bool step();
+
 private:
     class impl;
     std::unique_ptr<impl> impl_;
