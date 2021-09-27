@@ -94,8 +94,8 @@ constexpr bool range16(uint32_t val)
     X(RESET     , none , none , 0)        \
     X(ROL       , bwl  , w    , 3)        \
     X(ROR       , bwl  , w    , 3)        \
-    X(ROXL       , bwl  , w    , 3)       \
-    X(ROXR       , bwl  , w    , 3)       \
+    X(ROXL      , bwl  , w    , 3)        \
+    X(ROXR      , bwl  , w    , 3)        \
     X(RTE       , none , none , 0)        \
     X(RTR       , none , none , 0)        \
     X(RTS       , none , none , 0)        \
@@ -159,12 +159,21 @@ constexpr struct instruction_info_type {
 
 class assembler {
 public:
-    explicit assembler(uint32_t start_pc, const char* text)
+    explicit assembler(uint32_t start_pc, const char* text, const std::vector<std::pair<const char*, uint32_t>>& predefines)
         : pc_ { start_pc }
         , input_ { text }
     {
+        for (const auto [name, val] : predefines) {
+            auto tt = make_identifier(name);
+            if (tt < token_type::identifier_start)
+                ASSEMBLER_ERROR("Invalid predefined identifier " << name);
+            auto& ii = identifier_info(tt);
+            if (ii.has_value)
+                ASSEMBLER_ERROR("Redefinition of " << ii.id);
+            ii.has_value = true;
+            ii.value = val;
+        }
     }
-
 
     std::vector<uint8_t> process()
     {
@@ -181,6 +190,20 @@ public:
                 get_token();
                 if (token_type_ == token_type::colon) {
                     get_token();
+                } else if (token_type_ == token_type::equal) {
+                    get_token();
+                    auto& ii = identifier_info(l);
+                    if (ii.has_value)
+                        ASSEMBLER_ERROR("Redefinition of " << ii.id);
+                    else if (!ii.fixups.empty())
+                        ASSEMBLER_ERROR("Invalid definition for " << ii.id << " (previously referenced)");
+                    ii.has_value = true;
+                    auto val = process_number();
+                    if (val.fixup)
+                        ASSEMBLER_ERROR("Invalid definition for " << ii.id << "(needs fixups)");
+                    ii.value = val.val;
+                    skip_to_eol();
+                    continue;
                 } else if (!start_of_line) {
                     ASSEMBLER_ERROR("Expected instruction got " << token_type_string(l));
                 }
@@ -231,7 +254,7 @@ public:
 
         for (const auto& i : identifier_info_) {
             if (!i.has_value || !i.fixups.empty()) {
-                ASSEMBLER_ERROR(i.id << " referenced but not definde");
+                ASSEMBLER_ERROR(i.id << " referenced but not defined");
             }
         }
 
@@ -254,6 +277,7 @@ private:
         minus = '-',
         slash = '/',
         colon = ':',
+        equal = '=',
 
         last_operator=127,
 
@@ -370,6 +394,23 @@ private:
         }
     }
 
+    token_type make_identifier(const char* text)
+    {
+        std::string uc { text };
+        for (auto& ch : uc)
+            ch = static_cast<char>(toupper(ch));
+
+        if (auto it = id_map_.find(uc); it != id_map_.end())
+            return it->second;
+
+        const uint32_t id = static_cast<uint32_t>(identifier_info_.size()) + static_cast<uint32_t>(token_type::identifier_start);
+        identifier_info_type ii {};
+        ii.id = uc;
+        identifier_info_.push_back(ii);
+        id_map_[ii.id] = static_cast<token_type>(id);
+        return static_cast<token_type>(id);
+    }
+
     void read_number(uint8_t base)
     {
         uint32_t n = 0;
@@ -431,6 +472,10 @@ private:
         case '-':
         case '/':
         case ':':
+        //case '<':
+        case '=':
+        //case '>':
+        //case '?':
             token_type_ = static_cast<token_type>(c);
             return;
         case '$':
@@ -453,20 +498,7 @@ private:
                 ++col_;
             }
 
-            std::string uc { token_text_ };
-            for (auto& ch : uc)
-                ch = static_cast<char>(toupper(ch));
-
-            if (auto it = id_map_.find(uc); it != id_map_.end()) {
-                token_type_ = it->second;
-            } else {
-                const uint32_t id = static_cast<uint32_t>(identifier_info_.size()) + static_cast<uint32_t>(token_type::identifier_start);
-                identifier_info_type ii {};
-                ii.id = uc;
-                identifier_info_.push_back(ii);
-                token_type_ = static_cast<token_type>(id);
-                id_map_[ii.id] = token_type_;
-            }
+            token_type_ = make_identifier(token_text_.c_str());
             return;
         }
 
@@ -1297,13 +1329,17 @@ done:
                 if (num.fixup)
                     num.fixup->fixups.push_back(fixup_type { osize, static_cast<uint32_t>(result_.size()) });
 
-                // Only support for lab1-lab2 for now
-                if (token_type_ == token_type::minus) {
+                // Only support very simple aritmetic for now
+                while (token_type_ == token_type::minus || token_type_ == token_type::plus) {
+                    const auto saved_token = token_type_;
                     get_token();
                     auto num2 = process_number();
                     if (num2.fixup)
-                        ASSEMBLER_ERROR("Not supported: minus with fixup (num2)");
-                    num.val -= num2.val;
+                        ASSEMBLER_ERROR("Not supported: minus/plus with fixup (num2)");
+                    if (saved_token == token_type::minus)
+                        num.val -= num2.val;
+                    else
+                        num.val += num2.val;
                 }
 
                 if (osize == opsize::b) {
@@ -1528,8 +1564,8 @@ done:
     }
 };
 
-std::vector<uint8_t> assemble(uint32_t start_pc, const char* code)
+std::vector<uint8_t> assemble(uint32_t start_pc, const char* code, const std::vector<std::pair<const char*, uint32_t>>& predefines)
 {
-    assembler a { start_pc, code };
+    assembler a { start_pc, code, predefines };
     return a.process();
 }

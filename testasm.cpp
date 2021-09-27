@@ -351,6 +351,9 @@ EndCopy:
         0x4e75,
         0x4e75
         } },
+        { " version=2\n dc.b version+48,0\n", { 0x3200 } },
+        { " blah=$1234\n dc.w blah\n", { 0x1234 } },
+        { "x=4\ny=7\nz=5\ndc.w x+y-z+x\n", { 0x000a } },
     };
 
     for (const auto& tc : test_cases) {
