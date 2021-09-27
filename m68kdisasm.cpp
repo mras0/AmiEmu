@@ -34,8 +34,268 @@ uint32_t hex_or_die(const char* s)
     return val;
 }
 
+constexpr const char* const custom_regname[0x100] = {
+    "BLTDDAT",
+    "DMACONR",
+    "VPOSR",
+    "VHPOSR",
+    "DSKDATR",
+    "JOY0DAT",
+    "JOY1DAT",
+    "CLXDAT",
+    "ADKCONR",
+    "POT0DAT",
+    "POT1DAT",
+    "POTGOR",
+    "SERDATR",
+    "DSKBYTR",
+    "INTENAR",
+    "INTREQR",
+    "DSKPTH",
+    "DSKPTL",
+    "DSKLEN",
+    "DSKDAT",
+    "REFPTR",
+    "VPOSW",
+    "VHPOSW",
+    "COPCON",
+    "SERDAT",
+    "SERPER",
+    "POTGO",
+    "JOYTEST",
+    "STREQU",
+    "STRVBL",
+    "STRHOR",
+    "STRLONG",
+    "BLTCON0",
+    "BLTCON1",
+    "BLTAFWM",
+    "BLTALWM",
+    "BLTCPTH",
+    "BLTCPTL",
+    "BLTBPTH",
+    "BLTBPTL",
+    "BLTAPTH",
+    "BLTAPTL",
+    "BLTDPTH",
+    "BLTDPTL",
+    "BLTSIZE",
+    "BLTCON0L",
+    "BLTSIZV",
+    "BLTSIZH",
+    "BLTCMOD",
+    "BLTBMOD",
+    "BLTAMOD",
+    "BLTDMOD",
+    "RESERVED_068",
+    "RESERVED_06a",
+    "RESERVED_06c",
+    "RESERVED_06e",
+    "BLTCDAT",
+    "BLTBDAT",
+    "BLTADAT",
+    "RESERVED_076",
+    "SPRHDAT",
+    "BPLHDAT",
+    "LISAID",
+    "DSKSYNC",
+    "COP1LCH",
+    "COP1LCL",
+    "COP2LCH",
+    "COP2LCL",
+    "COPJMP1",
+    "COPJMP2",
+    "COPINS",
+    "DIWSTRT",
+    "DIWSTOP",
+    "DDFSTRT",
+    "DDFSTOP",
+    "DMACON",
+    "CLXCON",
+    "INTENA",
+    "INTREQ",
+    "ADKCON",
+    "AUD0LCH",
+    "AUD0LCL",
+    "AUD0LEN",
+    "AUD0PER",
+    "AUD0VOL",
+    "AUD0DAT",
+    "RESERVED_0ac",
+    "RESERVED_0ae",
+    "AUD1LCH",
+    "AUD1LCL",
+    "AUD1LEN",
+    "AUD1PER",
+    "AUD1VOL",
+    "AUD1DAT",
+    "RESERVED_0bc",
+    "RESERVED_0be",
+    "AUD2LCH",
+    "AUD2LCL",
+    "AUD2LEN",
+    "AUD2PER",
+    "AUD2VOL",
+    "AUD2DAT",
+    "RESERVED_0cc",
+    "RESERVED_0ce",
+    "AUD3LCH",
+    "AUD3LCL",
+    "AUD3LEN",
+    "AUD3PER",
+    "AUD3VOL",
+    "AUD3DAT",
+    "RESERVED_0dc",
+    "RESERVED_0de",
+    "BPL1PTH",
+    "BPL1PTL",
+    "BPL2PTH",
+    "BPL2PTL",
+    "BPL3PTH",
+    "BPL3PTL",
+    "BPL4PTH",
+    "BPL4PTL",
+    "BPL5PTH",
+    "BPL5PTL",
+    "BPL6PTH",
+    "BPL6PTL",
+    "BPL7PTH",
+    "BPL7PTL",
+    "BPL8PTH",
+    "BPL8PTL",
+    "BPLCON0",
+    "BPLCON1",
+    "BPLCON2",
+    "BPLCON3",
+    "BPL1MOD",
+    "BPL2MOD",
+    "BPLCON4",
+    "CLXCON2",
+    "BPL1DAT",
+    "BPL2DAT",
+    "BPL3DAT",
+    "BPL4DAT",
+    "BPL5DAT",
+    "BPL6DAT",
+    "BPL7DAT",
+    "BPL8DAT",
+    "SPR0PTH",
+    "SPR0PTL",
+    "SPR1PTH",
+    "SPR1PTL",
+    "SPR2PTH",
+    "SPR2PTL",
+    "SPR3PTH",
+    "SPR3PTL",
+    "SPR4PTH",
+    "SPR4PTL",
+    "SPR5PTH",
+    "SPR5PTL",
+    "SPR6PTH",
+    "SPR6PTL",
+    "SPR7PTH",
+    "SPR7PTL",
+    "SPR0POS",
+    "SPR0CTL",
+    "SPR0DATA",
+    "SPR0DATB",
+    "SPR1POS",
+    "SPR1CTL",
+    "SPR1DATA",
+    "SPR1DATB",
+    "SPR2POS",
+    "SPR2CTL",
+    "SPR2DATA",
+    "SPR2DATB",
+    "SPR3POS",
+    "SPR3CTL",
+    "SPR3DATA",
+    "SPR3DATB",
+    "SPR4POS",
+    "SPR4CTL",
+    "SPR4DATA",
+    "SPR4DATB",
+    "SPR5POS",
+    "SPR5CTL",
+    "SPR5DATA",
+    "SPR5DATB",
+    "SPR6POS",
+    "SPR6CTL",
+    "SPR6DATA",
+    "SPR6DATB",
+    "SPR7POS",
+    "SPR7CTL",
+    "SPR7DATA",
+    "SPR7DATB",
+    "COLOR00",
+    "COLOR01",
+    "COLOR02",
+    "COLOR03",
+    "COLOR04",
+    "COLOR05",
+    "COLOR06",
+    "COLOR07",
+    "COLOR08",
+    "COLOR09",
+    "COLOR10",
+    "COLOR11",
+    "COLOR12",
+    "COLOR13",
+    "COLOR14",
+    "COLOR15",
+    "COLOR16",
+    "COLOR17",
+    "COLOR18",
+    "COLOR19",
+    "COLOR20",
+    "COLOR21",
+    "COLOR22",
+    "COLOR23",
+    "COLOR24",
+    "COLOR25",
+    "COLOR26",
+    "COLOR27",
+    "COLOR28",
+    "COLOR29",
+    "COLOR30",
+    "COLOR31",
+    "HTOTAL",
+    "HSSTOP",
+    "HBSTRT",
+    "HBSTOP",
+    "VTOTAL",
+    "VSSTOP",
+    "VBSTRT",
+    "VBSTOP",
+    "SPRHSTRT",
+    "SPRHSTOP",
+    "BPLHSTRT",
+    "BPLHSTOP",
+    "HHPOSW",
+    "HHPOSR",
+    "BEAMCON0",
+    "HSSTRT",
+    "VSSTRT",
+    "HCENTER",
+    "DIWHIGH",
+    "BPLHMOD",
+    "SPRHPTH",
+    "SPRHPTL",
+    "BPLHPTH",
+    "BPLHPTL",
+    "RESERVED_1f0",
+    "RESERVED_1f2",
+    "RESERVED_1f4",
+    "RESERVED_1f6",
+    "RESERVED_1f8",
+    "RESERVED_1fa",
+    "FMODE",
+    "CUSTOM_NOOP",
+};
+
+
 #include <queue>
-#include <set>
+#include <sstream>
 #include <map>
 #include <iomanip>
 
@@ -68,7 +328,7 @@ public:
     {
         switch (v.state_) {
         case STATE_KNOWN:
-            return os << "$" << hexfmt(v.raw_);
+            return os << ("$" + hexstring(v.raw_));
         case STATE_UNKNOWN:
             return os << "UNKNOWN";
         default:
@@ -81,6 +341,11 @@ public:
 private:
     uint32_t raw_;
     enum { STATE_UNKNOWN, STATE_KNOWN } state_;
+};
+
+struct simregs {
+    simval d[8];
+    simval a[8];
 };
 
 class analyzer {
@@ -102,25 +367,87 @@ public:
         insert_area(addr, addr + length);
     }
 
-    void add_root(uint32_t addr)
+    void add_root(uint32_t addr, const simregs& regs)
     {
         // Don't visit non-written areas
-        if (!written_[addr])
+        if (!written_[addr] || addr < 0x400)
             return;
 
         if (visited_.find(addr) == visited_.end()) {
-            roots_.push(addr);
-            visited_.insert(addr); // Mark visitied now to avoid re-insertion
+            roots_.push({ addr, regs });
+            visited_[addr] = regs; // Mark visitied now to avoid re-insertion
         }
-        // Add automatic label
-        if (labels_.find(addr) == labels_.end())
-            labels_[addr] = "lab_" + hexstring(addr);
+        add_auto_label(addr);
     }
 
     void add_label(uint32_t addr, const std::string& name)
     {
         if (labels_.find(addr) == labels_.end())
             labels_[addr] = name;
+    
+    }
+
+    void add_auto_label(uint32_t addr)
+    {
+        // Add automatic label
+        if (labels_.find(addr) != labels_.end())
+            return;
+        if (addr < 0x400 && (addr & 3) == 0) {
+            // Interrupt vector
+            const auto vec = addr >> 2;
+            std::string lab = "Interrupt" + hexstring(vec, 2) + "Vec";
+            switch (vec) {
+            case 0: // Reset ssp
+            case 1: // Reset PC
+                return;
+            case 2:
+                lab = "BusErrorVec";
+                break;
+            case 3:
+                lab = "BusErrorVec";
+                break;
+            case 4:
+                lab = "IllegalInstructionVec";
+                break;
+            case 5:
+                lab = "ZeroDivideVec";
+                break;
+            case 6:
+                lab = "ChkExceptionVec";
+                break;
+            case 7:
+                lab = "TrapVExceptionVec";
+                break;
+            case 8:
+                lab = "PrivililegeViolationVec";
+                break;
+            case 9:
+                lab = "TraceExceptionVec";
+                break;
+            case 10:
+                lab = "Line1010ExceptionVec";
+                break;
+            case 11:
+                lab = "Line1111ExceptionVec";
+                break;
+            case 25:
+            case 26:
+            case 27:
+            case 28:
+            case 29:
+            case 30:
+            case 31:
+                lab = "Level" + std::to_string(vec - 24) + "Vec";
+                break;
+            default:
+                if (vec >= 32 && vec < 48)
+                    lab = "Trap" + hexstring(vec - 32, 1) + "Vec";
+            }
+            labels_[addr] = lab;
+            return;
+        }
+
+        labels_[addr] = "lab_" + hexstring(addr);
     }
 
     void run()
@@ -128,17 +455,18 @@ public:
         while (!roots_.empty()) {
             const auto r = roots_.front();
             roots_.pop();
-            trace(r);
+            regs_ = r.second;
+            trace(r.first);
         }
 
         for (const auto& area : areas_) {
             uint32_t pos = area.beg;
 
             while (pos < area.end) {
-
-                if (visited_.find(pos) == visited_.end()) {
+                auto it = visited_.find(pos);
+                if (it == visited_.end()) {
                     const auto next_visited = visited_.upper_bound(pos);
-                    const auto next_visited_pos = std::min(area.end, next_visited == visited_.end() ? ~0U : *next_visited);
+                    const auto next_visited_pos = std::min(area.end, next_visited == visited_.end() ? ~0U : next_visited->first);
                     handle_data_area(pos, next_visited_pos);
                     pos = next_visited_pos;
                     continue;
@@ -149,49 +477,90 @@ public:
                 read_instruction(iwords, pos);
                 const auto& inst = instructions[iwords[0]];
 
+                regs_ = it->second;
+
+                std::ostringstream extra;
+
                 std::cout << "\t" << inst.name;
                 for (int i = 0; i < inst.nea; ++i) {
                     const auto ea = inst.ea[i];
                     std::cout << (i ? ", " : "\t");
+
+                    auto do_known = [&](std::string lab = "") {
+                        if (!ea_val_[i].known())
+                            return;
+                        if (lab.empty())
+                            lab = ea_string(ea);
+                        if (ea_val_[i].known()) {
+                            extra << "\t" << lab << "=$" << hexfmt(ea_val_[i].raw());
+                        }
+                    };
+
                     switch (ea >> ea_m_shift) {
                     case ea_m_Dn:
                         std::cout << "D" << (ea & ea_xn_mask);
+                        do_known();
                         break;
                     case ea_m_An:
                         std::cout << "A" << (ea & ea_xn_mask);
+                        do_known();
                         break;
                     case ea_m_A_ind:
                         std::cout << "(A" << (ea & ea_xn_mask) << ")";
+                        do_known("A" + std::to_string(ea & ea_xn_mask));
                         break;
                     case ea_m_A_ind_post:
                         std::cout << "(A" << (ea & ea_xn_mask) << ")+";
+                        do_known("A" + std::to_string(ea & ea_xn_mask));
                         break;
                     case ea_m_A_ind_pre:
                         std::cout << "-(A" << (ea & ea_xn_mask) << ")";
+                        do_known("A" + std::to_string(ea & ea_xn_mask));
                         break;
                     case ea_m_A_ind_disp16: {
                         auto n = static_cast<int16_t>(ea_data_[i]);
-                        std::cout << "$";
+                        const auto& aval = regs_.a[ea & 7];
+                        std::ostringstream desc;
+                        desc << "$";
                         if (n < 0) {
-                            std::cout << "-";
+                            desc << "-";
                             n = -n;
                         }
-                        std::cout << hexfmt(static_cast<uint16_t>(n));
-                        std::cout << "(A" << (ea & 7) << ")";
+                        desc << hexfmt(static_cast<uint16_t>(n));
+                        desc << "(A" << (ea & 7) << ")";
+                        if (aval.known()) {
+                            const auto addr = aval.raw() + static_cast<int16_t>(ea_data_[i]);
+                            // Custom reg
+                            if (addr >= 0xDE0000 && addr < 0xE00000) {
+                                const auto ra = addr & ~0x1ff;
+                                std::cout << custom_regname[(addr >> 1) & 0xff];
+                                if (int ofs = (addr & 1) - (aval.raw() & 0x1ff); ofs != 0)
+                                    std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
+                                std::cout << "(A" << (ea & 7) << ")";
+                                break;
+                            } else {
+                                extra << "\t" << desc.str() << " = $" << hexfmt(addr);
+                            }
+                        }
+
+                        std::cout << desc.str();
                         break;
                     }
                     case ea_m_A_ind_index: {
                         const auto extw = ea_data_[i];
                         // Note: 68000 ignores scale in bits 9/10 and full extension word bit (8)
                         auto disp = static_cast<int8_t>(extw & 255);
-                        std::cout << "$";
+                        std::ostringstream desc;
+                        desc << "$";
                         if (disp < 0) {
-                            std::cout << "-";
+                            desc << "-";
                             disp = -disp;
                         }
-                        std::cout << hexfmt(static_cast<uint8_t>(disp)) << "(A" << (ea & 7) << ",";
-                        std::cout << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
-                        std::cout << ")";
+                        desc << hexfmt(static_cast<uint8_t>(disp)) << "(A" << (ea & 7) << ",";
+                        desc << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
+                        desc << ")";
+                        // TODO: Handle know values..
+                        std::cout << desc.str();
                         break;
                     }
                     case ea_m_Other:
@@ -213,6 +582,7 @@ public:
                             std::cout << hexfmt(static_cast<uint8_t>(disp)) << "(PC,";
                             std::cout << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
                             std::cout << ")";
+                            // TODO: Handle know values..
                             break;
                         }
                         case ea_other_imm:
@@ -237,10 +607,18 @@ public:
                         } else if (ea == ea_disp) {
                             print_addr(ea_val_[i].raw());
                         } else {
-                            std::cout << "#$" << hexfmt(inst.data);
+                            if (inst.size == opsize::l && inst.data > 0x400 && labels_.find(inst.data) != labels_.end()) {
+                                std::cout << "#";
+                                print_addr(inst.data);
+                            } else {
+                                std::cout << "#$" << hexfmt(inst.data);
+                            }
                         }
                         break;
                     }
+                }
+                if (!extra.str().empty()) {
+                    std::cout << "\t;" << extra.str();
                 }
                 std::cout << "\n";
                 pos += inst.ilen * 2;
@@ -253,10 +631,10 @@ private:
     static constexpr uint32_t max_ram = 10 << 20;
     std::vector<bool> written_;
     std::vector<uint8_t> data_;
-    std::queue<uint32_t> roots_;
-    std::set<uint32_t> visited_;
+    std::queue<std::pair<uint32_t, simregs>> roots_;
+    std::map<uint32_t, simregs> visited_;
     std::map<uint32_t, std::string> labels_;
-    simval regs_[16];
+    simregs regs_;
 
     struct area {
         uint32_t beg;
@@ -337,12 +715,23 @@ private:
             throw std::runtime_error { "TODO: CIA" };
         }
 
-        //constexpr uint32_t custom_base_addr = 0xDE0000;
-        //constexpr uint32_t custom_mem_size = 0xE00000 - 0xDE0000;
-        if (addr >= 0xDE0000 && addr < 0xE00000) {
-            throw std::runtime_error { "TODO: CUSTOM REG" };
-        }
         #endif
+        if (addr == 0xdff000) {
+            std::cout << "CustomBase";
+            return true;
+        }
+        if (addr >= 0xDE0000 && addr < 0xE00000) {
+            std::string regname = custom_regname[(addr >> 1) & 0xff];
+            for (auto& r : regname) {
+                // tolower
+                if (r >= 'A' && r <= 'Z')
+                    r += 32;
+            }
+            std::cout << regname;
+            if (addr & 1)
+                std::cout << "+1";
+            return true;
+        }
 
         return false;
     }
@@ -384,10 +773,10 @@ private:
             const auto ea = inst.ea[i];
             switch (ea >> ea_m_shift) {
             case ea_m_Dn:
-                ea_val_[i] = regs_[(ea & ea_xn_mask)];
+                ea_val_[i] = regs_.d[ea & ea_xn_mask];
                 break;
             case ea_m_An:
-                ea_val_[i] = regs_[8 + (ea & ea_xn_mask)];
+                ea_val_[i] = regs_.a[ea & ea_xn_mask];
                 break;
             case ea_m_A_ind:
                 // TODO: ea_val_
@@ -491,45 +880,49 @@ private:
             }
         }
         assert(eaw == inst.ilen);
+    }
 
+    void print_sim_regs()
+    {
+        for (uint32_t i = 0; i < 16; ++i) {
+            if (i == 8)
+                std::cout << "\n";
+            else if (i)
+                std::cout << " ";
+            std::cout << (i & 8 ? "A" : "D") << (i & 7) << "=" << std::setw(9) << std::left << (i < 8 ? regs_.d[i & 7] : regs_.a[i & 7]);
+        }
+        std::cout << "\n";
     }
 
     void trace(uint32_t addr)
     {
         for (;;) {
             const auto start = addr;
-            visited_.insert(start);
 
             uint16_t iwords[max_instruction_words];
             read_instruction(iwords, addr);
             const auto& inst = instructions[iwords[0]];
             addr += 2 * inst.ilen;
-#if 0
-            for (uint32_t i = 0; i < 16; ++i) {
-                if (i == 8)
-                    std::cout << "\n";
-                else if (i)
-                    std::cout << " ";
-                std::cout << (i & 8 ? "A" : "D") << (i & 7) << "=" << std::setw(9) << std::left << regs_[i];
-            }
-            std::cout << "\n";
+
+            #if 0
+            print_sim_regs();
             disasm(std::cout, start, iwords, inst.ilen);
             std::cout << "\n";
-#endif
+            #endif
 
             switch (inst.type) {
             case inst_type::Bcc:
             case inst_type::BSR:
             case inst_type::BRA: {
                 assert(inst.nea == 1 && inst.ea[0] == ea_disp);
-                add_root(ea_val_[0].raw());
+                add_root(ea_val_[0].raw(), regs_);
                 if (inst.type == inst_type::BRA)
-                    return;
+                    goto finish;
                 break;
             }
             case inst_type::DBcc:
                 assert(inst.nea == 2 && inst.ea[1] == ea_disp && inst.ilen == 2);
-                add_root(ea_val_[1].raw());
+                add_root(ea_val_[1].raw(), regs_);
                 break;
 
             case inst_type::JSR:
@@ -537,21 +930,127 @@ private:
                 assert(inst.nea == 1);
 
                 if (ea_val_[0].known())
-                    add_root(ea_val_[0].raw());
+                    add_root(ea_val_[0].raw(), regs_);
 
                 if (inst.type == inst_type::JMP)
-                    return;
+                    goto finish;
                 break;
 
             case inst_type::ILLEGAL:
-                //throw std::runtime_error { "ILLEGAL" };
-                return;
-
             case inst_type::RTS:
             case inst_type::RTE:
             case inst_type::RTR:
+            finish:
+                visited_[start] = regs_;
                 return;
-            }       
+
+            default:
+                for (int i = 0; i < inst.nea; ++i) {
+                    if (!ea_val_[i].known())
+                        continue;
+                    const auto ea_addr = ea_val_[i].raw() & 0xffffff;
+                    if (ea_addr >= written_.size() || !written_[ea_addr])
+                        continue;
+                    switch (inst.ea[i] >> ea_m_shift) {
+                    case ea_m_Dn:
+                        break;
+                    case ea_m_An:
+                    case ea_m_A_ind:
+                    case ea_m_A_ind_post:
+                    case ea_m_A_ind_pre:
+                    case ea_m_A_ind_disp16:
+                    case ea_m_A_ind_index:
+                        add_auto_label(ea_addr);
+                        break;
+                    case ea_m_Other:
+                        switch (inst.ea[i] & ea_xn_mask) {
+                        case ea_other_abs_w:
+                        case ea_other_abs_l:
+                        case ea_other_pc_disp16:
+                        case ea_other_pc_index:                            
+                            add_auto_label(ea_addr);
+                            break;
+                        case ea_other_imm:
+                            // Maybe better heuristics here?
+                            if (inst.size == opsize::l)
+                                add_auto_label(ea_addr);
+                            break;
+                        default:
+                            throw std::runtime_error { "Unsupported EA " + ea_string(inst.ea[i]) };
+                        }
+                    default:
+                        if (inst.ea[i] == ea_disp)
+                            throw std::runtime_error { "Unexpected EA " + ea_string(inst.ea[i]) + " for " + inst.name };
+                    }
+                }
+                sim_inst(inst);
+            }
+
+            if (visited_.find(start) == visited_.end()) {
+                // TODO: Combine register values (or something)
+                visited_[start] = regs_;
+            }
+        }
+    }
+
+    void update_mem(opsize size, uint32_t addr, const simval& val)
+    {
+        if (!val.known())
+            return;
+        
+        if (size == opsize::l && !(addr & 3) && addr < 0x400) {
+            add_auto_label(addr);
+            add_root(val.raw(), simregs {});
+            return;
+        }
+
+        std::cerr << "Update $" << hexfmt(addr) << "." << (size == opsize::l ? "L" : size == opsize::w ? "W" : "B") << " to $" << hexfmt(val.raw(), 2*opsize_bytes(size)) << "\n";
+        //throw std::runtime_error { "TODO" };
+    }
+
+    void update_ea(opsize size, uint8_t idx, uint8_t ea, const simval& val)
+    {
+        const auto& ea_val = ea_val_[idx];
+
+        // XXX: TODO
+        if (size != opsize::l)
+            return;
+
+        switch (ea >> ea_m_shift) {
+        case ea_m_Dn:
+            regs_.d[ea & ea_xn_mask] = val;
+            return;
+        case ea_m_An:
+            regs_.a[ea & ea_xn_mask] = val;
+            return;
+            // TOOD
+        //case ea_m_A_ind:
+        //case ea_m_A_ind_post:
+        //case ea_m_A_ind_pre:
+        //case ea_m_A_ind_disp16:
+        //case ea_m_A_ind_index:
+        case ea_m_Other:
+            switch (ea & ea_xn_mask) {
+            case ea_other_abs_w:
+            case ea_other_abs_l:
+            case ea_other_pc_disp16:
+            case ea_other_pc_index:
+                update_mem(size, ea_val.raw(), val);
+                break;
+            }
+        }
+    }
+
+    void sim_inst(const instruction& inst)
+    {
+        switch (inst.type) {
+        case inst_type::LEA:
+            update_ea(opsize::l, 1, inst.ea[1], ea_val_[0]);
+            break;
+        case inst_type::MOVE:
+        case inst_type::MOVEA: // TODO: sign extend if opsize == w
+            update_ea(inst.size, 1, inst.ea[1], ea_val_[0]);
+            break;
         }
     }
 };
@@ -912,7 +1411,7 @@ void hunk_file::read_hunk_exe()
             a.write_data(h.addr, h.data.data(), static_cast<uint32_t>(h.data.size()));
             if (!has_code && h.type == HUNK_CODE) {
                 a.add_label(h.addr, "$$entry"); // Add label if not already present
-                a.add_root(h.addr);
+                a.add_root(h.addr, simregs {});
                 has_code = true;
             }
         }
@@ -1022,8 +1521,16 @@ void read_hunk(const std::vector<uint8_t>& data, bool analyze)
 int main(int argc, char* argv[])
 {
     try {
-        if (argc < 2)
-            throw std::runtime_error { "Usage: m68kdisasm [-a] file [offset] [end]" };
+        if (argc < 2) {
+            std::cerr << "Usage: " << argv[0] << " [-a] file [options...]\n";
+            std::cerr << "   file    source file\n";
+            std::cerr << "   -a      analyze\n";
+            std::cerr << "\n";
+            std::cerr << "Options for non-hunk files:";
+            std::cerr << "   Normal (non-analysis mode) options: [offset] [end] - Normal dissasembly of starting from offset..end\n";
+            std::cerr << "   Analayze options: PC starting program counter of memory dump\n";
+            return 1;
+        }
 
         bool analyze = false;
         if (!strcmp(argv[1], "-a")) {
@@ -1034,14 +1541,25 @@ int main(int argc, char* argv[])
         
         const auto data = read_file(argv[1]);
         if (data.size() > 4 && (get_u32(&data[0]) == HUNK_HEADER || get_u32(&data[0]) == HUNK_UNIT)) {
+            if (argc > 2)
+                throw std::runtime_error { "Too many arguments" };
             read_hunk(data, analyze);
         } else {
-            if (analyze)
-                throw std::runtime_error { "Analyze not supported for raw files yet" };
-
-            const auto offset = argc > 2 ? hex_or_die(argv[2]) : 0;
-            const auto end = argc > 3 ? hex_or_die(argv[3]) : static_cast<uint32_t>(data.size());
-            disasm_stmts(data, offset, end);
+            if (analyze) {
+                if (argc <= 2)
+                    throw std::runtime_error { "Missing start PC" };
+                const auto offset = hex_or_die(argv[2]);
+                analyzer a;
+                a.write_data(0, data.data(), static_cast<uint32_t>(data.size()));
+                a.add_root(offset, simregs {});
+                a.run();
+            } else {
+                if (argc > 4)
+                    throw std::runtime_error { "Too many arguments" };
+                const auto offset = argc > 2 ? hex_or_die(argv[2]) : 0;
+                const auto end = argc > 3 ? hex_or_die(argv[3]) : static_cast<uint32_t>(data.size());
+                disasm_stmts(data, offset, end);
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << e.what() << "\n";
