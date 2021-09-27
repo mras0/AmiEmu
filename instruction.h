@@ -1,0 +1,98 @@
+#ifndef INSTRUCTION_H
+#define INSTRUCTION_H
+
+#include <stdint.h>
+
+enum class opsize {
+    none,
+    b,
+    w,
+    l,
+};
+
+enum class inst_type {
+    ILLEGAL,
+    ABCD,
+    ADD,
+    ADDA,
+    ADDI,
+    ADDQ,
+    ADDX,
+    AND,
+    ANDI,
+    ASL,
+    ASR,
+    BCHG,
+    BCLR,
+    BRA,
+    BSET,
+    BSR,
+    BTST,
+    Bcc,
+    CHK,
+    CLRX,
+    CMP,
+    CMPA,
+    CMPI,
+    CMPM,
+    DBcc,
+    DIVS,
+    DIVU,
+    EOR,
+    EORI,
+    EXT,
+    JMP,
+    JSR,
+    LEA,
+    LINK,
+    LSL,
+    LSR,
+    MOVE,
+    MOVEA,
+    MOVEQ,
+    MULS,
+    MULU,
+    NBCD,
+    NEG,
+    NEGX,
+    NOP,
+    NOT,
+    OR,
+    ORI,
+    PEA,
+    RESET,
+    ROL,
+    ROR,
+    ROXL,
+    ROXR,
+    RTE,
+    RTR,
+    RTS,
+    SBCD,
+    STOP,
+    SUB,
+    SUBA,
+    SUBI,
+    SUBQ,
+    SUBX,
+    SWAP,
+    Scc,
+    TAS,
+    TRAP,
+    TRAPV,
+    TST,
+    UNLK,
+};
+
+struct instruction {
+    inst_type type;
+    const char* const name;
+    opsize size;
+    uint8_t nea;
+    uint8_t ea[2];
+    uint8_t data;
+};
+
+extern const instruction instructions[65536];
+
+#endif
