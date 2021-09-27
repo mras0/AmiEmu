@@ -628,7 +628,7 @@ private:
             prbits("after ", after);
         }
 
-        for (uint8_t dsk = 0; dsk < 4; ++dsk) {
+        for (uint8_t dsk = 0; dsk < max_drives; ++dsk) {
             if (!drives_[dsk])
                 continue;
             auto& d = *drives_[dsk];

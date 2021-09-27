@@ -210,6 +210,7 @@ FC00CC  00FC00D2                    RT_INIT         (execution address)*
 struct command_line_arguments {
     std::string rom;
     std::string df0;
+    std::string df1;
 };
 
 void usage(const std::string& msg)
@@ -228,6 +229,12 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
             if (!args.df0.empty())
                 usage("Multiple df0 arguments");
             args.df0 = argv[i];
+        } else if (!strcmp(argv[i], "-df1")) {
+            if (++i == argc)
+                usage("Missing df1 argument");
+            if (!args.df1.empty())
+                usage("Multiple df1 arguments");
+            args.df1 = argv[i];
         } else if (!strcmp(argv[i], "-rom")) {
             if (++i == argc)
                 usage("Missing rom argument");
@@ -247,8 +254,8 @@ int main(int argc, char* argv[])
 {
     try {
         const auto cmdline_args = parse_command_line_arguments(argc, argv);
-        disk_drive df0 {};
-        disk_drive* drives[max_drives] = { &df0 };
+        disk_drive df0 {"DF0:"}, df1 {"DF1:"};
+        disk_drive* drives[max_drives] = { &df0, &df1 };
         memory_handler mem { 1U << 20 };
         rom_area_handler rom { mem, read_file(cmdline_args.rom) };
         cia_handler cias { mem, rom, drives };
@@ -262,6 +269,8 @@ int main(int argc, char* argv[])
 
         if (!cmdline_args.df0.empty())
             df0.insert_disk(read_file(cmdline_args.df0));
+        if (!cmdline_args.df1.empty())
+            df1.insert_disk(read_file(cmdline_args.df1));
 
         //rom_tag_scan(rom.rom());
 
@@ -343,6 +352,9 @@ int main(int argc, char* argv[])
         df0.set_disk_activity_handler([](uint8_t track, bool write) {
             std::cout << "DF0: " << (write ? "Write" : "Read") << " track $" << hexfmt(track) << "\n";
         });
+        df1.set_disk_activity_handler([](uint8_t track, bool write) {
+            std::cout << "DF1: " << (write ? "Write" : "Read") << " track $" << hexfmt(track) << "\n";
+        });
 
 #ifdef TRACE_LOG
         std::ostringstream oss;
@@ -356,6 +368,7 @@ int main(int argc, char* argv[])
         unsigned steps_to_update = 0;
         std::vector<gui::event> events;
         std::vector<uint8_t> pending_disk;
+        uint8_t pending_disk_drive = 0xff;
         uint32_t disk_chosen_countdown = 0;
         constexpr uint32_t invalid_pc = ~0U;
         bool debug_mode = false;
@@ -386,12 +399,14 @@ int main(int argc, char* argv[])
                         custom.mouse_move(evt.mouse_move.dx, evt.mouse_move.dy);
                         break;
                     case gui::event_type::disk_inserted:
-                        std::cout << "DF0: Ejecting\n";
-                        df0.insert_disk(std::vector<uint8_t>()); // Eject any existing disk
+                        assert(evt.disk_inserted.drive < max_drives && drives[evt.disk_inserted.drive]);
+                        std::cout << drives[evt.disk_inserted.drive]->name() << " Ejecting\n";
+                        drives[evt.disk_inserted.drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
                         if (evt.disk_inserted.filename[0]) {
                             disk_chosen_countdown = 25; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
                             std::cout << "Reading " << evt.disk_inserted.filename << "\n";
                             pending_disk = read_file(evt.disk_inserted.filename);
+                            pending_disk_drive = evt.disk_inserted.drive;
                         }
                         break;
                     case gui::event_type::debug_mode:
@@ -578,8 +593,9 @@ exit_debug:
                 if (last_vpos == 0) {
                     if (disk_chosen_countdown) {
                         if (--disk_chosen_countdown == 0) {
-                            std::cout << "DF0: Inserting disk\n";
-                            df0.insert_disk(std::move(pending_disk));
+                            std::cout << drives[pending_disk_drive]->name() << " Inserting disk\n";
+                            drives[pending_disk_drive]->insert_disk(std::move(pending_disk));
+                            pending_disk_drive = 0xff;
                         }
                     }
                     goto update;

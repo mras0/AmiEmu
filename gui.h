@@ -31,6 +31,7 @@ public:
         int dy;
     };
     struct disk_inserted_event {
+        uint8_t drive;
         char filename[260];
     };
     struct event {

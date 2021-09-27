@@ -17,8 +17,10 @@ constexpr uint16_t MFM_TRACK_SIZE_WORDS = 0x1900; // Number of words in a MFM tr
 
 class disk_drive {
 public:
-    explicit disk_drive();
+    explicit disk_drive(const std::string& name);
     ~disk_drive();
+
+    const std::string& name() const;
 
     using disk_activity_handler = std::function<void (uint8_t track, bool write)>;
 

@@ -141,6 +141,8 @@ gui::disk_inserted_event browse_for_file(HWND hwnd, const char* zz_filter)
     OPENFILENAMEA ofn;
     gui::disk_inserted_event evt;
 
+    evt.drive = MessageBox(hwnd, L"Drive 0?", L"Lame dialog (TODO: Improve)", MB_YESNO) == IDYES ? 0 : 1;
+
     ZeroMemory(&ofn, sizeof(ofn));
     evt.filename[0] = 0;
     ofn.lStructSize = sizeof(ofn);

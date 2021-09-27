@@ -47,16 +47,22 @@ uint32_t checksum(const uint8_t* data, uint32_t nlongs)
 
 class disk_drive::impl {
 public:
-    explicit impl()
+    explicit impl(const std::string& name)
+        : name_ { name }
     {
+    }
+
+    const std::string& name() const
+    {
+        return name_;
     }
 
     void insert_disk(std::vector<uint8_t>&& data)
     {
         if (DEBUG_DISK)
-            *debug_stream << "Inserting disk of size $" << hexfmt(data.size(), 8) << "\n";
+            *debug_stream << name_ << " Inserting disk of size $" << hexfmt(data.size(), 8) << "\n";
         if (data.size() != 0 && data.size() != DISK_SIZE) {
-            throw std::runtime_error { "Invalid disk size $" + hexstring(data.size()) };
+            throw std::runtime_error { name_ + " Invalid disk size $" + hexstring(data.size()) };
         }
         data_ = std::move(data);
     }
@@ -73,20 +79,32 @@ public:
             if (motor_)
                 flags &= ~DSKF_RDY;
         }
+        if (DEBUG_DISK) {
+            *debug_stream << name_ << " State";
+            if (!(flags & DSKF_RDY))
+                *debug_stream << " /RDY";
+            if (!(flags & DSKF_TRACK0))
+                *debug_stream << " /TRACK0";
+            if (!(flags & DSKF_PROT))
+                *debug_stream << " /PROT";
+            if (!(flags & DSKF_CHANGE))
+                *debug_stream << " /CHANGE";
+            *debug_stream << "\n";
+        }
         return flags;
     }
     
     void set_motor(bool enabled)
     {
         if (DEBUG_DISK && motor_ != enabled)
-            *debug_stream << "Motor turning " << (enabled ? "on" : "off") << "\n";
+            *debug_stream << name_ << " Motor turning " << (enabled ? "on" : "off") << "\n";
         motor_ = enabled;
     }
 
     void set_side_dir(bool side, bool dir)
     {
         if (DEBUG_DISK && (side != side_ || seek_dir_ != dir))
-            *debug_stream << "Changing side/stp direction cyl = " << (int)cyl_ << " new side = " << (side ? "lower" : "upper") << " new direction = " << (dir ? "out (towards 0)" : "in (towards 79)") << "\n";
+            *debug_stream << name_ << " Changing side/stp direction cyl = " << (int)cyl_ << " new side = " << (side ? "lower" : "upper") << " new direction = " << (dir ? "out (towards 0)" : "in (towards 79)") << "\n";
         side_ = side;
         seek_dir_ = dir;
     }
@@ -94,25 +112,25 @@ public:
     void dir_step()
     {
         if (DEBUG_DISK)
-            *debug_stream << "Stepping cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
+            *debug_stream << name_ << " Stepping cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
         if (!seek_dir_ && cyl_ < NUM_CYLINDERS - 1)
             ++cyl_;
         else if (seek_dir_ && cyl_)
             --cyl_;
         if (DEBUG_DISK)
-            *debug_stream << "New cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
+            *debug_stream << name_ << " New cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
     }
 
     void read_mfm_track(uint8_t* dest)
     {
         if (!motor_)
-            throw std::runtime_error { "Reading while motor is not on" };
+            throw std::runtime_error { name_ + " Reading while motor is not on" };
 
         // Lower side=first
         const uint8_t tracknum = !side_ + cyl_ * 2;
 
         if (DEBUG_DISK)
-            *debug_stream << "Reading track $" << hexfmt(tracknum) << " cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << "\n";
+            *debug_stream << name_ << " Reading track $" << hexfmt(tracknum) << " cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << "\n";
 
         if (disk_activity_handler_)
             disk_activity_handler_(tracknum, false);
@@ -153,6 +171,7 @@ public:
     }
 
 private:
+    std::string name_;
     std::vector<uint8_t> data_;
     bool motor_ = false;
     bool side_ = false;      // false = upper head, true = lower head
@@ -161,12 +180,17 @@ private:
     disk_activity_handler disk_activity_handler_;
 };
 
-disk_drive::disk_drive()
-    : impl_ { new impl() }
+disk_drive::disk_drive(const std::string& name)
+    : impl_ { new impl{ name } }
 {
 }
 
 disk_drive::~disk_drive() = default;
+
+const std::string& disk_drive::name() const
+{
+    return impl_->name();
+}
 
 void disk_drive::insert_disk(std::vector<uint8_t>&& data)
 {
