@@ -805,7 +805,6 @@ struct custom_state {
     bool dskread;
     uint16_t dskpos;
     uint16_t mfm_pos;
-    uint8_t mfm_sector_cnt;
     uint8_t mfm_track[MFM_TRACK_SIZE_WORDS * 2];
 
     uint32_t copper_pt;
@@ -1602,33 +1601,29 @@ public:
             return false;
         }
         
+        const uint16_t nwords = s_.dsklen_act & 0x3FFF;
+        TODO_ASSERT(nwords > 0);
+
         if (!s_.dskread) {
             if (DEBUG_DISK)
                 DBGOUT << "Reading track\n";
-            assert(s_.mfm_pos == 0);
             assert(s_.dskpos == 0);
             cia_.active_drive().read_mfm_track(s_.mfm_track);
             s_.dskread = true;
             s_.dskwait = 0;
+            // If the program requests a full track, give it in order (buggy loaders, e.g. desert dream)
+            // But e.g. Rink-A-Dink (using a Rob Northen loader) to be able to do a short read (of the sector)
+            // and then the next sector will be the subsequent one (more or less)
+            if (nwords >= MFM_TRACK_SIZE_WORDS)
+                s_.mfm_pos = 0;
             return false;
         }
 
-        const uint16_t nwords = s_.dsklen_act & 0x3FFF;
-        TODO_ASSERT(nwords > 0);
-
         if (!s_.dsksync_passed && (s_.adkcon & 0x400)) {
-            assert(s_.mfm_pos == 0);
-
-            // If short reads are requested return a new sector every time
-            // Needed for e.g. speedball 2
-            if (nwords <= MFM_TRACK_SIZE_WORDS)
-                s_.mfm_pos = s_.mfm_sector_cnt * MFM_SECTOR_SIZE_WORDS;
-            s_.mfm_sector_cnt = (s_.mfm_sector_cnt + 1) % 11;
-
             for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
                 if (get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]) == s_.dsksync) {
                     if (DEBUG_DISK)
-                        DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(i) << "\n";
+                        DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(s_.mfm_pos) << "\n";
                     ++s_.mfm_pos;
                     s_.intreq |= INTF_DSKSYNC;
                     s_.dsksync_passed = true;
@@ -1641,7 +1636,7 @@ public:
         }
 
         if (DEBUG_DISK && !s_.dskpos)
-            DBGOUT << "Disk reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << "\n";
+            DBGOUT << "Disk reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm pos=$" << hexfmt(s_.mfm_pos) << " dsksync_passed=" << s_.dsksync_passed  << "\n";
 
         // 400% floppy speed corrupts display at start of "flower"/Anarchy Germany (https://www.pouet.net/prod.php?which=3037)
         for (uint32_t i = 0; i < floppy_speed_ && s_.dskpos < nwords; ++i) {
@@ -2514,7 +2509,6 @@ public:
             s_.dsklen_act = s_.dsklen == val ? val : 0;
             s_.dsklen = val;
             s_.dskwait = 0;
-            s_.mfm_pos = 0;
             s_.dskpos = 0;
             s_.dsksync_passed = false;
             s_.dskread = false;

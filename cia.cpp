@@ -512,7 +512,6 @@ private:
         if (DEBUG_CIA)
             *debug_stream << "CIA write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
 
-
         switch (reg) {
         case pra:
         case prb:
@@ -632,9 +631,9 @@ private:
         const uint8_t diff = after ^ before;
         if (!diff)
             return;
-        if (DEBUG_DISK) {
+        if (DEBUG_CIA && DEBUG_DISK) {
             auto prbits = [](const char* name, uint8_t b) {
-                std::cout << "  " << name << " $" << hexfmt(b) << " ";
+                *debug_stream << "  " << name << " $" << hexfmt(b) << " ";
                 const char* const names[8] = {
                     "/MOTOR",
                     "/SEL3 ",
@@ -648,14 +647,14 @@ private:
 
                 for (int bit = 7; bit >= 0; bit--) {
                     if (!(b & (1 << bit)))
-                        std::cout << names[7 - bit] << " ";
+                        *debug_stream << names[7 - bit] << " ";
                     else
-                        std::cout << "       ";
+                        *debug_stream << "       ";
                 }
-                std::cout << "\n";
+                *debug_stream << "\n";
             };
 
-            std::cout << "CIAPRB:\n";
+            *debug_stream << "CIAPRB:\n";
             prbits("before", before);
             prbits("after ", after);
         }
