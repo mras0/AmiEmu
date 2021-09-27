@@ -79,7 +79,7 @@ int main(int argc, char* argv[])
         //mem.register_handler(slow_ram, slow_base, slow_size);
 
         //const char* disk = "../../Misc/AmigaWorkbench/Workbench13.adf";
-        const char* disk = R"(..\..\misc\amiga\c2p\out\c2ptest.adf)";
+        const char* disk = R"(..\..\misc\amiga\ham\out\ham.adf)";
 
         m68000 cpu { mem };
 

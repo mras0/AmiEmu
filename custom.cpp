@@ -430,6 +430,7 @@ struct custom_state {
     uint16_t bpldat_temp[6];
     bool bpl1dat_written;
     uint8_t bpldata_avail;
+    uint32_t ham_color;
 
     uint32_t dskpt;
     uint16_t dsklen;
@@ -786,7 +787,36 @@ public:
                         rem_pixelsO = rem_pixelsE = 0;
                     }
 #endif
-                    return rgb4_to_8(s_.color[index]);
+                    if (nbpls < 6)
+                        return rgb4_to_8(s_.color[index]);
+                    if (s_.bplcon0 & BPLCON0F_HOMOD) {
+                        // TODO: HAM5
+                        const int ibits = ((nbpls + 1) & ~1) - 2;
+                        const int val = (index & 0xf) << (8 - ibits);
+                        auto& col = s_.ham_color;
+                        switch (index >> ibits) {
+                        case 0: // Palette entry
+                            col = rgb4_to_8(s_.color[index & 0xf]);
+                            break;
+                        case 1: // Modify B
+                            col = (col & 0xffff00) | val;
+                            break;
+                        case 2: // Modify R
+                            col = (col & 0x00ffff) | val << 16;
+                            break;
+                        case 3: // Modify G
+                            col = (col & 0xff00ff) | val << 8;
+                            break;
+                        default:
+                            assert(false);
+                        }
+                        return col;
+                    } else {
+                        //col = rgb4_to_8(s_.color[index & 0x1f]);
+                        //if (index & 0x20)
+                        //    col = (col & 0xfefefe) >> 1;
+                        TODO_ASSERT(!"EHB not impemented");
+                    }
                 };
 
                 if (s_.bplcon0 & BPLCON0F_HIRES) {
@@ -934,6 +964,7 @@ public:
 #ifdef BPL_DMA_DEBUG
             rem_pixelsO = rem_pixelsE = 0;
 #endif
+            s_.ham_color = rgb4_to_8(s_.color[0]);
 
             cia_.increment_tod_counter(1);
             if ((s_.dmacon & (DMAF_MASTER|DMAF_RASTER)) == (DMAF_MASTER|DMAF_RASTER) && vert_disp) {
