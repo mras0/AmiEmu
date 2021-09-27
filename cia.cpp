@@ -570,8 +570,6 @@ private:
             if (val & CIACRAF_LOAD) {
                 val &= ~CIACRAF_LOAD;
                 s.timer_val[0] = s.timer_latch[0];
-                if (val & CIACRAF_RUNMODE)
-                    val |= CIACRAF_START;
             }
             if (idx == 0 && !(s.cr[0] & CIACRAF_SPMODE) && (val & CIACRAF_SPMODE)) {
                 if (!kbd_.ack_) {
@@ -588,8 +586,6 @@ private:
             if (val & CIACRAF_LOAD) {
                 val &= ~CIACRAF_LOAD;
                 s.timer_val[1] = s.timer_latch[1];
-                if (val & CIACRAF_RUNMODE)
-                    val |= CIACRAF_START;
             }
             s.cr[reg - cra] = val;
             break;
