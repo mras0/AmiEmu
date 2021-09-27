@@ -251,11 +251,7 @@ public:
 
     uint8_t read_u8(uint32_t addr, uint32_t) override
     {
-        if (valid_address(addr)) {
-            return handle_read(!(addr & 1), (addr >> 8) & 0xf);
-        }
-        std::cerr << "To handle 8-bit read from CIA: addr=$" << hexfmt(addr) << "\n";
-        return 0xFF;
+        return handle_read(!(addr & 1), (addr >> 8) & 0xf);
     }
 
     uint16_t read_u16(uint32_t addr, uint32_t offset) override
@@ -265,11 +261,7 @@ public:
 
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override
     {
-        if (valid_address(addr)) {
-            handle_write(!(addr & 1), (addr >> 8) & 0xf, val);
-        } else {
-            std::cerr << "[CIA] Ignoring Invalid CIA byte write : " << hexfmt(addr) << " val = $" << hexfmt(val) << "\n";
-        }
+        handle_write(!(addr & 1), (addr >> 8) & 0xf, val);
     }
 
     void write_u16(uint32_t addr, uint32_t, uint16_t val) override
@@ -427,16 +419,6 @@ private:
         kbd_.buffer_head_ = kbd_.buffer_tail_ = 0;
         kbd_.ack_ = true;
         rom_handler_.set_overlay(true);
-    }
-
-    static constexpr bool valid_address(uint32_t addr)
-    {
-        if ((addr & 1) && !(addr & 0xF0) && addr >= 0xBFE001 && addr <= 0xBFEF01) {
-            return true;
-        } else if (!(addr & 1) && !(addr & 0xF0) && addr >= 0xBFD000 && addr <= 0xBFDF00) {
-            return true;
-        }
-        return false;
     }
 
     uint8_t handle_read(uint8_t idx, uint8_t reg)
