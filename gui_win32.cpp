@@ -7,6 +7,7 @@
 #include "ioutil.h"
 #include "color_util.h"
 #include "memory.h"
+#include "state_file.h"
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -138,7 +139,7 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     return map;
 }();
 
-bool browse_for_file(HWND hwnd, const char* zz_filter, std::string& filename)
+bool browse_for_file(HWND hwnd, const char* zz_filter, std::string& filename, bool load = true, const char* defext = nullptr)
 {
     OPENFILENAMEA ofn;
 
@@ -148,11 +149,17 @@ bool browse_for_file(HWND hwnd, const char* zz_filter, std::string& filename)
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd;
     ofn.lpstrFilter = zz_filter;
+    ofn.lpstrDefExt = defext;
     ofn.lpstrFile = path;
     ofn.nMaxFile = sizeof(path);
-    ofn.Flags = OFN_PATHMUSTEXIST;
-    if (!GetOpenFileNameA(&ofn))
-        return false;
+    ofn.Flags = load ? OFN_PATHMUSTEXIST : 0;
+    if (load) {
+        if (!GetOpenFileNameA(&ofn))
+            return false;
+    } else {
+        if (!GetSaveFileNameA(&ofn))
+            return false;
+    }
     filename = path;
     return true;
 }
@@ -674,7 +681,8 @@ private:
             if (int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam)); id >= 1000) {
                 const auto col = color_value_from_control(id - 1000);
                 if (col != invalid_color_value) {
-                    COLORREF col8 = rgb4_to_8(static_cast<uint16_t>(col));
+                    const auto rgb = rgb4_to_8(static_cast<uint16_t>(col));
+                    COLORREF col8 = (rgb & 0xff0000) >> 16 | (rgb & 0x00ff00) | (rgb & 0xff) << 16;
                     SetDCBrushColor(hdc, col8);
                     SetBkColor(hdc, col8);
                     return reinterpret_cast<LRESULT>(GetStockObject(DC_BRUSH));
@@ -694,7 +702,7 @@ public:
     static memory_visualizer_window* create(int x, int y)
     {
         std::unique_ptr<memory_visualizer_window> wnd { new memory_visualizer_window {} };
-        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW | WS_MINIMIZE, x, y, 800, 800, nullptr);
+        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW | WS_MINIMIZE, x, y, 1024, 900, nullptr);
         return wnd.release();
     }
 
@@ -725,12 +733,13 @@ private:
         F_PL3,
         F_PL4,
         F_PL5,
+        F_PL6,
+        F_MAX,
     };
     static constexpr struct {
         const wchar_t* const name;
         int val;
     } fields[] = {
-        #if 0
         { L"Width", 320 },
         { L"Height", 256 },
         { L"BPLCON0", 1<<12 },
@@ -742,22 +751,16 @@ private:
         { L"Plane4", 0 },
         { L"Plane5", 0 },
         { L"Plane6", 0 },
-        #else
-        { L"Width", 352 },
-        { L"Height", 512 },
-        { L"BPLCON0", 0x9200 },
-        { L"Modulo1", 0 },
-        { L"Modulo2", 0 },
-        { L"Plane1", 0x4b000 },
-        { L"Plane2", 0 },
-        { L"Plane3", 0 },
-        { L"Plane4", 0 },
-        { L"Plane5", 0 },
-        { L"Plane6", 0 },
-#endif
     };
-    uint16_t palette_[32];
     static constexpr auto num_fields = sizeof(fields) / sizeof(*fields);
+    static_assert(num_fields == F_MAX);
+    static constexpr const char* const lpzz_mvfilter = "Memviz (*.mvpreset)\0*.mvpreset\0All files (*.*)\0*.*\0";
+    struct settings {
+        int fields[num_fields];
+        uint16_t palette[32];
+        bool other_playfield;
+    } presets_[10];
+    uint32_t current_preset_ = 0;
     bitmap_window* bitmap_window_;
     HWND field_combo_[num_fields];
     HWND update_button_;
@@ -772,19 +775,47 @@ private:
         custom_.resize(0x100);
     }
 
+    settings& current_settings()
+    {
+        return presets_[current_preset_];
+    }
+
     bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
-        bitmap_window_ = bitmap_window::create(toolbar_width_, 0, fields[0].val, fields[0].val, hwnd);
-        for (int i = 0; i < 32; ++i)
-            palette_[i] = rgb8_to_4(default_palette[i]);
+        for (auto& p : presets_) {
+            for (int i = 0; i < 32; ++i)
+                p.palette[i] = rgb8_to_4(default_palette[i]);
+            for (size_t i = 0; i < num_fields; ++i)
+                p.fields[i] = fields[i].val;
+            p.other_playfield = false;
+        }
 
         const auto hInstance = GetModuleHandle(nullptr);
         const int w = toolbar_width_ - 2 * toolbar_margin_x;
         const int elem_y = 16;
         int y = toolbar_margin_y;
+
+        const int radio_spacing = 60;
+        for (size_t i = 0; i < 10; ++i) {
+            wchar_t temp[20];
+            wsprintfW(temp, L"&%d", static_cast<int>(i + 1) % 10);
+            auto btn = CreateWindow(L"BUTTON", temp, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | (i ? 0 : WS_GROUP), toolbar_margin_x + static_cast<int>(i) * radio_spacing, y, 30, elem_y, hwnd, reinterpret_cast<HMENU>(400 + i), hInstance, nullptr);
+            if (!i)
+                SendMessage(btn, BM_SETCHECK, 1, 0);
+        }
+        CreateWindow(L"BUTTON", L"&Save", WS_CHILD | WS_VISIBLE | WS_GROUP | WS_TABSTOP, toolbar_margin_x * 2 + 10 * radio_spacing, y, 80, elem_y, hwnd, reinterpret_cast<HMENU>(350), hInstance, nullptr);
+        CreateWindow(L"BUTTON", L"&Load", WS_CHILD | WS_VISIBLE | WS_TABSTOP, toolbar_margin_x * 3 + 10 * radio_spacing + 80, y, 80, elem_y, hwnd, reinterpret_cast<HMENU>(351), hInstance, nullptr);
+
+        y += toolbar_margin_y * 2 + elem_y;
+
+        auto& s = current_settings();
+
+        bitmap_window_ = bitmap_window::create(toolbar_width_, y, fields[F_WIDTH].val, fields[F_HEIGHT].val, hwnd);
+
         for (size_t i = 0; i < num_fields; ++i) {
             const auto& f = fields[i];
             wchar_t text[256];
+            s.fields[i] = f.val;
             if (i >= F_PL1 || i == F_BPLCON0)
                 wsprintfW(text, L"$%X", f.val);
             else
@@ -808,9 +839,10 @@ private:
         y += toolbar_margin_y * 2 + elem_y;
         playfield_selection_ = CreateWindow(L"BUTTON", L"&Other playfield", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(302), hInstance, nullptr);
 
-        SetFocus(field_combo_[0]);
-
         update();
+
+        last_focus_ = update_button_;
+        SetFocus(update_button_);
 
         return true;
     }
@@ -837,11 +869,41 @@ private:
             } else if (id == 300 && code == BN_CLICKED) {
                 update_from_custom();
             } else if (id == 301 && code == BN_CLICKED) {
-                palette_edit_dialog::run(hwnd, palette_, custom_);
+                palette_edit_dialog::run(hwnd, current_settings().palette, custom_);
                 update();
             } else if (id == 302 && code == BN_CLICKED) {
                 // Other playfield
+                current_settings().other_playfield = !!SendMessage(playfield_selection_, BM_GETCHECK, 0, 0);
                 update();
+            } else if (id == 350 && code == BN_CLICKED) {
+                // Save preset
+                std::string filename;
+                if (browse_for_file(hwnd, lpzz_mvfilter, filename, false, "mvpreset")) {
+                    state_file sf { state_file::dir::save, filename };
+                    handle_state(sf);
+                }
+            } else if (id == 351 && code == BN_CLICKED) {
+                // Load preset
+                std::string filename;
+                if (browse_for_file(hwnd, lpzz_mvfilter, filename, true)) {
+                    try {
+                        state_file sf { state_file::dir::load, filename };
+                        const auto old = current_preset_;
+                        handle_state(sf);
+                        SendDlgItemMessage(hwnd, 400 + old, BM_SETCHECK, 0, 0);
+                        SendDlgItemMessage(hwnd, 400 + current_preset_, BM_SETCHECK, 1, 0);
+                        set_controls_from_settings();
+                        update();
+                    } catch (const std::exception& e) {
+                        MessageBoxA(hwnd, e.what(), "Load failed", MB_ICONERROR);
+                    }
+                }
+            } else if (code == BN_CLICKED && id >= 400 && id <= 409) {
+                if (current_preset_ != static_cast<uint32_t>(id - 400)) {
+                    current_preset_ = id - 400;
+                    set_controls_from_settings();
+                    update();
+                }
             }
             break;
         }
@@ -852,6 +914,13 @@ private:
         }
         }
         return window_base::wndproc(hwnd, uMsg, wParam, lParam);
+    }
+
+    void handle_state(state_file& sf)
+    {
+        const state_file::scope scope { sf, "Memory Visualizer Preset", 1 };
+        sf.handle_blob(presets_, sizeof(presets_));
+        sf.handle(current_preset_);
     }
 
     int get_field(enum field f)
@@ -877,29 +946,34 @@ private:
         if (mem_.empty())
             return;
 
+        settings& s = current_settings();
+
         try {
-            const int width = get_field(F_WIDTH);
-            const int height = get_field(F_HEIGHT);
-            const int bplcon0 = get_field(F_BPLCON0);
-            const int16_t mod1 = static_cast<int16_t>(get_field(F_MODULO1));
-            const int16_t mod2 = static_cast<int16_t>(get_field(F_MODULO2));
+            for (size_t i = 0; i < num_fields; ++i)
+                s.fields[i] = get_field(static_cast<enum field>(i));
+            
+
+            const int width    = s.fields[F_WIDTH];
+            const int height   = s.fields[F_HEIGHT];
+            const int bplcon0  = s.fields[F_BPLCON0];
+            const int16_t mod1 = static_cast<int16_t>(s.fields[F_MODULO1]);
+            const int16_t mod2 = static_cast<int16_t>(s.fields[F_MODULO1]);
             uint32_t pt[maxplanes];
 
             for (size_t i = 0; i < maxplanes; ++i)
-                pt[i] = get_field(static_cast<field>(F_PL1 + i));
-
+                pt[i] = s.fields[F_PL1 + i];
 
             if (width != bitmap_window_->width() || height != bitmap_window_->height()) {
                 bitmap_window_->set_size(width, height);
-                SetWindowPos(bitmap_window_->handle(), nullptr, toolbar_width_, 0, width, height, SWP_NOZORDER);
+                SetWindowPos(bitmap_window_->handle(), nullptr, 0, 0, width, height, SWP_NOZORDER | SWP_NOMOVE);
             }
-            const bool altpf = !!SendMessage(playfield_selection_, BM_GETCHECK, 0, 0);
+            const bool altpf = s.other_playfield;
             const int nbpls = std::min(6, (bplcon0 >> 12) & 7);
             std::vector<uint32_t> bitmap(static_cast<size_t>(width * height));
             const uint32_t ptmask = static_cast<uint32_t>(mem_.size() - 1);
             for (int y = 0; y < height; ++y) {
                 uint16_t data[maxplanes];
-                uint32_t hamcolor = rgb4_to_8(palette_[0]);
+                uint32_t hamcolor = rgb4_to_8(s.palette[0]);
                 for (int x = 0; x < width; ++x) {
                     if ((x & 15) == 0) {
                         for (int p = 0; p < nbpls; ++p) {
@@ -918,16 +992,16 @@ private:
 
                     if (bplcon0 & 0x400) { // Dual playfield
                         if (altpf) {
-                            bitmap[x + y * width] = rgb4_to_8(palette_[8 + (((idx & 2) >> 1) | ((idx & 8) >> 2) | ((idx & 32) >> 3))]);
+                            bitmap[x + y * width] = rgb4_to_8(s.palette[8 + (((idx & 2) >> 1) | ((idx & 8) >> 2) | ((idx & 32) >> 3))]);
                         } else {
-                            bitmap[x + y * width] = rgb4_to_8(palette_[(idx & 1) | ((idx & 4) >> 1) | ((idx & 16) >> 2)]);
+                            bitmap[x + y * width] = rgb4_to_8(s.palette[(idx & 1) | ((idx & 4) >> 1) | ((idx & 16) >> 2)]);
                         }
                     } else if (bplcon0 & 0x800) { // HAM
                         const int ibits = ((nbpls + 1) & ~1) - 2;
                         const int val = (idx & 0xf) << (8 - ibits);
                         switch (idx >> ibits) {
                         case 0: // Palette entry
-                            hamcolor = rgb4_to_8(palette_[idx & 0xf]);
+                            hamcolor = rgb4_to_8(s.palette[idx & 0xf]);
                             break;
                         case 1: // Modify B
                             hamcolor = (hamcolor & 0xffff00) | val;
@@ -943,10 +1017,10 @@ private:
                         }
                         bitmap[x + y * width] = hamcolor;
                     } else if (nbpls == 6) { // EHB
-                        const auto val = rgb4_to_8(palette_[idx & 0x1f]);
+                        const auto val = rgb4_to_8(s.palette[idx & 0x1f]);
                         bitmap[x + y * width] = idx & 0x20 ? (val & 0xfefefe) >> 1 : val;
                     } else {
-                        bitmap[x + y * width] = rgb4_to_8(palette_[idx]);
+                        bitmap[x + y * width] = rgb4_to_8(s.palette[idx]);
                     }
                 }
 
@@ -960,52 +1034,57 @@ private:
         }
     }
 
+    void set_controls_from_settings()
+    {
+        const settings& s = current_settings();
+        for (size_t i = 0; i < num_fields; ++i) {
+            wchar_t text[256];
+            if (i >= F_PL1 || i == F_BPLCON0)
+                wsprintfW(text, L"$%X", s.fields[i]);
+            else
+                wsprintfW(text, L"%d", s.fields[i]);
+            SetWindowTextW(field_combo_[i], text);
+        }
+        SendMessage(playfield_selection_, BM_SETCHECK, s.other_playfield, 0);
+    }
+
     void update_from_custom()
     {
-        char temp[256];
+        settings& s = current_settings();
         // BPLxPT
         for (int i = 0; i < maxplanes; ++i) {
-            const auto ofs = 0xe0/2 + i * 2;
-            snprintf(temp, sizeof(temp), "$%0X", custom_[ofs]<<16|custom_[ofs+1]);
-            SetWindowTextA(field_combo_[F_PL1 + i], temp);
+            const auto ofs = 0xe0 / 2 + i * 2;
+             s.fields[F_PL1 + i]  = custom_[ofs] << 16 | custom_[ofs + 1];
         }
 
         // COLOR
         for (int i = 0; i < 32; ++i) {
-            palette_[i] = custom_[0x180/2 + i];
+            s.palette[i] = custom_[0x180 / 2 + i];
         }
 
         const auto bplcon0 = custom_[0x100 / 2];
-        snprintf(temp, sizeof(temp), "$%X", bplcon0);
-        SetWindowTextA(field_combo_[F_BPLCON0], temp);
-
         const auto ddfstrt = custom_[0x92 / 2] & 0xfc;
         const auto ddfstop = custom_[0x94 / 2] & 0xfc;
 
         unsigned w;
         if (bplcon0 & 0x8000) {
             w = ((ddfstop - ddfstrt) / 4 + 2) * 16;
-            if ((ddfstop - ddfstrt)/4 & 1) // Hack
+            if ((ddfstop - ddfstrt) / 4 & 1) // Hack
                 w += 16;
         } else {
             w = ((ddfstop - ddfstrt) / 8 + 1) * 16;
         }
 
-        snprintf(temp, sizeof(temp), "%d", w);
-        SetWindowTextA(field_combo_[F_WIDTH], temp);
 
         const auto ydiwstart = custom_[0x8e / 2] >> 8;
         const auto ydiwstop = custom_[0x90 / 2] >> 8 | (custom_[0x90 / 2] & 0x8000 ? 0 : 0x100);
 
-        snprintf(temp, sizeof(temp), "%d", ydiwstop-ydiwstart+1);
-        SetWindowTextA(field_combo_[F_HEIGHT], temp);
-
-        snprintf(temp, sizeof(temp), "%d", static_cast<int16_t>(custom_[0x108/2])); // BPL1MOD
-        SetWindowTextA(field_combo_[F_MODULO1], temp);
-
-        snprintf(temp, sizeof(temp), "%d", static_cast<int16_t>(custom_[0x10A / 2])); // BPL2MOD
-        SetWindowTextA(field_combo_[F_MODULO2], temp);
-
+        s.fields[F_BPLCON0] = bplcon0;
+        s.fields[F_WIDTH] = w;
+        s.fields[F_HEIGHT] = ydiwstop - ydiwstart;
+        s.fields[F_MODULO1] = static_cast<int16_t>(custom_[0x108 / 2]); // BPL1MOD
+        s.fields[F_MODULO2] = static_cast<int16_t>(custom_[0x10A / 2]); // BPL2MOD
+        set_controls_from_settings();
         InvalidateRect(handle(), nullptr, FALSE);
         update();
     }
