@@ -227,9 +227,9 @@ public:
             }
         }
 
-        if (kbd_buffer_head_ != kbd_buffer_tail_ && kbd_ack_ && !(s_[0].cr[0] & CIACRAF_SPMODE)) {
-            kbd_ack_ = false;
-            s_[0].sdrdata = kbd_buffer_[kbd_buffer_tail_++ % sizeof(kbd_buffer_)];
+        if (kbd_.buffer_head_ != kbd_.buffer_tail_ && kbd_.ack_ && !(s_[0].cr[0] & CIACRAF_SPMODE)) {
+            kbd_.ack_ = false;
+            s_[0].sdrdata = kbd_.buffer_[kbd_.buffer_tail_++ % sizeof(kbd_.buffer_)];
             s_[0].trigger_int(CIAICRB_SP);
 #ifdef KEYBOARD_DEBUG
             std::cout << "Dequeuing keyboard data: $" << hexfmt(s_[0].sdrdata) << "\n";
@@ -285,14 +285,14 @@ public:
     {
         assert(raw <= 0x7f);
         // Bit0: 1=down/0=up, Bit1..7: ~scancore (i.e. bitwise not)
-        if (static_cast<uint8_t>(kbd_buffer_head_ - kbd_buffer_tail_) >= sizeof(kbd_buffer_)) {
+        if (static_cast<uint8_t>(kbd_.buffer_head_ - kbd_.buffer_tail_) >= sizeof(kbd_.buffer_)) {
             std::cerr << "Keyboard buffer overrun\n";
             return;
         }
 #ifdef KEYBOARD_DEBUG
         std::cout << "Adding to keyboard buffer: $" << hexfmt<uint8_t>((pressed & 1) | (~raw) << 1) << "\n";
 #endif
-        kbd_buffer_[(kbd_buffer_head_++) % sizeof(kbd_buffer_)] = (pressed & 1) | (~raw) << 1;
+        kbd_.buffer_[(kbd_.buffer_head_++) % sizeof(kbd_.buffer_)] = (pressed & 1) | (~raw) << 1;
     }
 
     void set_button_state(uint8_t idx, bool pressed)
@@ -344,6 +344,20 @@ public:
         }
     }
 
+    void handle_state(state_file& sf)
+    {
+        const state_file::scope scope { sf, "CIA", 1 };
+        sf.handle_blob(&s_[0], sizeof(state));
+        sf.handle_blob(&s_[1], sizeof(state));
+        sf.handle_blob(&kbd_, sizeof(kbd_));
+        for (auto d : drives_)
+            if (d)
+                d->handle_state(sf);
+
+        if (sf.loading())
+            rom_handler_.set_overlay(!!(s_[0].port_value(0) & CIAF_OVERLAY));
+    }
+
 private:
     memory_handler& mem_handler_;
     rom_area_handler& rom_handler_;
@@ -381,10 +395,12 @@ private:
         }
 
     } s_[2];
-    uint8_t kbd_buffer_[8];
-    uint8_t kbd_buffer_head_;
-    uint8_t kbd_buffer_tail_;
-    bool kbd_ack_;
+    struct {
+        uint8_t buffer_[8];
+        uint8_t buffer_head_;
+        uint8_t buffer_tail_;
+        bool ack_;
+    } kbd_;
 
     static constexpr uint32_t latch_active_mask = 0x8000'0000;
 
@@ -396,24 +412,9 @@ private:
         s_[1].port_input[1] = 0xFF;
         s_[1].port_input[0] = 0xFF;
         s_[1].port_input[1] = 0xFF;
-        kbd_buffer_head_ = kbd_buffer_tail_ = 0;
-        kbd_ack_ = true;
+        kbd_.buffer_head_ = kbd_.buffer_tail_ = 0;
+        kbd_.ack_ = true;
         rom_handler_.set_overlay(true);
-    }
-
-    void handle_state(state_file& sf) override
-    {
-        const state_file::scope scope { sf, "CIA", 1 };
-        sf.handle_blob(&s_[0], sizeof(state));
-        sf.handle_blob(&s_[1], sizeof(state));
-        for (auto d : drives_)
-            if (d)
-                d->handle_state(sf);
-
-        if (sf.loading())
-            rom_handler_.set_overlay(!!(s_[0].port_value(0) & CIAF_OVERLAY));
-
-        std::cerr << "\n\n**** WARNING : CIA keyboard state not handled!!! *** \n\n";
     }
 
     static constexpr bool valid_address(uint32_t addr)
@@ -549,8 +550,10 @@ private:
                 s.counter = (s.counter & 0xff00ffff) | val << 16;
             break;
         case sdr:
-            if (!(s.cr[0] & CIACRAF_SPMODE))
-                throw std::runtime_error { "SR not in output mode?" };
+            if (!(s.cr[0] & CIACRAF_SPMODE)) {
+                std::cerr << "[CIA] Ignoring write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << " - SP not in output mode\n";
+                break;
+            }
             assert(s.cr[0] & CIACRAF_SPMODE); // SDR must be in output mode
             s.sdrdata = val;
             break; // Ignore value written (probably keyboard handshake)
@@ -574,11 +577,11 @@ private:
                     val |= CIACRAF_START;
             }
             if (idx == 0 && !(s.cr[0] & CIACRAF_SPMODE) && (val & CIACRAF_SPMODE)) {
-                if (!kbd_ack_) {
+                if (!kbd_.ack_) {
 #ifdef KEYBOARD_DEBUG
                     std::cout << "CIAA SPMODE set. Acking keyboard command srdata=$" << hexfmt(s.sdrdata) << "\n";
 #endif
-                    kbd_ack_ = true;
+                    kbd_.ack_ = true;
                 }
             }
             s.cr[reg - cra] = val;
@@ -709,4 +712,9 @@ disk_drive& cia_handler::active_drive()
 void cia_handler::show_debug_state(std::ostream& os)
 {
     impl_->show_debug_state(os);
+}
+
+void cia_handler::handle_state(state_file& sf)
+{
+    impl_->handle_state(sf);
 }

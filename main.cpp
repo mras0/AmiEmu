@@ -219,7 +219,7 @@ struct command_line_arguments {
 
     void handle_state(state_file& sf)
     {
-        const state_file::scope scope { sf, "Command line arguments", 0 };
+        const state_file::scope scope { sf, "Command line arguments", 1 };
         sf.handle(rom);
         sf.handle(df0);
         sf.handle(df1);
@@ -544,13 +544,22 @@ int main(int argc, char* argv[])
             autoconf.add_device(hd->autoconf_dev());
         }
 
-        if (state) {
-            mem.handle_state(*state);
-            cpu.handle_state(*state);
-            // Fake up something for the debugger
-            cpu_step.current_pc = cpu_step.last_pc = cpu.state().pc;
-            cpu_step.instruction = cpu.state().prefecth_val;
-        }
+        auto handle_machine_state = [&](state_file& sf) {
+            mem.handle_state(sf);
+            custom.handle_state(sf);
+            cias.handle_state(sf);
+            rtc.handle_state(sf);
+            autoconf.handle_state(sf);
+            cpu.handle_state(sf);
+            if (sf.loading()) {
+                // Fake up something for the debugger
+                cpu_step.current_pc = cpu_step.last_pc = cpu.state().pc;
+                cpu_step.instruction = cpu.state().prefecth_val;
+            }
+        };
+
+        if (state)
+            handle_machine_state(*state);
 
         auto cstep = [&](bool cpu_waiting) {
             const bool cpu_was_active = cpu_active;
@@ -1019,11 +1028,9 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "write_state") {
                             if (args.size() > 1) {
                                 assert(cycles_todo == 0);
-                                state_file sf { state_file::dir::save, args[1] };
-
+                                state_file sf{ state_file::dir::save, args[1] };
                                 cmdline_args.handle_state(sf);
-                                mem.handle_state(sf);
-                                cpu.handle_state(sf);
+                                handle_machine_state(sf);
                             } else {
                                 std::cout << "Missing argument (file)\n";
                             }

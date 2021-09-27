@@ -12,6 +12,12 @@ public:
         mem.register_handler(*this, 0xdc0000, 0x1000);
     }
 
+    void handle_state(state_file& sf)
+    {
+        const state_file::scope scope { sf, "RTC", 1 };
+        sf.handle_blob(cr_, sizeof(cr_));
+    }
+
 private:
     static constexpr uint8_t crd_hold = 1;
     static constexpr uint8_t crd_busy = 2;
@@ -29,12 +35,6 @@ private:
 
     void reset() override
     {
-    }
-
-    void handle_state(state_file& sf) override
-    {
-        const state_file::scope scope { sf, "RTC", 1 };
-        sf.handle_blob(cr_, sizeof(cr_));
     }
 
     uint8_t read_u8(uint32_t, uint32_t offset) override
@@ -115,3 +115,8 @@ real_time_clock::real_time_clock(memory_handler& mem) : impl_{ new impl{mem} }
 }
 
 real_time_clock::~real_time_clock() = default;
+
+void real_time_clock::handle_state(class state_file& sf)
+{
+    impl_->handle_state(sf);
+}

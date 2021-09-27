@@ -945,7 +945,7 @@ public:
         s_.copstate = copper_state::halted;
     }
 
-    void handle_state(state_file& sf) override
+    void handle_state(state_file& sf)
     {
         const state_file::scope scope { sf, "Custom", 1 };
         sf.handle_blob(&s_, sizeof(s_));
@@ -2965,6 +2965,11 @@ uint32_t custom_handler::copper_ptr(uint8_t idx)
 std::vector<uint16_t> custom_handler::get_regs()
 {
     return impl_->get_regs();
+}
+
+void custom_handler::handle_state(state_file& sf)
+{
+    impl_->handle_state(sf);
 }
 
 std::string custom_regname(uint32_t offset)

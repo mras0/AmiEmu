@@ -33,6 +33,8 @@ public:
         const uint32_t pos_;
     };
 
+    void handle(uint8_t& num);
+    void handle(uint16_t& num);
     void handle(uint32_t& num);
     void handle(std::string& s);
     void handle(std::vector<uint8_t>& vec);

@@ -8,7 +8,9 @@ namespace {
 
 constexpr uint32_t marker_scope_start = 0;
 constexpr uint32_t marker_scope_end   = 1;
-constexpr uint32_t marker_u32         = 100;
+constexpr uint32_t marker_u8          = 100;
+constexpr uint32_t marker_u16         = 101;
+constexpr uint32_t marker_u32         = 102;
 constexpr uint32_t marker_blob        = 200;
 constexpr uint32_t marker_string      = 300;
 constexpr uint32_t marker_vec_u8      = 400;
@@ -38,6 +40,7 @@ public:
     uint32_t open_scope(const char* id, uint32_t version)
     {
         if (dir_ == dir::save) {
+            //std::cout << "Saving " << id << " version " << version << "\n";
             put_u32(marker_scope_start);
             put_string(id);
             put_u32(version);
@@ -53,7 +56,7 @@ public:
             if (ver != version)
                 throw std::runtime_error { filename_ + ": Expected version " + std::to_string(version) + " got " + std::to_string(ver) + " for scope " + id };
             get_u32(); // Ignore length for now
-            std::cout << "Restoring " << id << " version " << version << "\n";
+            //std::cout << "Restoring " << id << " version " << version << "\n";
             return 0;
         }
     }
@@ -90,6 +93,28 @@ public:
             put_vector(marker_vec_u8, vec);
         else
             get_vector(marker_vec_u8, vec);
+    }
+
+    void handle(uint8_t& num)
+    {
+        if (dir_ == dir::save) {
+            put_u32(marker_u8);
+            put_u8(num);
+        } else {
+            expect_marker(marker_u8);
+            num = get_u8();
+        }
+    }
+
+    void handle(uint16_t& num)
+    {
+        if (dir_ == dir::save) {
+            put_u32(marker_u16);
+            put_u16(num);
+        } else {
+            expect_marker(marker_u16);
+            num = get_u16();
+        }
     }
 
     void handle(uint32_t& num)
@@ -133,6 +158,28 @@ private:
         const auto m = get_u32();
         if (m != marker)
             throw std::runtime_error { filename_ + ": Failed to load. Expected marker " + std::to_string(marker) + " got " + std::to_string(m) };
+    }
+
+    void put_u8(uint8_t p)
+    {
+        f_.put(p);
+    }
+
+    uint8_t get_u8()
+    {
+        return static_cast<uint8_t>(f_.get());
+    }
+
+    void put_u16(uint16_t p)
+    {
+        f_.write(reinterpret_cast<const char*>(&p), sizeof(p));
+    }
+
+    uint16_t get_u16()
+    {
+        uint16_t n;
+        f_.read(reinterpret_cast<char*>(&n), sizeof(n));
+        return n;
     }
 
     void put_u32(uint32_t p)
@@ -212,6 +259,16 @@ void state_file::handle(std::vector<uint8_t>& vec)
 void state_file::handle_blob(void* blob, uint32_t size)
 {
     impl_->handle_blob(blob, size);
+}
+
+void state_file::handle(uint8_t& num)
+{
+    impl_->handle(num);
+}
+
+void state_file::handle(uint16_t& num)
+{
+    impl_->handle(num);
 }
 
 void state_file::handle(uint32_t& num)

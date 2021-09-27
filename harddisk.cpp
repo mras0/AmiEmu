@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "ioutil.h"
 #include "autoconf.h"
+#include "state_file.h"
 #include <stdexcept>
 #include <fstream>
 #include <iostream>
@@ -55,10 +56,10 @@ private:
         ptr_hold_ = 0;
     }
 
-    void handle_state(state_file& sf)
+    void handle_state(state_file& sf) override
     {
-        (void)sf;
-        std::cerr << "\n\n**** WARNING : Harddisk state not handled!!! *** \n\n";
+        const state_file::scope scope { sf, "Harddisk", 1 };
+        sf.handle(ptr_hold_);
     }
 
 

@@ -22,6 +22,8 @@ public:
     disk_drive& active_drive(); // For DMA
     void show_debug_state(std::ostream& os);
 
+    void handle_state(state_file& sf);
+
 private:
     class impl;
     std::unique_ptr<impl> impl_;

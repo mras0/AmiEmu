@@ -19,26 +19,29 @@ public:
         uint16_t rom_vector_offset;
     };
 
-    uint8_t read_config_byte(uint8_t offset) const;
-    void write_config_byte(uint8_t offset, uint8_t val);
-    void shutup();    
-    void activate(uint8_t base);
-    void config_mode();
-
 protected:
     explicit autoconf_device(memory_handler& mem_handler, memory_area_handler& area_handler, const board_config& config);
 
 private:
-    enum class mode { autoconf, shutup, active } mode_ = mode::autoconf;
     memory_handler& mem_handler_;
     memory_area_handler& area_handler_;
     const board_config config_;
     uint8_t conf_data_[12];
+    enum class mode : uint8_t { autoconf, shutup, active } mode_ = mode::autoconf;
     uint8_t base_;
 
     std::string desc() const;
 
+    friend class autoconf_handler;
+
     static const uint8_t board_size(uint32_t size);
+    uint8_t read_config_byte(uint8_t offset) const;
+    void write_config_byte(uint8_t offset, uint8_t val);
+    void shutup();
+    void activate(uint8_t base);
+    void config_mode();
+    void handle_autoconf_state(state_file& sf);
+    virtual void handle_state(state_file& sf) = 0;
 };
 
 class fastmem_handler : public autoconf_device, public ram_handler {
@@ -61,6 +64,11 @@ private:
             .rom_vector_offset = 0,
         };
     }
+
+    void handle_state(state_file& sf)
+    {
+        ram_handler::handle_state(sf);
+    }
 };
 
 class autoconf_handler : public memory_area_handler {
@@ -68,6 +76,7 @@ public:
     explicit autoconf_handler(memory_handler& mem_handler);
 
     void add_device(autoconf_device& dev);
+    void handle_state(state_file& sf);
 
 private:
     static constexpr uint32_t base = 0xe80000;
@@ -83,7 +92,6 @@ private:
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override;
     void reset() override;
-    void handle_state(state_file& sf) override;
 };
 
 #endif

@@ -8,6 +8,8 @@ public:
     explicit real_time_clock(class memory_handler& mem);
     ~real_time_clock();
 
+    void handle_state(class state_file& sf);
+
 private:
     class impl;
     std::unique_ptr<impl> impl_;

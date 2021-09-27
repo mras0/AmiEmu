@@ -43,6 +43,8 @@ public:
     uint32_t copper_ptr(uint8_t idx); // 0=current
     std::vector<uint16_t> get_regs();
 
+    void handle_state(state_file& sf);
+
 private:
     class impl;
     std::unique_ptr<impl> impl_;

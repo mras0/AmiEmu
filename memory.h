@@ -57,7 +57,6 @@ public:
     }
 
     virtual void reset() = 0;
-    virtual void handle_state(state_file& sf) = 0;
 };
 
 class default_handler : public memory_area_handler {
@@ -67,7 +66,6 @@ public:
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t, uint16_t val) override;
     void reset() override { }
-    void handle_state(state_file&) override { }
 };
 
 class ram_handler : public memory_area_handler {
@@ -83,7 +81,7 @@ public:
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override;
     void reset() override { }
-    void handle_state(state_file& sf) override;
+    void handle_state(state_file& sf);
 
 private:
     std::vector<uint8_t> ram_;
@@ -105,7 +103,6 @@ public:
     void write_u8(uint32_t addr, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t offset, uint16_t val) override;
     void reset() override { }
-    void handle_state(state_file&) override { }
 
 private:
     memory_handler& mem_handler_;

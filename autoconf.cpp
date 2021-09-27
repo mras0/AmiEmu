@@ -56,6 +56,20 @@ void autoconf_device::config_mode()
     mode_ = mode::autoconf;
 }
 
+void autoconf_device::handle_autoconf_state(state_file& sf)
+{
+    const state_file::scope scope { sf, "Autoconf", 1 };
+    uint8_t m = static_cast<uint8_t>(mode_);
+    sf.handle(m);
+    sf.handle(base_);
+    handle_state(sf);
+    if (sf.loading()) {
+        assert(mode_ == mode::autoconf);
+        mode_ = static_cast<mode>(m);
+        if (mode_ == mode::active)
+            mem_handler_.register_handler(area_handler_, base_ << 16, config_.size);
+    }
+}
 
 std::string autoconf_device::desc() const
 {
@@ -181,6 +195,19 @@ void autoconf_handler::write_u16(uint32_t, uint32_t offset, uint16_t val)
 void autoconf_handler::handle_state(state_file& sf)
 {
     const state_file::scope scope { sf, "Autoconf", 1 };
-    if (!devices_.empty() || !configured_devices_.empty())
-        std::cerr << "\n\n**** WARNING : AUTCONF not handled!!! *** \n\n";
+
+    for (auto d : devices_)
+        d->handle_autoconf_state(sf);
+    for (auto it = configured_devices_.rbegin(); it != configured_devices_.rend(); ++it) {
+        (*it)->handle_autoconf_state(sf);
+    }
+
+    if (sf.loading()) {
+        while (devices_.size()) {
+            if (devices_.back()->mode_ == autoconf_device::mode::autoconf)
+                break;
+            configured_devices_.push_back(devices_.back());
+            devices_.pop_back();
+        }
+    }
 }

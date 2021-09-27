@@ -264,14 +264,6 @@ void memory_handler::reset()
 
 void memory_handler::handle_state(state_file& sf)
 {
-    const state_file::scope scope { sf, "MEM", 1 };
+    const state_file::scope scope { sf, "Chipmem", 1 };
     ram_.handle_state(sf);
-    // XXX: Unify handling with reset
-    std::vector<memory_area_handler*> already_handled;
-    for (auto& a : areas_) {
-        if (std::find(already_handled.begin(), already_handled.end(), a.handler) != already_handled.end())
-            continue;
-        already_handled.push_back(a.handler);
-        a.handler->handle_state(sf);
-    }
 }
