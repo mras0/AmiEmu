@@ -1445,8 +1445,7 @@ public:
             if (s_.bltw != 2)
                 DBGOUT << "Warning: Blitter line unexpected width $" << hexfmt(s_.bltw) << "\n";
 
-            s_.blitline_ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
-            s_.blitline_sign = !!(s_.bltcon1 & BC1F_SIGNFLAG);
+            // Do not reset blitline_ashift/blitline_sign here (vAmigaTS timing1l)
             s_.blitline_dot_this_line = false;
         }
 
@@ -2589,9 +2588,11 @@ public:
             return;   // Ignore for now
         case BLTCON0:
             s_.bltcon0 = val;
+            s_.blitline_ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
             return;
         case BLTCON1:
             s_.bltcon1 = val;
+            s_.blitline_sign = !!(s_.bltcon1 & BC1F_SIGNFLAG);
             return;
         case BLTAFWM:
             s_.bltafwm = val;
