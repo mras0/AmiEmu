@@ -730,19 +730,27 @@ void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_sta
         throw std::runtime_error { oss.str() };
     };
 
+    uint8_t exc = 0;
     for (;;) {
         const uint8_t ct = tf.read_u8();
         if (ct & CT_END) {
             if (debug_winuae_tests)
                 std::cout << "End of validation. ct=$" << hexfmt(ct) << "\n";
-            const uint8_t exc = ct & CT_EXCEPTION_MASK;
+            exc = ct & CT_EXCEPTION_MASK;
             if (ct & CT_BRANCHED) {
                 assert(!exc);
                 check("Branched", check_state.branchtarget, after.pc);
             }
             if (exc) {
-                std::cout << "TODO: exception exc = " << (int)exc << "\n";
-                assert(0);
+                const uint8_t excdatalen = tf.read_u8();
+                if (debug_winuae_tests)
+                    std::cout << "Exception exc = " << (int)exc << " datalen = " << (int)excdatalen << "\n";
+                assert(exc != static_cast<uint8_t>(interrupt_vector::trace));
+                assert(excdatalen == 1);
+                const uint8_t excextra = tf.read_u8();
+                if (debug_winuae_tests)
+                    std::cout << "Exception extra = $" << hexfmt(excextra) << "\n";
+                assert(!excextra);
             }
             break;
         }
@@ -780,10 +788,17 @@ void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_sta
 
     for (int i = 0; i < 8; ++i)
         check("D" + std::to_string(i), check_state.regs[i], after.d[i]);
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 7; ++i)
         check("A" + std::to_string(i), check_state.regs[CT_AREG+i], after.A(i));
-    check("PC", check_state.pc, after.pc);
-    check("SR", static_cast<uint16_t>(check_state.sr), after.sr);
+    check("USP", check_state.regs[CT_AREG + 7], after.usp);
+    if (exc) {
+        // TODO: This is pretty insufficient
+        check("PC (after exception)", 0xECC000U | exc << 4, after.pc);
+        // TODO: SR...
+    } else {
+        check("PC", check_state.pc, after.pc);
+        check("SR", static_cast<uint16_t>(check_state.sr), after.sr);
+    }
     // TODO: Check cycles
 }
 
@@ -803,6 +818,8 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
     memcpy(&ram[test_header.test_low_memory_start], &test_lowmem[0], test_lowmem.size());
     memcpy(&ram[test_header.test_memory_addr], &test_testmem[0], test_testmem.size());
 
+    for (int exc = 2; exc < 12; ++exc)
+        put_u32(&ram[exc * 4], 0xECC000 | (exc << 4)); // XXX: For checking exceptions (see validate_test)
 
     winuae_test_state cur_state;
     memset(&cur_state, 0, sizeof(cur_state));
@@ -858,7 +875,8 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
 
                     if (test_file.peek_u8() == CT_END_SKIP) {
                         test_file.read_u8();
-                        std::cout << "Skipping\n";
+                        if (debug_winuae_tests)
+                            std::cout << "Skipping\n";
                         continue;
                     }
 
@@ -866,13 +884,15 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
                     memcpy(input_state.d, &cur_state.regs[0], sizeof(input_state.d));
                     memcpy(input_state.a, &cur_state.regs[8], sizeof(input_state.a));
                     input_state.ssp = test_header.super_stack_memory;
-                    input_state.usp = test_header.user_stack_memory;
+                    input_state.usp = cur_state.regs[15];
                     input_state.pc = cur_state.pc;
                     if (maxccr >= 32)
                         input_state.sr = ccr & 0xff;
                     else
                         input_state.sr = ccr & 1 ? 31 : 0;
-                    input_state.A(7) = cur_state.regs[15];
+
+                    if (extraccr & 1)
+                        input_state.sr |= srm_s;
 
                     m68000 cpu { mem, input_state };
 
@@ -901,8 +921,9 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
                 extraccr = test_file.read_u8();
                 if (extraccr == CT_END)
                     break;
-                std::cout << "TODO: extraccr = $" << hexfmt(extraccr) << "\n";
-                assert(0);
+                if (debug_winuae_tests)
+                    std::cout << "extraccr = $" << hexfmt(extraccr) << "\n";
+                assert(extraccr == 1);
             }
         }
     done:
@@ -922,12 +943,12 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "ROL.B");
+    //run_winuae_mnemonic_test(basedir / "ANDSR.W");
     //assert(0);
 
     const std::vector<const char*> skip = {
         // Require excpetion handling
-        "ANDSR", "MV2SR", "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
+        "MV2SR", "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
         // Not implemented
         "CHK", "EORSR", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
         // TODO (Undefinde flags?)
@@ -957,8 +978,6 @@ bool run_winuae_tests()
             std::cout << ' ' << f;
         std::cout << "\n";
     }
-    // Temp:
-    //assert(!errors);
 
     return errors == 0;
 }

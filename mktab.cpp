@@ -58,7 +58,7 @@ constexpr const inst_desc insts[] = {
     //{"ORI.B #I, CCR"     , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" },
     {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ORI to SR
     {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    //{"ANDI.B #I, CCR"    , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
+    {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" , ~priv_inst, ea_ccr << 8 }, // ANDI to CCR
     {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ANDI to SR
     {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
@@ -303,9 +303,12 @@ void output_plain_with_imm(uint16_t inst, const char* name, const char* imm, uin
     ai.ea[0] = ea_imm;
     assert(strlen(imm) == 3 && imm[2] == 'I');
     switch (imm[0]) {
-//    case 'B':
-//        ai.osize = opsize::b;
-//        break;
+    case 'B':
+        ai.osize = opsize::b;
+        if (fixed_ea)
+            ai.name += ".B";
+        ++ai.ea_words;
+        break;
     case 'W':
         ai.osize = opsize::w;
         if (fixed_ea)

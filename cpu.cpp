@@ -28,28 +28,6 @@ const char* const conditional_strings[16] = {
     "le",
 };
 
-enum class interrupt_vector : uint8_t {
-    reset_ssp = 0,
-    reset_pc = 1,
-    bus_error = 2,
-    address_error = 3,
-    illegal_instruction = 4,
-    zero_divide = 5,
-    chk_exception = 6,
-    trapv_instruction = 7,
-    privililege_violation = 8,
-    trace = 9,
-    line_1010 = 10,
-    line_1111 = 11,
-    level1 = 25,
-    level2 = 26,
-    level3 = 27,
-    level4 = 28,
-    level5 = 29,
-    level6 = 30,
-    level7 = 31,
-};
-
 }
 
 void print_cpu_state(std::ostream& os, const cpu_state& s)
