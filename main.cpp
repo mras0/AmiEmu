@@ -705,7 +705,8 @@ int main(int argc, char* argv[])
                 if (--cpu_ipl_delay == 0)
                     cpu_ipl = custom_step.ipl;
             } else if (cpu_ipl != custom_step.ipl) {
-                cpu_ipl_delay = 12;
+                // Add longer delay for INT2/INT6 (CIA timer interrupts) to match timing of Razor1911-Voyage...
+                cpu_ipl_delay = (custom_step.ipl == 2 || custom_step.ipl == 6) ? 16 : 12;
             } 
 
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {

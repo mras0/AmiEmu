@@ -992,8 +992,7 @@ private:
         case interrupt_vector::level6:
         case interrupt_vector::level7:
             // Interrupt | 44(5 / 3) | 42 n nn ns ni n - n nS ns nV nv np np
-            // -4 removed to match timing of RAZOR1911-Voyage (VERY strict timing requirements)
-            add_cycles(44 - common_cycles/* - 4*/);
+            add_cycles(44 - common_cycles - 4);
             break;
         case interrupt_vector::illegal_instruction:
         case interrupt_vector::privililege_violation:
