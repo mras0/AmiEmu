@@ -800,6 +800,16 @@ struct tester {
     static constexpr uint32_t code_size = 0x1000;
     memory_handler mem { code_pos + code_size };
     std::vector<uint16_t> code_words;
+    unsigned cpu_cycles = 0;
+    unsigned cpu_mem_accesses = 0;
+
+    explicit tester()
+    {
+        mem.set_memory_interceptor([this](uint32_t /*addr*/, uint32_t /*data*/, uint8_t size, bool /*write*/) {
+            cpu_mem_accesses += size > 2 ? 2 : 1;
+            cpu_cycles += size > 2 ? 8 : 4;
+        });
+    }
 
     bool tests_from_table(const char* table, const std::vector<std::string>& insts)
     {
@@ -896,12 +906,17 @@ struct tester {
                     input_state.ssp = 0x400;
 
                     m68000 cpu { mem, input_state };
+                    cpu_mem_accesses = 0;
+                    cpu_cycles = 0;
+                    cpu.set_cycle_handler([this](uint8_t c) {
+                        cpu_cycles += c;
+                    });
 
-                    const auto step_res = cpu.step();
-                    if (step_res.clock_cycles != cycles || step_res.mem_accesses != memaccesses) {
+                    cpu.step();
+                    if (cpu_cycles != cycles || cpu_mem_accesses != memaccesses) {
                         std::cerr << "Test failed for:\n" << stmt << "\n";
-                        std::cerr << "Expected clock cycles:    " << (int)cycles << "\tActual: " << (int)step_res.clock_cycles << "\n";
-                        std::cerr << "Expected memory accesses: " << (int)memaccesses << "\tActual: " << (int)step_res.mem_accesses << "\n";
+                        std::cerr << "Expected clock cycles:    " << (int)cycles << "\tActual: " << (int)cpu_cycles << "\n";
+                        std::cerr << "Expected memory accesses: " << (int)memaccesses << "\tActual: " << (int)cpu_mem_accesses << "\n";
                         //return false;
                         all_ok = false;
                     }
@@ -1473,6 +1488,10 @@ bool run_timing_tests()
 
         { "BTST.L #15, D7"                  , 10, 2 },
         { "BTST.L #16, D7"                  , 10, 2 },
+
+        { "CHK D0, D0"                      , 10, 1 },
+        { "CHK #42, D0"                     , 14, 2 },
+        { "CHK D0, D4"                      , 40, 7 },
     };
 
     const uint32_t code_pos = 0x1000;
@@ -1481,7 +1500,12 @@ bool run_timing_tests()
     auto& ram = mem.ram();
     std::vector<uint16_t> insts;
     bool all_ok = true;
-
+    unsigned cpu_mem_accesses;
+    unsigned cpu_cyclces;
+    mem.set_memory_interceptor([&](uint32_t /*addr*/, uint32_t /*data*/, uint8_t size, bool /*write*/) {
+        cpu_mem_accesses += size > 2 ? 2 : 1;
+        cpu_cyclces += 4;
+    });
     for (const auto& tc : test_cases) {
         try {
             insts = assemble(code_pos, tc.test_inst);
@@ -1504,21 +1528,15 @@ bool run_timing_tests()
         input_state.usp = 64;
         input_state.ssp = 32;
 
-        uint8_t counted_cycles = 0;
-
         m68000 cpu { mem, input_state };
-        cpu.set_cycle_handler([&counted_cycles](uint8_t cycles) { counted_cycles += cycles; });
-
-        const auto step_res = cpu.step();
-        if (step_res.clock_cycles != tc.clock_cycles || step_res.mem_accesses != tc.memory_accesses) {
+        cpu.set_cycle_handler([&cpu_cyclces](uint8_t cycles) { cpu_cyclces += cycles; });
+        cpu_cyclces = 0;
+        cpu_mem_accesses = 0;
+        cpu.step();
+        if (cpu_cyclces != tc.clock_cycles || cpu_mem_accesses != tc.memory_accesses) {
             std::cerr << "Test failed for:\n" << tc.test_inst << "\n";
-            std::cerr << "Expected clock cycles:    " << (int)tc.clock_cycles << "\tActual: " << (int)step_res.clock_cycles << "\n";
-            std::cerr << "Expected memory accesses: " << (int)tc.memory_accesses << "\tActual: " << (int)step_res.mem_accesses << "\n";
-            all_ok = false;
-        } else if (counted_cycles + step_res.mem_accesses * 4 != tc.clock_cycles) {
-            std::cerr << "Test failed for:\n" << tc.test_inst << "\n";
-            std::cerr << "Expected clock cycles:    " << (int)tc.clock_cycles << "\tCounted: " << (int)counted_cycles << "\n";
-            std::cerr << "Expected memory accesses: " << (int)tc.memory_accesses << "\tActual: " << (int)step_res.mem_accesses << "\n";
+            std::cerr << "Expected clock cycles:    " << (int)tc.clock_cycles << "\tCounted: " << (int)cpu_cyclces << "\n";
+            std::cerr << "Expected memory accesses: " << (int)tc.memory_accesses << "\tActual: " << (int)cpu_mem_accesses << "\n";
             all_ok = false;
 
         }
@@ -1531,7 +1549,6 @@ bool run_timing_tests()
 
 
 // TODO:
-// CHK
 // RESET
 // STOP
 // DIVU

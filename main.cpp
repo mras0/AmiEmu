@@ -1058,8 +1058,7 @@ unknown_command:
                     std::cout << "Breakpoint hit\n";
                 }
 
-                if (cpu_step.clock_cycles == 0) {
-                    // CPU is stopped
+                if (cpu_step.stopped) {
                     do {
                         ++idle_count;
                         cstep(false);

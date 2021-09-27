@@ -122,14 +122,14 @@ public:
 
         if (state_.stopped) {
             if (!trace_active && !current_ipl)
-                return { state_.pc, state_.pc, 0, 0 };
+                return { state_.pc, state_.pc, true };
             state_.stopped = false;
         }
         assert(current_ipl < 8);
 
         ++state_.instruction_count;
         start_pc_ = state_.pc;
-        step_res_ = { state_.pc, 0, 0, 0 };
+        step_result step_res { state_.pc, 0, false };
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
             do_interrupt(current_ipl);
@@ -278,7 +278,8 @@ public:
             *trace_ << "\n";
         }
 
-        step_res_.current_pc = state_.pc;
+        step_res.current_pc = state_.pc;
+        step_res.stopped = state_.stopped;
 
         if (state_.pc & 1) {
             invalid_access_address_ = state_.pc;
@@ -293,7 +294,7 @@ public:
                 do_trap(interrupt_vector::trace);
         }
 
-        return step_res_;
+        return step_res;
     }
 
 private:
@@ -315,7 +316,6 @@ private:
     uint32_t prefetch_address_ = invalid_prefetch_address;
     uint16_t prefecth_val_ = 0;    
     std::ostream* trace_ = nullptr;
-    step_result step_res_ { 0, 0 };
     uint32_t invalid_access_address_ = 0;
     uint16_t invalid_access_info_ = 0;
 
@@ -323,18 +323,10 @@ private:
     {
         if (cycle_handler_)
             cycle_handler_(cnt);
-        step_res_.clock_cycles += cnt;
-    }
-
-    void add_mem_access()
-    {
-        step_res_.clock_cycles += 4;
-        ++step_res_.mem_accesses;
     }
 
     uint8_t mem_read8(uint32_t addr)
     {
-        add_mem_access();
         return mem_.read_u8(addr);
     }
 
@@ -345,7 +337,6 @@ private:
             invalid_access_info_ = 16 | 1; // 16=Read 1=Data
             throw address_error_exception {};
         }
-        add_mem_access();
         return mem_.read_u16(addr);
     }
 
@@ -358,7 +349,6 @@ private:
 
     void mem_write8(uint32_t addr, uint8_t val)
     {
-        add_mem_access();
         mem_.write_u8(addr, val);
     }
 
@@ -369,7 +359,6 @@ private:
             invalid_access_info_ = 8 | 1; // 8=Not instruction 1=Data
             throw address_error_exception {};
         }
-        add_mem_access();
         mem_.write_u16(addr, val);
     }
 
@@ -899,7 +888,7 @@ private:
             break;
         case interrupt_vector::chk_exception:
             // CHK Instruction     | 40(4/3)+ |38 np (n-)    nn    ns ns nS nV nv np np
-            add_cycles(40 - common_cycles);
+            add_cycles(40 - common_cycles - 6); // 6 cycles already done
             break;
         case interrupt_vector::trapv_instruction:
             // TRAPV               | 34(5/3)  |          np ns nS ns np np np np
@@ -1223,9 +1212,9 @@ private:
         const auto bound = static_cast<int16_t>(read_ea(0));
         const auto val   = static_cast<int16_t>(read_ea(1));
         state_.update_sr(srm_ccr_no_x, (val == 0 ? srm_z : 0) | (val < 0 ? srm_n : 0));
-        if (val < 0 || val > bound) {
+        add_cycles(6);
+        if (val < 0 || val > bound)
             do_trap(interrupt_vector::chk_exception);
-        }
     }
 
     void handle_CLR()
@@ -1290,7 +1279,7 @@ private:
         if (val != 0xffff) {
             state_.pc = calc_ea(1);          
         } else {
-            add_mem_access();
+            useless_prefetch();
         }
     }
 
