@@ -560,10 +560,25 @@ int main(int argc, char* argv[])
                                 auto fh = from_hex(args[1]);
                                 if (fh.first) {
                                     debug_flags = fh.second;
+                                } else {
+                                    debug_flags = 0;
+                                    for (size_t i = 1; i < args.size(); ++i) {
+                                        if (args[i] == "copper")
+                                            debug_flags |= debug_flag_copper;
+                                        else if (args[i] == "bpl")
+                                            debug_flags |= debug_flag_bpl;
+                                        else if (args[i] == "sprite")
+                                            debug_flags |= debug_flag_sprite;
+                                        else if (args[i] == "disk")
+                                            debug_flags |= debug_flag_disk;
+                                        else if (args[i] == "blitter")
+                                            debug_flags |= debug_flag_blitter;
+                                        else
+                                            std::cerr << "Unknown trace flag \"" << args[i] << "\"\n";
+                                    }
                                 }
-                            } else {
-                                std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
                             }
+                            std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
                         } else if (args[0] == "W") {
                             if (args.size() > 2) {
                                 auto [avalid, address] = from_hex(args[1]);

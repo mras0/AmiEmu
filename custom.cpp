@@ -1441,8 +1441,14 @@ public:
             } else if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_active && s_.sprite_vpos_end(spr) == s_.vpos) {
                 if (DEBUG_SPRITE)
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now done\n";
-                s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
-                s_.spr_dma_states[spr] = sprite_dma_state::fetch_ctl;
+                // Note: If sprite DMA is turned off the same line will be repeated
+                // XXX: Is this the correct way to implement it?
+                if (s_.dmacon & DMAF_SPRITE) {
+                    s_.spr_dma_states[spr] = sprite_dma_state::fetch_ctl;
+                    s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
+                } else {
+                    s_.spr_dma_states[spr] = sprite_dma_state::stopped;
+                }
             } else if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_active && s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == s_.hpos) {
                 if (DEBUG_SPRITE)
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Armed and HPOS ($" << hexfmt(s_.sprite_hpos_start(spr)) << ") matches!\n";
@@ -1977,13 +1983,13 @@ public:
                 s_.sprctl[spr] = val;
                 s_.spr_armed[spr] = false;
                 s_.spr_dma_states[spr] = sprite_dma_state::stopped;
-                if (s_.sprite_vpos_start(spr) < s_.sprite_vpos_end(spr) && s_.sprite_vpos_start(spr) >= s_.vpos) {
+                if (s_.sprite_vpos_start(spr) != s_.sprite_vpos_end(spr) && s_.sprite_vpos_start(spr) >= s_.vpos) {
                     if (DEBUG_SPRITE)
                         DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Setting active waiting for VPOS=$" << hexfmt(s_.sprite_vpos_start(spr)) << " end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
                     s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_waiting;
                 } else {
                     if (DEBUG_SPRITE)
-                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Disabling start=$" << hexfmt(s_.sprite_vpos_start(spr)) << " >= end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
+                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Disabling start=$" << hexfmt(s_.sprite_vpos_start(spr)) << " == end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
                     s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
                 }
                 return;
