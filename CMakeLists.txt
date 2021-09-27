@@ -55,6 +55,9 @@ target_link_libraries(testasm PRIVATE utils m68k)
 add_executable(m68kasm m68kasm.cpp)
 target_link_libraries(m68kasm PRIVATE utils m68k)
 
+add_executable(m68kdisasm m68kdisasm.cpp)
+target_link_libraries(m68kdisasm PRIVATE utils m68k)
+
 set(EXPROM_BASE 40)
 
 add_custom_command(
