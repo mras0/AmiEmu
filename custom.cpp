@@ -944,26 +944,38 @@ public:
                     row[0] = row[1] = one_pixel();
                 }
 
-                // Sprite 0 has highest priority, 7 lowest
                 // TODO: Handle sprite/playfield priority bits in BPLCON2
-                // TODO: Handle attached sprites
-                for (uint8_t spr = 8; spr--;) {
+                uint8_t spriteidx[8];
+
+                for (uint8_t spr = 0; spr < 8; ++spr) {
+                    uint8_t idx = 0;
                     if (s_.spr_hold_cnt[spr]) {
-                        uint8_t col = 0;
                         if (s_.spr_hold_a[spr] & 0x8000)
-                            col |= 1;
+                            idx |= 1;
                         if (s_.spr_hold_b[spr] & 0x8000)
-                            col |= 2;
+                            idx |= 2;
                         s_.spr_hold_a[spr] <<= 1;
                         s_.spr_hold_b[spr] <<= 1;
                         --s_.spr_hold_cnt[spr];
-
-                        if (col) {
-                            row[0] = row[1] = rgb4_to_8(s_.color[col + 16]);
-                        }
                     }
+                    spriteidx[spr] = idx;
                 }
 
+                // Sprite 0 has highest priority, 7 lowest
+                for (uint8_t spr = 0; spr < 8; ++spr) {
+                    if (!(spr & 1) && (s_.sprctl[spr + 1] & 0x80)) {
+                        // Attached sprite
+                        const uint8_t idx = spriteidx[spr] | spriteidx[spr + 1] << 2;
+                        if (idx) {
+                            row[0] = row[1] = rgb4_to_8(s_.color[16+idx]);
+                            break;
+                        }
+                        ++spr; // Skip next sprite
+                    } else if (spriteidx[spr]) {
+                        row[0] = row[1] = rgb4_to_8(s_.color[16 + (spr >> 1) * 4 + spriteidx[spr]]);
+                        break;
+                    }
+                }
             } else {
                 row[0] = row[1] = rgb4_to_8(s_.color[0]);
             }
@@ -1318,7 +1330,6 @@ public:
 #endif
                     s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
                 }
-                TODO_ASSERT(!(val & 0x80)); // Attached sprite
                 return;
             case 2: // SPRxDATA (low word)
                 s_.sprdata[spr] = val;
