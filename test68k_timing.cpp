@@ -49,6 +49,7 @@ namespace {
 // MULS
 // ADDX/SUBX
 // CMPM
+// ASL, ASR, LSL, LSR, ROL, ROR, ROXL, ROXR
 
 const char* const line0000_immediate = R"(
 #<data>,<ea> :    |                

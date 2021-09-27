@@ -248,17 +248,26 @@ bool simple_asm_tests()
         { "MULU d5, d4" , { 0xc8c5 } },
         { "MULS -(a7), d3" , { 0xc7e7 } },
         { "MULS #40, d4" , { 0xc9fc, 0x0028 } },
+        { "TRAP #0", { 0x4e40 } },
+        { "TRAP #7", { 0x4e47 } },
+        { "TRAP #15", { 0x4e4f } },
+        { "TRAPV", { 0x4e76 } },
+        { "RTR", { 0x4e77 } },
+        { "LINK A5, #$1234", { 0x4e55, 0x1234 } },
+        { "UNLK A2", { 0x4e5a } },
+        { "ABCD d3, d4", { 0xc903 } },
+        { "ABCD.B -(a0), -(a2)", {  0xc508 } },
+        { "SBCD d5, d1", { 0x8305 } },
+        { "SBCD.B -(a5), -(a1)", { 0x830d } },
+        { "CHK d0, d2", { 0x4580 } },
+        { "CHK $34(a2,d3.l), d2", { 0x45b2, 0x3834 } },
+        { "CMPM.B (a1)+, (a6)+", { 0xbd09 } },
+        { "CMPM.W (a2)+, (a3)+", { 0xb74a } },
+        { "CMPM.L (a7)+, (a0)+", { 0xb18f } },
         // MOVEP
         // MOVEM
         // TAS
-        // CHK
-        // RTR
-        // TRAPV
-        // TRAP
-        // LINK
-        // UNLNK
-        // ABCD/SBCD
-        // CMPM
+        // ASL, ASR, LSL, LSR, ROL, ROR, ROXL, ROXR
     };  
 
     for (const auto& tc : test_cases) {

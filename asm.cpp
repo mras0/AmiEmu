@@ -49,6 +49,7 @@ constexpr bool range16(uint32_t val)
     X(prefix##LE , m, d, no)
 
 #define INSTRUCTIONS(X)                   \
+    X(ABCD      , b    , b    , 2)        \
     X(ADD       , bwl  , w    , 2)        \
     X(ADDQ      , bwl  , w    , 2)        \
     X(ADDX      , bwl  , w    , 2)        \
@@ -58,8 +59,10 @@ constexpr bool range16(uint32_t val)
     X(BSET      , bl   , none , 2)        \
     X(BTST      , bl   , none , 2)        \
     WITH_CC(X, B, BRA, BSR, bw, none, 1)  \
+    X(CHK       , w    , w    , 2)        \
     X(CLR       , bwl  , w    , 1)        \
     X(CMP       , bwl  , w    , 2)        \
+    X(CMPM      , bwl  , w    , 2)        \
     WITH_CC(X, DB, DBT, DBF, w, w, 2)     \
     X(DIVS      , w    , w    , 2)        \
     X(DIVU      , w    , w    , 2)        \
@@ -70,6 +73,7 @@ constexpr bool range16(uint32_t val)
     X(JMP       , none , none , 1)        \
     X(JSR       , none , none , 1)        \
     X(LEA       , l    , l    , 2)        \
+    X(LINK      , w    , w    , 2)        \
     X(MOVE      , bwl  , w    , 2)        \
     X(MOVEQ     , l    , l    , 2)        \
     X(MULS      , w    , w    , 2)        \
@@ -83,14 +87,19 @@ constexpr bool range16(uint32_t val)
     X(PEA       , l    , l    , 1)        \
     X(RESET     , none , none , 0)        \
     X(RTE       , none , none , 0)        \
+    X(RTR       , none , none , 0)        \
     X(RTS       , none , none , 0)        \
+    X(SBCD      , b    , b    , 2)        \
     WITH_CC(X, S, ST, SF, b, b, 1)        \
     X(STOP      , none , none , 1)        \
     X(SUB       , bwl  , w    , 2)        \
     X(SUBX      , bwl  , w    , 2)        \
     X(SUBQ      , bwl  , w    , 2)        \
     X(SWAP      , w    , w    , 1)        \
+    X(TRAP      , none , none , 1)        \
+    X(TRAPV     , none , none , 0)        \
     X(TST       , bwl  , w    , 1)        \
+    X(UNLK      , none , none , 1)        \
 
 #define TOKENS(X)      \
     X(size_b , ".B"  ) \
@@ -701,6 +710,9 @@ operands_done:
         uint8_t iword_cnt = 1;
 
         switch (inst) {
+        case token_type::ABCD:
+            iwords[0] = encode_abcd_sbcd(info, ea, false);
+            break;
         case token_type::ADD:
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0600, 0xD000);
             break;
@@ -757,12 +769,28 @@ operands_done:
                 iwords[iword_cnt++] = disp & 0xffff;
             goto done;
         }
+        case token_type::CHK:
+            if (ea[0].type > ea_immediate || ea[1].type > ea_immediate || ea[0].type >> ea_m_shift == ea_m_An)
+                ASSEMBLER_ERROR("Invalid source operand for " << info.name);
+            if (ea[1].type >> ea_m_shift != ea_m_Dn)
+                ASSEMBLER_ERROR("Destination must be data register for " << info.name);
+            iwords[0] = 0x4180 | (ea[1].type & 7) << 9 | (ea[0].type & 0x3f);
+            break;
         case token_type::CLR:
             iwords[0] = encode_unary(info, ea[0], osize, 0x4200);
             break;
         case token_type::CMP:
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0C00, 0xB000);
             break;
+        case token_type::CMPM: {
+            if (ea[0].type >> ea_m_shift != ea_m_A_ind_post)
+                ASSEMBLER_ERROR("First operand must be address register in postincrement addressing mode");
+            if (ea[1].type >> ea_m_shift != ea_m_A_ind_post)
+                ASSEMBLER_ERROR("Second operand must be address register in postincrement addressing mode");
+            constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
+            iwords[0] = 0xb108 | (ea[1].type & 7) << 9 | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[0].type & 7);
+            goto done;
+        }
         case token_type::DBT:
         case token_type::DBF:
         case token_type::DBHI:
@@ -917,6 +945,13 @@ operands_done:
                 ASSEMBLER_ERROR("Destination register must be address register for LEA");
             iwords[0] = encode_ea_instruction(info, ea[0], 0x41c0 | (ea[1].type & 7) << 9);
             break;
+        case token_type::LINK:
+            if (ea[0].type >> ea_m_shift != ea_m_An)
+                ASSEMBLER_ERROR("First operand must be address register");
+            if (ea[1].type != ea_immediate)
+                ASSEMBLER_ERROR("Second operand must be immediate");
+            iwords[0] = 0x4e50 | (ea[0].type & 7);
+            break;
         case token_type::NOP:
             iwords[0] = 0x4e71;
             break;
@@ -930,8 +965,14 @@ operands_done:
         case token_type::RTE:
             iwords[0] = 0x4e73;
             break;
+        case token_type::RTR:
+            iwords[0] = 0x4e77;
+            break;
         case token_type::RTS:
             iwords[0] = 0x4e75;
+            break;
+        case token_type::SBCD:
+            iwords[0] = encode_abcd_sbcd(info, ea, true);
             break;
         case token_type::ST:
         case token_type::SF:
@@ -974,8 +1015,23 @@ operands_done:
                 ASSEMBLER_ERROR("Invalid operand to SWAP");
             iwords[0] = 0x4840 | (ea[0].type & 7);
             goto done;
+        case token_type::TRAP:
+            if (ea[0].type != ea_immediate)
+                ASSEMBLER_ERROR("Invalid operand to TRAP");
+            if (ea[0].val > 15)
+                ASSEMBLER_ERROR("TRAP vector out of 4-bit range");
+            iwords[0] = 0x4e40 | (ea[0].val & 15);
+            goto done;
+        case token_type::TRAPV:
+            iwords[0] = 0x4e76;
+            goto done;
         case token_type::TST:
             iwords[0] = encode_unary(info, ea[0], osize, 0x4A00);
+            break;
+        case token_type::UNLK:
+            if (ea[0].type >> ea_m_shift != ea_m_An)
+                ASSEMBLER_ERROR("Operand must be address register");
+            iwords[0] = 0x4e58 | (ea[0].type & 7);
             break;
         default:
             ASSEMBLER_ERROR("TODO: Encode " << info.name);
@@ -1236,17 +1292,25 @@ done:
         return 0x9100 | (!is_sub) << 14 | (ea[1].type & 7) << 9 | size_encoding[static_cast<uint8_t>(osize)] << 6 | memop << 3 | (ea[0].type & 7);
     }
 
+    uint16_t encode_abcd_sbcd(const instruction_info_type& info, const ea_result* ea, bool is_sub)
+    {
+        bool memop = false;
+        if (ea[0].type >> ea_m_shift == ea_m_Dn && ea[1].type >> ea_m_shift == ea_m_Dn) {
+            // OK
+        } else if (ea[0].type >> ea_m_shift == ea_m_A_ind_pre && ea[1].type >> ea_m_shift == ea_m_A_ind_pre) {
+            memop = true;
+        } else {
+            ASSEMBLER_ERROR("Invalid operands to " << info.name);
+        }
+        return 0x8100 | (!is_sub) << 14 | (ea[1].type & 7) << 9 | memop << 3 | (ea[0].type & 7);
+    }
+
     uint16_t encode_muldiv(const instruction_info_type& info, const ea_result* ea, bool is_signed, bool is_mul)
     {
         if (ea[0].type > ea_immediate || ea[1].type > ea_immediate || ea[0].type >> ea_m_shift == ea_m_An)
             ASSEMBLER_ERROR("Invalid source operand for " << info.name);
         if (ea[1].type >> ea_m_shift != ea_m_Dn)
             ASSEMBLER_ERROR("Destination must be data register for " << info.name);
-
-        // MULS: 1<<15|1<<14|1<<8|1<<7|1<<6 = 0xc1c0
-        // MULU: 1<<15|1<<14|     1<<7|1<<6 = 0xc0c0
-        // DIVS: 1<<15|      1<<8|1<<7|1<<6 = 0x81c0
-
         return 0x80c0 | is_mul << 14 | (ea[1].type & 7) << 9 | is_signed << 8 | (ea[0].type & 0x3f);
     }
 };
