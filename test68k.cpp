@@ -273,18 +273,113 @@ bool run_simple_tests()
         uint32_t out_d[8];
         uint16_t out_sr;
     } simple_tests[] = {
+        { // MULU.W #$0010, D0
+            { 0xC0FC, 0x0010 },
+            { 0x55aaffc0 }, srm_x | srm_c | srm_n,
+            { 0x000ffc00 }, srm_x
+        },
+        { // MULU.W D1, D0
+            { 0xC0C1 },
+            { 0x55aa00c9, 0x8888FFFF }, 0,
+            { 0x00c8ff37, 0x8888FFFF }, 0
+        },
+        { // MULU.W D1, D0
+            { 0xC0C1 },
+            { 0x55aa00c9, 0x89ab0000 }, 0,
+            { 0x00000000, 0x89ab0000 }, srm_z
+        },
+        { // MULU.W #-2, D0
+            { 0xC0FC, 0xFFFE },
+            { 0xaa55cc01 }, srm_x | srm_c | srm_n,
+            { 0xcbff67fe }, srm_x | srm_n
+        },
+        { // MULS.W D1, D0
+            { 0xC1C1 },
+            { 0x55aa00c9, 0x8888FFFF }, 0,
+            { 0xFFFFFF37, 0x8888FFFF }, srm_n
+        },
+        { // MULS.W D1, D0
+            { 0xC1C1 },
+            { 0x55aa00c9, 0x88880000 }, 0,
+            { 0x00000000, 0x88880000 }, srm_z
+        },
+        { // MULS.W #-2, D0
+            { 0xC1FC, 0xFFFE },
+            { 0xaa55cc01 }, srm_x | srm_c | srm_n,
+            { 0x000067fe }, srm_x
+        },
         { // ROR.W #$4, D1
             { 0xe859 },
             { 0, 0x12345678 }, srm_x,
             { 0, 0x12348567 }, srm_x | srm_n | srm_c
         },
-        { // ROL.W       #$04, D1
+        { // ROL.W #$04, D1
             { 0xe959 },
             { 0, 0x1234abcd }, srm_x,
             { 0, 0x1234bcda }, srm_x | srm_n | srm_c,
         },
-        // TODO: more ROR and ROL tests (especially rotates with 0 and > width size)
+        { // ROXL.W D1, D0  
+            { 0xE370 },
+            { 0xABCDABCD, 0 }, 0,
+            { 0xABCDABCD, 0 }, srm_n,
+        },
+        { // ROXL.W D1, D0  
+            { 0xE370 },
+            { 0xABCDABCD, 32 }, srm_x,
+            { 0xABCDEAF3, 32 }, srm_n,
+        },
+        { // ROXL.W D1, D0  
+            { 0xE370 },
+            { 0xABCDABCD, 3 }, 0,
+            { 0xABCD5E6A, 3 }, srm_x | srm_c,
+        },
+        { // ROXL.W D1, D0  
+            { 0xE370 },
+            { 0xABCDABCD, 2 }, srm_x,
+            { 0xABCDAF37, 2 }, srm_n,
+        },
+        { // ROXL.W #$7, D0
+            { 0xEF50 },
+            { 0xFFFF0000, 2 }, srm_x,
+            { 0xFFFF0040, 2 }, 0,
+        },
+        { // ROXL.W #$7, D0
+            { 0xEF50 },
+            { 0xFFFF0000, 2 }, srm_c,
+            { 0xFFFF0000, 2 }, srm_z,
+        },
+        { // ROXR.W D1, D0  
+            { 0xE270 },
+            { 0xABCDABCD, 0 }, 0,
+            { 0xABCDABCD, 0 }, srm_n,
+        },
+        { // ROXR.W D1, D0  
+            { 0xE270 },
+            { 0xABCDABCD, 32 }, srm_x,
+            { 0xABCDAF37, 32 }, srm_n,
+        },
+        { // ROXR.W D1, D0  
+            { 0xE270 },
+            { 0xABCDABCD, 3 }, 0,
+            { 0xABCD5579, 3 }, srm_x | srm_c,
+        },
+        { // ROXR.W D1, D0  
+            { 0xE270 },
+            { 0xABCDABCD, 2 }, srm_x,
+            { 0xABCDEAF3, 2 }, srm_n,
+        },
+        { // ROXR.W #$7, D0
+            { 0xEE50 },
+            { 0xFFFF0000, 2 }, srm_x,
+            { 0xFFFF0200, 2 }, 0,
+        },
+        { // ROXR.W #$7, D0
+            { 0xEE50 },
+            { 0xFFFF0000, 2 }, srm_c,
+            { 0xFFFF0000, 2 }, srm_z,
+        },
     };
+    // TODO: more ROR and ROL tests (especially rotates with 0 and > width size)
 
     auto make_state = [](const uint32_t d[8], uint16_t ccr, uint32_t pc) {
         cpu_state st {};

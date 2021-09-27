@@ -214,6 +214,7 @@ public:
             HANDLE_INST(MOVEA);
             HANDLE_INST(MOVEM);
             HANDLE_INST(MOVEQ);
+            HANDLE_INST(MULS);
             HANDLE_INST(MULU);
             HANDLE_INST(NBCD);
             HANDLE_INST(NEG);
@@ -224,10 +225,13 @@ public:
             HANDLE_INST(PEA);
             HANDLE_INST(ROL);
             HANDLE_INST(ROR);
+            HANDLE_INST(ROXL);
+            HANDLE_INST(ROXR);
             HANDLE_INST(RTE);
             HANDLE_INST(RTS);
             HANDLE_INST(SBCD);
             HANDLE_INST(Scc);
+            HANDLE_INST(STOP);
             HANDLE_INST(SUB);
             HANDLE_INST(SUBA);
             HANDLE_INST(SUBQ);
@@ -931,7 +935,7 @@ private:
 
     void handle_EXG()
     {
-        assert(inst_->size == opsize::l && inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) < 2 && (inst_->ea[1] >> ea_m_shift));
+        assert(inst_->size == opsize::l && inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) < 2 && (inst_->ea[1] >> ea_m_shift) < 2);
         const auto a = read_ea(0);
         const auto b = read_ea(1);
         write_ea(0, b);
@@ -1093,14 +1097,34 @@ private:
         update_flags(srm_ccr_no_x, src, 0);
     }
 
+    void handle_MULS()
+    {
+        assert(inst_->size == opsize::w && inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
+        const auto a = sext(read_ea(0) & 0xffff, opsize::w);
+        const auto b = sext(read_ea(1) & 0xffff, opsize::w);
+        const uint32_t res = static_cast<int32_t>(a) * b;
+        state_.d[inst_->ea[1] & ea_xn_mask] = res;
+        uint16_t ccr = 0;
+        if (!res)
+            ccr |= srm_z;
+        if (res & 0x80000000)
+            ccr |= srm_n;
+        state_.update_sr(srm_ccr_no_x, ccr);
+    }
+
     void handle_MULU()
     {
         assert(inst_->size == opsize::w && inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
         const auto a = static_cast<uint16_t>(read_ea(0) & 0xffff);
         const auto b = static_cast<uint16_t>(read_ea(1) & 0xffff);
         const uint32_t res = static_cast<uint32_t>(a) * b;
-        update_flags(srm_ccr_no_x, res, 0);
         state_.d[inst_->ea[1] & ea_xn_mask] = res;
+        uint16_t ccr = 0;
+        if (!res)
+            ccr |= srm_z;
+        if (res & 0x80000000)
+            ccr |= srm_n;
+        state_.update_sr(srm_ccr_no_x, ccr);
     }
 
     void handle_NBCD()
@@ -1237,6 +1261,52 @@ private:
         state_.update_sr(srm_x, old_x);
     }
 
+    void handle_ROXL()
+    {
+        uint32_t val, cnt;
+        if (inst_->nea == 1) {
+            val = read_ea(0);
+            cnt = 1;
+        } else {
+            cnt = read_ea(0) & 63;
+            val = read_ea(1);
+        }
+
+        // TODO: Could optimize
+        const auto msb = opsize_msb_mask(inst_->size);
+        uint32_t x = !!(state_.sr & srm_x);
+        while (cnt--) {
+            const auto new_x = !!(val & msb);
+            val = (val << 1) | x;
+            x = new_x;
+        }
+        write_ea(inst_->nea - 1, val);
+        update_flags_rot(val, cnt, !!x);
+    }
+
+    void handle_ROXR()
+    {
+        uint32_t val, cnt;
+        if (inst_->nea == 1) {
+            val = read_ea(0);
+            cnt = 1;
+        } else {
+            cnt = read_ea(0) & 63;
+            val = read_ea(1);
+        }
+
+        // TODO: Could optimize
+        const auto shift = opsize_bytes(inst_->size) * 8 - 1;
+        uint32_t x = !!(state_.sr & srm_x);
+        while (cnt--) {
+            const auto new_x = val & 1;
+            val = (val >> 1) | (x << shift);
+            x = new_x;
+        }
+        write_ea(inst_->nea - 1, val);
+        update_flags_rot(val, cnt, !!x);
+    }
+
     void handle_RTE()
     {
         assert(inst_->nea == 0);
@@ -1270,6 +1340,13 @@ private:
         assert(inst_->nea == 1 && inst_->size == opsize::b && (inst_->extra & extra_cond_flag));
         const bool cond = state_.eval_cond(static_cast<conditional>(inst_->extra >> 4));
         write_ea(0, cond ? 0xff : 0x00);
+    }
+
+    void handle_STOP()
+    {
+        assert(inst_->nea == 1);
+        state_.sr = static_cast<uint16_t>(read_ea(0));
+        state_.pc = start_pc_;
     }
 
     void handle_SUB()

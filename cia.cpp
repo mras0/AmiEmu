@@ -222,7 +222,6 @@ public:
                     }
                 }
             }
-
         }
 
         if (kbd_buffer_head_ != kbd_buffer_tail_ && kbd_ack_ && !(s_[0].cr[0] & CIACRAF_SPMODE)) {
@@ -272,7 +271,14 @@ public:
     void increment_tod_counter(uint8_t cia)
     {
         assert(cia < 2);
-        ++s_[cia].counter;
+        auto& s = s_[cia];
+        ++s.counter;
+        if ((s.icrmask & CIAICRF_ALRM) && (s.counter & 0xffffff) == s.alarm) {
+            std::cerr << "[CIA] Todo: trigger alarm intterupt? for alarm=$" << hexfmt(s.alarm) << "\n";
+            //s.trigger_int(CIAICRB_ALRM);
+            assert(0);
+        }
+
     }
 
     void keyboard_event(bool pressed, uint8_t raw)
@@ -302,6 +308,7 @@ private:
 
         uint32_t counter;
         uint32_t counter_latch;
+        uint32_t alarm;
 
         uint16_t timer_latch[2];
         uint16_t timer_val[2];
@@ -429,16 +436,22 @@ private:
             }
             break;
         case todlo:
-            assert(!(s.cr[1] & CIACRBF_ALARM));
-            s.counter = (s.counter & 0xffffff00) | val;
+            if (s.cr[1] & CIACRBF_ALARM)
+                s.alarm = (s.alarm & 0xffffff00) | val;
+            else
+                s.counter = (s.counter & 0xffffff00) | val;
             break;
         case todmid:
-            assert(!(s.cr[1] & CIACRBF_ALARM));
-            s.counter = (s.counter & 0xffff00ff) | val << 8;
+            if (s.cr[1] & CIACRBF_ALARM)
+                s.alarm = (s.alarm & 0xffff00ff) | val << 8;
+            else
+                s.counter = (s.counter & 0xffff00ff) | val << 8;
             break;
         case todhi:
-            assert(!(s.cr[1] & CIACRBF_ALARM));
-            s.counter = (s.counter & 0xff00ffff) | val << 16;
+            if (s.cr[1] & CIACRBF_ALARM)
+                s.alarm = (s.alarm & 0xff00ffff) | val << 16;
+            else
+                s.counter = (s.counter & 0xff00ffff) | val << 16;
             break;
         case sdr:
             if (!(s.cr[0] & CIACRAF_SPMODE))

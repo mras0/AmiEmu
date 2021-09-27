@@ -75,7 +75,7 @@ int main(int argc, char* argv[])
                     events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
                 }
-                //if (cpu.instruction_count() == 34289275 - 10)
+                //if (cpu.instruction_count() == 2449900 - 20)
                 //    cpu.trace(&std::cout);
             } catch (...) {
                 cpu.show_state(std::cerr);

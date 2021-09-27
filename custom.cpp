@@ -21,6 +21,29 @@
     X(SERDAT  , 0x030 , 1) /*                                                         */ \
     X(SERPER  , 0x032 , 1) /* Serial port period and control                          */ \
     X(POTGO   , 0x034 , 1) /* Pot port data write and start                           */ \
+    X(BLTCON0 , 0x040 , 1) /* Blitter control register 0                              */ \
+    X(BLTCON1 , 0x042 , 1) /* Blitter control register 1                              */ \
+    X(BLTAFWM , 0x044 , 1) /* Blitter first word mask for source A                    */ \
+    X(BLTALWM , 0x046 , 1) /* Blitter last word mask for source A                     */ \
+    X(BLTCPTH , 0x048 , 1) /* Blitter pointer to source C (high 3 bits)               */ \
+    X(BLTCPTL , 0x04A , 1) /* Blitter pointer to source C (low 15 bits)               */ \
+    X(BLTBPTH , 0x04C , 1) /* Blitter pointer to source B (high 3 bits)               */ \
+    X(BLTBPTL , 0x04E , 1) /* Blitter pointer to source B (low 15 bits)               */ \
+    X(BLTAPTH , 0x050 , 1) /* Blitter pointer to source A (high 3 bits)               */ \
+    X(BLTAPTL , 0x052 , 1) /* Blitter pointer to source A (low 15 bits)               */ \
+    X(BLTDPTH , 0x054 , 1) /* Blitter pointer to destination D (high 3 bits)          */ \
+    X(BLTDPTL , 0x056 , 1) /* Blitter pointer to destination D (low 15 bits)          */ \
+    X(BLTSIZE , 0x058 , 1) /* Blitter start and size (window width,height)            */ \
+    X(BLTCON0L, 0x05A , 1) /* Blitter control 0, lower 8 bits (minterms)              */ \
+    X(BLTSIZV , 0x05C , 1) /* Blitter V size (for 15 bit vertical size)               */ \
+    X(BLTSIZH , 0x05E , 1) /* Blitter H size and start (for 11 bit H size)            */ \
+    X(BLTCMOD , 0x060 , 1) /* Blitter modulo for source C                             */ \
+    X(BLTBMOD , 0x062 , 1) /* Blitter modulo for source B                             */ \
+    X(BLTAMOD , 0x064 , 1) /* Blitter modulo for source A                             */ \
+    X(BLTDMOD , 0x066 , 1) /* Blitter modulo for destination D                        */ \
+    X(BLTCDAT , 0x070 , 1) /* Blitter source C data register                          */ \
+    X(BLTBDAT , 0x072 , 1) /* Blitter source B data register                          */ \
+    X(BLTADAT , 0x074 , 1) /* Blitter source A data register                          */ \
     X(COP1LCH , 0x080 , 1) /* Coprocessor first location register (high 3 bits)       */ \
     X(COP1LCL , 0x082 , 1) /* Coprocessor first location register (low 15 bits)       */ \
     X(COP2LCH , 0x084 , 1) /* Coprocessor second location register (high 3 bits)      */ \
@@ -291,10 +314,19 @@ struct custom_state {
     uint16_t intreq;
     uint32_t bplpt[6];
     uint16_t bplcon0;
-    int16_t  bplmod1; // odd planes
-    int16_t  bplmod2; // even planes
+    int16_t bplmod1; // odd planes
+    int16_t bplmod2; // even planes
     uint16_t bpldat[6];
     uint16_t color[32]; // $180..$1C0
+
+    // blitter
+    uint16_t bltcon0;
+    uint16_t bltcon1;
+    uint16_t bltafwm;
+    uint16_t bltalwm;
+    uint32_t bltpt[4];
+    uint16_t bltdat[3];
+    int16_t  bltmod[4];
 };
 
 }
@@ -431,7 +463,6 @@ public:
                 }
 
                 // TODO: Sprite
-                assert(!(s_.dmacon & DMAF_SPRITE));
 
                 // Copper
                 if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2) {
@@ -573,10 +604,62 @@ public:
         case SERDAT: // $018
             std::cerr << "[CUSTOM] Serial output ($" << hexfmt(val) << ") '" << (isprint(val & 0xff) ? static_cast<char>(val & 0xff) : ' ') << "'\n";
             return;
-        case COPJMP1:
+        //case BLTCON0:
+        //    s_.bltcon0 = val;
+        //    return;
+        //case BLTCON1:
+        //    s_.bltcon1 = val;
+        //    return;
+        //case BLTAFWM:
+        //    s_.bltafwm = val;
+        //    return;
+        //case BLTALWM:
+        //    s_.bltalwm = val;
+        //    return;
+        //case BLTCPTH:
+        //case BLTCPTL:
+        //    write_partial(s_.bltpt[2]);
+        //    return;
+        //case BLTBPTH:
+        //case BLTBPTL:
+        //    write_partial(s_.bltpt[1]);
+        //    return;
+        //case BLTAPTH:
+        //case BLTAPTL:
+        //    write_partial(s_.bltpt[0]);
+        //    return;
+        //case BLTDPTH:
+        //case BLTDPTL:
+        //    write_partial(s_.bltpt[3]);
+        //    return;
+        //case BLTSIZE:
+        //    throw std::runtime_error { "TODO: Blit" };
+        //    return;
+        //case BLTCMOD:
+        //    s_.bltmod[2] = val;
+        //    return;
+        //case BLTBMOD:
+        //    s_.bltmod[1] = val;
+        //    return;
+        //case BLTAMOD:
+        //    s_.bltmod[0] = val;
+        //    return;
+        //case BLTDMOD:
+        //    s_.bltmod[3] = val;
+        //    return;
+        //case BLTCDAT:
+        //    s_.bltdat[2] = val;
+        //    return;
+        //case BLTBDAT:
+        //    s_.bltdat[1] = val;
+        //    return;
+        //case BLTADAT:
+        //    s_.bltdat[0] = val;
+        //    return;
+        case COPJMP1: // $088
             TODO_ASSERT(0);
             return;
-        case COPJMP2:
+        case COPJMP2: // $08A
             s_.copper_pt = s_.coplc[1];
             TODO_ASSERT(s_.copper_pt);
             return;
