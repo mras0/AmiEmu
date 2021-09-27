@@ -151,8 +151,8 @@ public:
         }
 
         if (inst_->type == inst_type::ILLEGAL) {
-            if (iwords_[0] == 0x4e7b) {
-                // For now only handle this specific one (from kickstart 1.3)
+            if ((iwords_[0] & 0xfffe) == 0x4e7a) {
+                // For now only handle movec
                 do_trap(interrupt_vector::illegal_instruction);
                 goto out;
             }
@@ -222,6 +222,8 @@ public:
             HANDLE_INST(NOP);
             HANDLE_INST(OR);
             HANDLE_INST(PEA);
+            HANDLE_INST(ROL);
+            HANDLE_INST(ROR);
             HANDLE_INST(RTE);
             HANDLE_INST(RTS);
             HANDLE_INST(SBCD);
@@ -1181,6 +1183,58 @@ private:
     {
         assert(inst_->nea == 1 && inst_->size == opsize::l);
         push_u32(ea_data_[0]);
+    }
+
+    void handle_ROL()
+    {
+        uint32_t val, cnt;
+        if (inst_->nea == 1) {
+            val = read_ea(0);
+            cnt = 1;
+        } else {
+            cnt = read_ea(0) & 63;
+            val = read_ea(1);
+        }
+        bool carry;
+        if (!cnt) {
+            carry = false;
+        } else {
+            const auto nbits = opsize_bytes(inst_->size) * 8;
+            cnt &= (nbits - 1);
+            if (cnt)
+                val = (val << cnt) | (val >> (nbits - cnt));
+        }
+
+        write_ea(inst_->nea - 1, val);
+        const uint16_t old_x = state_.sr & srm_x; // X is not affected
+        update_flags_rot(val, cnt, !!(val & opsize_msb_mask(inst_->size)));
+        state_.update_sr(srm_x, old_x);
+    }
+
+    void handle_ROR()
+    {
+        uint32_t val, cnt;
+        if (inst_->nea == 1) {
+            val = read_ea(0);
+            cnt = 1;
+        } else {
+            cnt = read_ea(0) & 63;
+            val = read_ea(1);
+        }
+        bool carry;
+        if (!cnt) {
+            carry = false;
+        } else {
+            const auto nbits = opsize_bytes(inst_->size) * 8;
+            cnt &= (nbits-1);
+            if (cnt)
+                val = (val >> cnt) | (val << (nbits - cnt));
+        }
+
+        write_ea(inst_->nea - 1, val);
+        const uint16_t old_x = state_.sr & srm_x; // X is not affected
+        update_flags_rot(val, cnt, !!(val & 1));
+        state_.update_sr(srm_x, old_x);
     }
 
     void handle_RTE()

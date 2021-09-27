@@ -15,10 +15,10 @@
 int main(int argc, char* argv[])
 {
     try {
-        //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
+        const char* const rom_file = "../../Misc/DiagROM/DiagROM";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
-        const char* const rom_file = "../../rom.bin";
+        //const char* const rom_file = "../../rom.bin";
         memory_handler mem { 1U << 20 };
         rom_area_handler rom { mem, read_file(rom_file) };
         cia_handler cias { mem, rom };
@@ -49,7 +49,7 @@ int main(int argc, char* argv[])
                 custom.step();
                 if (auto f = custom.new_frame())
                     g.update_image(f);
-                //if (cpu.instruction_count() == 2727715 - 10)
+                //if (cpu.instruction_count() == 34020703 - 10)
                 //    cpu.trace(&std::cout);
                 //if (cpu.state().pc == 0xFC0C00) {
                 //    cpu.trace(&std::cout);

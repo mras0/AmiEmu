@@ -259,9 +259,86 @@ bool run_tests()
     return true;
 }
 
+bool run_simple_tests()
+{
+    const uint32_t code_pos = 0x1000;
+    const uint32_t code_size = 0x2000;
+    memory_handler mem { code_pos + code_size };
+    auto& ram = mem.ram();
+
+    const struct {
+        std::vector<uint16_t> insts;
+        uint32_t in_d[8];
+        uint16_t in_sr;
+        uint32_t out_d[8];
+        uint16_t out_sr;
+    } simple_tests[] = {
+        { // ROR.W #$4, D1
+            { 0xe859 },
+            { 0, 0x12345678 }, srm_x,
+            { 0, 0x12348567 }, srm_x | srm_n | srm_c
+        },
+        { // ROL.W       #$04, D1
+            { 0xe959 },
+            { 0, 0x1234abcd }, srm_x,
+            { 0, 0x1234bcda }, srm_x | srm_n | srm_c,
+        },
+        // TODO: more ROR and ROL tests (especially rotates with 0 and > width size)
+    };
+
+    auto make_state = [](const uint32_t d[8], uint16_t ccr, uint32_t pc) {
+        cpu_state st {};
+        memcpy(st.d, d, sizeof(st.d));
+        st.sr = ccr;
+        st.pc = pc;
+        return st;
+    };
+
+    for (const auto& t : simple_tests) {
+        memset(&ram[0], 0, ram.size());
+        for (unsigned i = 0; i < std::size(t.insts); ++i)
+            put_u16(&ram[code_pos + i * 2], t.insts[i]);
+
+        const auto input_state = make_state(t.in_d, t.in_sr, code_pos);
+        const auto expected_state = make_state(t.out_d, t.out_sr, code_pos + static_cast<uint32_t>(2*t.insts.size()));
+        m68000 cpu { mem, input_state };
+        const auto& outst = cpu.state();
+        try {
+            cpu.step();
+        } catch (const std::exception& e) {
+            std::cerr << e.what() << "\n";
+            goto report_error;
+        }
+
+        if (memcmp(&outst, &expected_state, sizeof(cpu_state))) {
+        report_error:
+            std::cerr << "Test failed for";
+            for (const auto iw : t.insts) {
+                if (!iw)
+                    break;
+                std::cerr << " " << hexfmt(iw);
+            }
+            std::cerr << "\n";
+            std::cerr << "\n\nInput state:\n";
+            print_cpu_state(std::cerr, input_state);
+            disasm(std::cerr, code_pos, &t.insts[0], std::size(t.insts));
+            std::cerr << "\n";
+            std::cerr << "\n\nExpected state:\n";
+            print_cpu_state(std::cerr, expected_state);
+            std::cerr << "\n\nActual state:\n";
+            print_cpu_state(std::cerr, outst);
+            throw std::runtime_error { "Test failed" };
+        }
+    }
+    return true;
+}
+
 int main()
 {
     try {
+        if (!run_simple_tests())
+            return 1;
+
         if (!run_tests())
             return 1;
     } catch (const std::exception& e) {
