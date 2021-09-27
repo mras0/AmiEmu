@@ -296,148 +296,178 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
     return args;
 }
 
+class autoconf_device {
+public:
+    static constexpr uint8_t ERT_ZORROII        = 0xc0;
+    static constexpr uint8_t ERTF_MEMLIST       = 1 << 5;
+    static constexpr uint8_t ERTF_DIAGVALID     = 1 << 4;
+    static constexpr uint8_t ERTF_CHAINEDCONFIG = 1 << 3;
+
+    struct board_config {
+        uint8_t type;
+        uint32_t size;
+        uint8_t product_number;
+        uint16_t hw_manufacturer;
+        uint32_t serial_no;
+        uint16_t rom_vector_offset;
+    };
+
+    uint8_t read_config_byte(uint8_t offset) const
+    {
+        assert(offset < sizeof(conf_data_));
+        assert(mode_ == mode::autoconf);
+        return conf_data_[offset];
+    }
+
+    void write_config_byte(uint8_t offset, uint8_t val)
+    {
+        assert(mode_ == mode::autoconf);
+        throw std::runtime_error { "TODO: Write config byte $" + hexstring(offset) + " val $" + hexstring(val) };
+    }
+
+    uint8_t interrupt_pending() const
+    {
+        return 0;
+    }
+
+    void shutup()
+    {
+        assert(mode_ == mode::autoconf);
+        std::cout << "[AUTOCONF] " << desc() << " shutting up\n";
+        mode_ = mode::shutup;
+    }
+
+    void activate(uint8_t base)
+    {
+        assert(mode_ == mode::autoconf);
+        mode_ = mode::active;
+        std::cout << "[AUTOCONF] " << desc() << " activating at $" << hexfmt(base << 16, 8) << "\n";
+        mem_handler_.register_handler(area_handler_, base << 16, config_.size);
+    }
+
+protected:
+    explicit autoconf_device(memory_handler& mem_handler, memory_area_handler& area_handler, const board_config& config)
+        : mem_handler_ { mem_handler }
+        , area_handler_ { area_handler }
+        , config_ { config }
+    {
+        memset(conf_data_, 0, sizeof(conf_data_));
+        assert((config.type & 0xc7) == 0);
+        /* $00/$02 */ conf_data_[0] = ERT_ZORROII | config.type | board_size(config.size);
+        /* $04/$06 */ conf_data_[1] = config.product_number;
+        /* $10-$18 */ put_u16(&conf_data_[4], config.hw_manufacturer);
+        /* $18-$28 */ put_u32(&conf_data_[6], config.serial_no);
+        /* $28-$30 */ put_u16(&conf_data_[10], config.rom_vector_offset);
+    }
+
+private:
+    enum class mode { autoconf, shutup, active } mode_ = mode::autoconf;
+    memory_handler& mem_handler_;
+    memory_area_handler& area_handler_;
+    const board_config config_;
+    uint8_t conf_data_[12];
+
+    std::string desc() const
+    {
+        return hexstring(config_.product_number) + "/" + hexstring(config_.hw_manufacturer) + "/" + hexstring(config_.serial_no);
+    }
+
+    static const uint8_t board_size(uint32_t size)
+    {
+        switch (size) {
+        case 64 << 10:
+            return 0b001;
+        case 128 << 10:
+            return 0b010;
+        case 256 << 10:
+            return 0b011;
+        case 512 << 10:
+            return 0b100;
+        case 1 << 20:
+            return 0b101;
+        case 2 << 20:
+            return 0b110;
+        case 4 << 20:
+            return 0b111;
+        case 8 << 20:
+            return 0b000;
+        default:
+            throw std::runtime_error { "Unsupported autoconf board size $" + hexstring(size) };
+        }
+    }
+};
+
+class fastmem_handler : public autoconf_device, public ram_handler {
+public:
+    explicit fastmem_handler(memory_handler& mem_handler, uint32_t size)
+        : autoconf_device { mem_handler, *this, make_config(size) }
+        , ram_handler { size }
+    {
+    }
+
+private:
+    static constexpr board_config make_config(uint32_t size)
+    {
+        return board_config {
+            .type = ERTF_MEMLIST,
+            .size = size,
+            .product_number = 0x12,
+            .hw_manufacturer = 0x1234,
+            .serial_no = 0x12345678,
+            .rom_vector_offset = 0,
+        };
+    }
+};
+
+
 // For now: only handle one board (for fast memory)
 class autoconf_handler : public memory_area_handler {
 public:
-    explicit autoconf_handler(uint32_t fastsize)
+    explicit autoconf_handler(memory_handler& mem_handler)
     {
-        boardsize_ = 0xff;
-        mode_ = mode::autoconf;
-        switch (fastsize) {
-        case 0:
-            mode_ = mode::shutup;
-            break;
-        case 64 << 10:
-            boardsize_ = 0b001;
-            break;
-        case 128 << 10:
-            boardsize_ = 0b010;
-            break;
-        case 256 << 10:
-            boardsize_ = 0b011;
-            break;
-        case 512 << 10:
-            boardsize_ = 0b100;
-            break;
-        case 1 << 20:
-            boardsize_ = 0b101;
-            break;
-        case 2 << 20:
-            boardsize_ = 0b110;
-            break;
-        case 4 << 20:
-            boardsize_ = 0b111;
-            break;
-        case 8 << 20:
-            boardsize_ = 0b000;
-            break;
-        default:
-            throw std::runtime_error { "Unsupported fastmem size $" + hexstring(fastsize) };
-        }
+        mem_handler.register_handler(*this, base, 0x10000);
+    }
 
-        #if 0
-        auto read_expansion_byte = [this](uint8_t ofs) -> uint8_t {
-            uint8_t b = (read_u8(ofs + 2, ofs + 2) & 0xf0) >> 4;
-            b |= read_u8(ofs, ofs) & 0xf0;
-            return ~b;
-        };
-        std::cout << "Read PN: $" << hexfmt(read_expansion_byte(0x04)) << "\n";
-        std::cout << "Read MN: $" << hexfmt(read_expansion_byte(0x10) << 8 | read_expansion_byte(0x14), 4) << "\n";
-        std::cout << "Read SN: $" << hexfmt(read_expansion_byte(0x18) << 24 | read_expansion_byte(0x1C) << 16 | read_expansion_byte(0x20) << 8 | read_expansion_byte(0x24)) << "\n";
-        #endif
+    void add_device(autoconf_device& dev)
+    {
+        devices_.push_back(&dev);
+    }
+
+private:
+    static constexpr uint32_t base = 0xe80000;
+    std::vector<autoconf_device*> devices_;
+    uint8_t low_addr_hold_ = 0;
+    bool has_low_addr_ = 0;
+
+    void remove_device()
+    {
+        assert(!devices_.empty());
+        has_low_addr_ = false;
+        devices_.pop_back();
     }
 
     uint8_t read_u8(uint32_t, uint32_t offset) override
     {
-        if (mode_ != mode::autoconf)
-            return 0xff;
-
-        const uint8_t product_number = 0x12;
-        const uint16_t hw_manufacturer = 0x1234;
-        const uint32_t serial_no = 0x12345678;
-
-        switch (offset) {
-            // $00/$02 Not inverted
-        case 0x00:
-            return 0xc0 | 0x20; // bit5: link into free list, board type 0b11
-        case 0x02:
-            return boardsize_ << 4; // boardsize, next card not on this board
-            // $04/06 Inverted, product number
-        case 0x04:
-            return static_cast<uint8_t>(~(product_number & 0xf0));
-        case 0x06:
-            return static_cast<uint8_t>(~((product_number & 0x0f) << 4));
-            // $08/$0A Inverted, can be shut-up/prefer 8MB space
-        case 0x08:
-        case 0x0a:
-            return 0xff;
-            // $0C/$0E Inverted, must be 0
-        case 0x0c:
-        case 0x0e:
-            return 0xff;
-            // $10/$12 Inverted, high byte of hardware manufacturer ID
-        case 0x10:
-            return static_cast<uint8_t>(~((hw_manufacturer >> 8) & 0xf0));
-        case 0x12:
-            return static_cast<uint8_t>(~(((hw_manufacturer >> 8) & 0x0f) << 4));
-            // $14/$16 Inverted, low byte of hardware manufacturer ID
-        case 0x14:
-            return static_cast<uint8_t>(~(hw_manufacturer & 0xf0));
-        case 0x16:
-            return static_cast<uint8_t>(~((hw_manufacturer & 0x0f) << 4));
-            // $18-$26 Inverted, serial #
-        case 0x18:
-            return static_cast<uint8_t>(~((serial_no >> 24) & 0xf0));
-        case 0x1A:
-            return static_cast<uint8_t>(~(((serial_no >> 24) & 0x0f) << 4));
-        case 0x1C:
-            return static_cast<uint8_t>(~((serial_no >> 16) & 0xf0));
-        case 0x1E:
-            return static_cast<uint8_t>(~(((serial_no >> 16) & 0x0f) << 4));
-        case 0x20:
-            return static_cast<uint8_t>(~((serial_no >> 8) & 0xf0));
-        case 0x22:
-            return static_cast<uint8_t>(~(((serial_no >> 8) & 0x0f) << 4));
-        case 0x24:
-            return static_cast<uint8_t>(~(serial_no & 0xf0));
-        case 0x26:
-            return static_cast<uint8_t>(~((serial_no & 0x0f) << 4));
-            // $28/$2A Inverted, high byte of optional ROM vector
-        case 0x28:
-        case 0x2A:
-            return 0xff;
-            // $2C/$2E Inverted, low byte of optional ROM vector
-        case 0x2C:
-        case 0x2E:
-            return 0xff;
-            // $30/$32 Inverted, read reserved must be 0
-        case 0x30:
-        case 0x32:
-            return 0xff;
-            // $34-$3E Inverted, reserved must be 0
-        case 0x34:
-        case 0x36:
-        case 0x38:
-        case 0x3A:
-        case 0x3C:
-        case 0x3E:
-            return 0xff;
-            // $40-42 Not inverted, interrupt status
-        case 0x40:
-        case 0x42:
-            return 0;
-            // $44/46 Inverted, reserved must be 0
-        case 0x44:
-        case 0x46:
-            return 0xff;
-            // $48/$4A write only
-            // $4C/$4E write only
-            // $50-$7E Inverted reserved must be 0
-        default:
-            if (!(offset & 1) && offset >= 0x50 && offset <= 0x7E)
-                return 0xFF;
+        if (!(offset & 1)) {
+            if (offset < 0x30) {
+                if (devices_.empty()) {
+                    return 0xff;
+                }
+                auto b = devices_.back()->read_config_byte(static_cast<uint8_t>(offset >> 2));
+                if (offset & 2)
+                    b <<= 4;
+                else
+                    b &= 0xf0;
+                return offset < 4 ? b : static_cast<uint8_t>(~b);
+            } else if (offset < 0x40) {
+                return 0xff;
+            } else if (offset == 0x40 || offset == 0x42) {
+                // Interrupt pending register - Not inverted
+                return 0;             
+            }
         }
-        std::cout << "TODO: autoconf read 8 to offset $" << hexfmt(offset) << "\n";
+
+        std::cerr << "[AUTOCONF] Unhandled read offset $" << hexfmt(offset) << "\n";
         return 0xff;
     }
 
@@ -448,40 +478,37 @@ public:
 
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override
     {
-        switch (offset) {
-            // $48/$4A Write only, not inverted: Base address (A23..A16)
-        case 0x48:
-            std::cout << "[Autconf] A23..A20 = $" << hexfmt(val >> 4, 1) << " (auto config done)\n";
-            assert(val == 0x20);
-            assert(mode_ == mode::autoconf);
-            mode_ = mode::active;
-            return;
-        case 0x4A:
-            std::cout << "[Autconf] A19..A16 = $" << hexfmt(val, 1) << "\n";
-            assert(val == 0x00);
-            assert(mode_ == mode::autoconf);
-            return;
-            // $4C/$4E Shutup register
-        case 0x4C:
-        case 0x4E:
-            std::cout << "[Autoconf] Shutting up\n";
-            assert(mode_ == mode::autoconf);
-            mode_ = mode::shutup;
-            return;
+        if (!devices_.empty()) {
+            auto& dev = *devices_.back();
+            if (offset == 0x48) {
+                if (!has_low_addr_)
+                    std::cerr << "[AUTOCONF] Warning high address written without low address val=$" << hexfmt(val) << "\n";
+                dev.activate(static_cast<uint16_t>((val & 0xf0) | low_addr_hold_));
+                remove_device();
+                return;
+            } else if (offset == 0x4a) {
+                if (has_low_addr_)
+                    std::cerr << "[AUTOCONF] Warning already has low address ($" << hexfmt(low_addr_hold_) << ") got $" << hexfmt(val) << "\n";
+                has_low_addr_ = true;
+                low_addr_hold_ = val >> 4;
+                return;
+            } else if (offset == 0x4c) {
+                // shutup
+                dev.shutup();
+                remove_device();
+                return;
+            }
+        } else {
+            std::cerr << "[AUTCONF] Write without device\n";
         }
 
-        // $4C/$4E
-        std::cout << "TODO: autoconf write 8 to offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
+        std::cerr << "[AUTOCONF] Unhandled write offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
     }
 
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
-        std::cout << "TODO: autoconf write 16 to offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
+        std::cerr << "[AUTOCONF] Unhandled write offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
     }
-
-private:
-    uint8_t boardsize_;
-    enum class mode { autoconf, shutup, active } mode_;
 };
 
 int main(int argc, char* argv[])
@@ -494,13 +521,12 @@ int main(int argc, char* argv[])
         disk_drive df0 {"DF0:"}, df1 {"DF1:"};
         disk_drive* drives[max_drives] = { &df0, &df1 };
         std::unique_ptr<ram_handler> slow_ram;
-        std::unique_ptr<ram_handler> fast_ram;
+        std::unique_ptr<fastmem_handler> fast_ram;
         memory_handler mem { cmdline_args.chip_size };
         rom_area_handler rom { mem, read_file(cmdline_args.rom) };
         cia_handler cias { mem, rom, drives };
         custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size };
-        autoconf_handler autoconf { cmdline_args.fast_size };
-        mem.register_handler(autoconf, 0xe80000, 0x80000);
+        autoconf_handler autoconf { mem };
         std::vector<uint32_t> testmode_data;
         uint32_t testmode_cnt = 0;
 
@@ -509,8 +535,8 @@ int main(int argc, char* argv[])
             mem.register_handler(*slow_ram, slow_base, cmdline_args.slow_size);
         }
         if (cmdline_args.fast_size) {
-            fast_ram = std::make_unique<ram_handler>(cmdline_args.fast_size);
-            mem.register_handler(*fast_ram, fast_base, cmdline_args.fast_size);
+            fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
+            autoconf.add_device(*fast_ram);
         }
 
         m68000 cpu { mem };
