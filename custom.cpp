@@ -854,8 +854,8 @@ struct custom_state {
         audio_channel_state state;
         uint32_t ptr;
         uint16_t actlen;
+        uint16_t actdat;
         uint16_t percnt;
-        uint16_t actvol;
         bool dmareq;
         //http://eab.abime.net/showthread.php?t=86880
         //A500: 0.1 uF, 360 Ohm -> 4,4 kHz
@@ -863,6 +863,7 @@ struct custom_state {
         //A1200 r1: 3900pF, 1.5kOhm -> 27 kHz
         //A1200 r2: 6800pF, 680 Ohm -> 34 kHz
         simple_lowpass_filter<4400.0f> filter;
+        float output;
 
         void load_per()
         {
@@ -1506,7 +1507,6 @@ public:
                     ch.ptr = ch.lc;
                     ch.actlen = ch.len;
                     ch.load_per();
-                    ch.actvol = ch.vol;
                     ch.dmareq = true;
                     if (DEBUG_AUDIO)
                         DBGOUT << "Audio channel " << (int)idx << " starting\n";
@@ -1538,7 +1538,32 @@ public:
                 }
                 break;
             }
+
+            int16_t dat = 0;
+            if (ch.state == custom_state::audio_channel_state::dma_samp1)
+                dat = static_cast<int8_t>(ch.actdat >> 8);
+            else if (ch.state == custom_state::audio_channel_state::dma_samp2)
+                dat = static_cast<int8_t>(ch.actdat & 0xff);
+            else
+                continue;
+            ch.output += ch.filter(static_cast<float>(dat * ch.vol * 2));
         }
+        static int cnt = 0;
+        ++cnt;
+
+        // Mix 2 samples per line
+        if (s_.hpos == 0 || (s_.hpos >> 1) == 1 + hpos_per_line / 4) {
+            auto buf = &audio_buf_[s_.vpos * 4 + 2 * (s_.hpos ? 1 : 0)];
+            const float a = 1.0f / (1 + hpos_per_line / 4);
+            buf[0] = static_cast<int16_t>(a * (s_.audio_channels[0].output + s_.audio_channels[3].output));
+            buf[1] = static_cast<int16_t>(a * (s_.audio_channels[1].output + s_.audio_channels[2].output));
+            s_.audio_channels[0].output = 0;
+            s_.audio_channels[1].output = 0;
+            s_.audio_channels[2].output = 0;
+            s_.audio_channels[3].output = 0;
+            cnt = 0;
+        }
+
     }
 
     bool audio_dma(uint8_t idx)
@@ -1551,6 +1576,7 @@ public:
         ch.dat = chip_read(ch.ptr);
         ch.ptr += 2;
         ch.dmareq = false;
+        ch.actdat = ch.dat;
         switch (ch.state) {
         case custom_state::audio_channel_state::dma_starting:
             if (DEBUG_AUDIO)
@@ -1568,32 +1594,6 @@ public:
             throw std::runtime_error { "FIXME" };
         }
         return true;
-    }
-
-    void audio_mix()
-    {
-        // Audio
-        int16_t l = 0, r = 0;
-        for (uint8_t idx = 0; idx < 4; ++idx) {
-            int16_t dat = 0;
-            auto& ch = s_.audio_channels[idx];
-            if (ch.state == custom_state::audio_channel_state::dma_samp1)
-                dat = static_cast<int8_t>(ch.dat >> 8);
-            else if (ch.state == custom_state::audio_channel_state::dma_samp2)
-                dat = static_cast<int8_t>(ch.dat & 0xff);
-            else
-                continue;
-            // -128..127 * 128 (max) = -16384..16383 (and then two channels)
-            dat *= ch.vol * 2;
-            dat = static_cast<int16_t>(ch.filter(static_cast<float>(dat)));
-            if (idx == 0 || idx == 3)
-                l += dat;
-            else
-                r += dat;
-        }
-        const auto idx = s_.vpos * 4 + 2 * (s_.hpos ? 1 : 0);
-        audio_buf_[idx] = l;
-        audio_buf_[idx + 1] = r;
     }
 
     step_result step(bool cpu_wants_access)
@@ -1850,10 +1850,6 @@ public:
                 }
             }
         }
-
-        // Mix 2 samples per line
-        if (s_.hpos == 0 || s_.hpos == hpos_per_line / 2)
-            audio_mix();
 
         if (!(s_.hpos & 1))
             do_audio();
