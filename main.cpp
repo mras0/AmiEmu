@@ -833,16 +833,30 @@ int main(int argc, char* argv[])
             if (!cpu_active)
                 return;
             assert(size == 1 || size == 2); (void)size;
-            if (addr >= min_rom_addr || (addr >= fast_base && addr < fast_base + max_fast_size)) {
+            if (addr < max_chip_size || (addr >= slow_base && addr < custom_base_addr + custom_mem_size)) {
+                do_all_custom_cylces();
+                while (!custom_step.free_chip_cycle) {
+                    ++cpu_cycles_count;
+                    cstep(true);
+                }
+                cycles_todo = 4;
+            } else if (addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size) {
+                do_all_custom_cylces();
+                // Eclock is low for 6 system clocks and then high for 4 during which the transfer happens
+                // And address needs to be latched 3 cycles before EClk rises or falls
+
+                while (custom_step.eclock_cycle != 3) {
+                    ++cpu_cycles_count;
+                    cstep(false);
+                }
+                while (custom_step.eclock_cycle != 6) {
+                    ++cpu_cycles_count;
+                    cstep(false);
+                }
+                cycles_todo = 4;
+            } else {
                 cycles_todo += 4;
-                return;
             }
-            const bool is_cia_access = addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size;
-            do_all_custom_cylces();
-            while (!custom_step.free_chip_cycle || (is_cia_access && !custom_step.eclock_cycle)) {
-                cstep(true);
-            } 
-            cycles_todo = 4;
         });
 
         //cpu.trace(&std::cout);

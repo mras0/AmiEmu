@@ -774,7 +774,7 @@ struct custom_state {
     // Internal state
     uint16_t hpos; // Resolution is in low-res pixels
     uint16_t vpos;
-    uint8_t  eclock_count;
+    uint8_t  eclock_cycle;
     uint16_t bpldat_shift[6];
     uint16_t bpldat_temp[6];
     bool bpl1dat_written;
@@ -2268,15 +2268,14 @@ public:
         }
 
         // CIA tick rate (EClock) is 1/10th of (base) CPU speed = 1/5th of CCK (to keep in sync with DMA)
-        if (!(s_.hpos & 1) && ++s_.eclock_count == 5) {
+        if (++s_.eclock_cycle == 10) {
             cia_.step();
             const auto irq_mask = cia_.active_irq_mask();
             if (irq_mask & 1)
                 s_.intreq |= INTF_PORTS;
             if (irq_mask & 2)
                 s_.intreq |= INTF_EXTER;
-            s_.eclock_count = 0;
-            res.eclock_cycle = true;
+            s_.eclock_cycle = 0;
         }
 
         if (++s_.hpos == hpos_per_line) {
@@ -2313,6 +2312,7 @@ public:
         res.vpos = s_.vpos;
         res.hpos = s_.hpos;
         res.ipl = current_ipl();
+        res.eclock_cycle = s_.eclock_cycle;
         return res;
     }
 

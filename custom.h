@@ -32,7 +32,7 @@ public:
         uint16_t hpos;
         uint8_t ipl;
         bool free_chip_cycle;
-        bool eclock_cycle;
+        uint8_t eclock_cycle;
     };
 
     step_result step(bool cpu_wants_access, uint32_t current_pc);

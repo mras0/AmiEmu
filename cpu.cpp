@@ -8,6 +8,8 @@
 #include <sstream>
 #include <stdexcept>
 
+// TODO: Prefetch before write for some MOVE operations
+
 namespace {
 
 const char* const conditional_strings[16] = {
@@ -893,6 +895,7 @@ private:
             carry = false;
         }
 
+        prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
         if (arit && cnt) {
@@ -1084,6 +1087,7 @@ private:
             ccr |= srm_v;
         if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(1, res2);
         state_.update_sr(srm_ccr, ccr);
     }
@@ -1111,6 +1115,7 @@ private:
         const uint32_t res = l + r;
 
         add_rmw_cycles();
+        prefetch();
 
         write_ea(1, res);
         // All flags updated
@@ -1164,6 +1169,7 @@ private:
         const uint32_t l = read_ea(1);
         const uint32_t res = l & r;
         add_rmw_cycles();
+        prefetch();
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
     }
@@ -1200,6 +1206,7 @@ private:
             carry = msb;
         }
 
+        prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
     }
@@ -1263,6 +1270,7 @@ private:
         const auto [bitnum, num] = bit_op_helper();
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(1, num ^ (1 << bitnum));
     }
 
@@ -1271,6 +1279,7 @@ private:
         const auto [bitnum, num] = bit_op_helper();
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(4);
+        prefetch();
         write_ea(1, num & ~(1 << bitnum));
     }
 
@@ -1279,6 +1288,7 @@ private:
         const auto [bitnum, num] = bit_op_helper();
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(1, num | (1 << bitnum));
     }
 
@@ -1309,6 +1319,7 @@ private:
         read_ea(0); // 68000 does a superflous read
         if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(0, 0);
         state_.update_sr(srm_ccr_no_x, srm_z);
     }
@@ -1496,6 +1507,7 @@ private:
         const uint32_t l = read_ea(1);
         const uint32_t res = l ^ r;
         add_rmw_cycles();
+        prefetch();
         prefetch(); // Prefetch happens before write (needed for Razor1911-Voyage, which uses EOR.W D5,(A2) to modify the following instruction!)
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
@@ -1623,6 +1635,7 @@ private:
             carry = false;
         }
 
+        prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
     }
@@ -1786,6 +1799,7 @@ private:
             ccr |= srm_v;
         if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(0, res2);
         state_.update_sr(srm_ccr, ccr);
     }
@@ -1810,6 +1824,7 @@ private:
         }
         if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(0, n);
         state_.update_sr(srm_ccr, ccr);
     }
@@ -1823,6 +1838,7 @@ private:
         const uint32_t res = l - r - !!(state_.sr & srm_x);
         if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(0, res);
         update_flags(static_cast<sr_mask>(srm_ccr & ~srm_z), res, (~l & r) | (~(l ^ r) & res));
         // Z is only cleared if the result is non-zero
@@ -1837,6 +1853,7 @@ private:
         auto n = ~read_ea(0);
         if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         update_flags(srm_ccr_no_x, n, 0);
         write_ea(0, n);
     }
@@ -1852,6 +1869,7 @@ private:
         const uint32_t l = read_ea(1);
         const uint32_t res = l | r;
         add_rmw_cycles();
+        prefetch();
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
     }
@@ -1893,6 +1911,7 @@ private:
             carry = !!(val & 1);
         }
 
+        prefetch();
         write_ea(inst_->nea - 1, val);
         const uint16_t old_x = state_.sr & srm_x; // X is not affected
         update_flags_rot(val, cnt, carry);
@@ -1920,6 +1939,7 @@ private:
             carry = val & opsize_msb_mask(inst_->size);
         }
 
+        prefetch();
         write_ea(inst_->nea - 1, val);
         const uint16_t old_x = state_.sr & srm_x; // X is not affected
         update_flags_rot(val, cnt, carry);
@@ -1946,6 +1966,7 @@ private:
             val = (val << 1) | x;
             x = new_x;
         }
+        prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, !!x);
     }
@@ -1970,6 +1991,7 @@ private:
             val = (val >> 1) | (x << shift);
             x = new_x;
         }
+        prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, !!x);
     }
@@ -2011,6 +2033,7 @@ private:
             ccr |= srm_v;
         if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        prefetch();
         write_ea(1, res2);
         state_.update_sr(srm_ccr, ccr);
     }
@@ -2023,6 +2046,7 @@ private:
             add_cycles(2);
         else
             (void)read_ea(0);
+        prefetch();
         write_ea(0, cond ? 0xff : 0x00);
     }
 
@@ -2041,6 +2065,7 @@ private:
         const uint32_t l = read_ea(1);
         const uint32_t res = l - r;
         add_rmw_cycles();
+        prefetch();
         write_ea(1, res);
         // All flags updated
         update_flags(srm_ccr, res, (~l & r) | (~(l ^ r) & res));
