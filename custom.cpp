@@ -2553,9 +2553,14 @@ public:
             return;
         case VPOSW:  // $02A
             // Only support clearing/setting LOF (3d demo II)
-            if (DEBUG_BPL || !!(val & 0x8000) != s_.long_frame)
+            if (DEBUG_BPL)
                 DBGOUT << "Write to VPOSW $" << hexfmt(val) << "\n";
             s_.long_frame = !!(val & 0x8000);
+            return;
+        case VHPOSW: // $02C
+            // Ignore: (Dynablaster)
+            if (DEBUG_BPL)
+                DBGOUT << "Write to VHPOSW $" << hexfmt(val) << "\n";
             return;
         case COPCON: // $02E
             s_.cdang = !!(val & 2);
