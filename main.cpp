@@ -268,12 +268,205 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
     if (args.rom.empty()) {
         args.rom = "rom.bin";
     }
-    if (args.chip_size == 0 && args.slow_size == 0) {
+    if (args.chip_size == 0 && args.slow_size == 0 && args.fast_size == 0) {
         args.chip_size = 512 << 10;
         args.slow_size = 512 << 10;
+    } else if (args.chip_size == 0) {
+        args.chip_size = 512 << 10;
+    }
+    if (args.chip_size < 256 << 10) {
+        usage("Invalid configuration (chip RAM too small)");
     }
     return args;
 }
+
+// For now: only handle one board (for fast memory)
+class autoconf_handler : public memory_area_handler {
+public:
+    explicit autoconf_handler(uint32_t fastsize)
+    {
+        boardsize_ = 0xff;
+        mode_ = mode::autoconf;
+        switch (fastsize) {
+        case 0:
+            mode_ = mode::shutup;
+            break;
+        case 64 << 10:
+            boardsize_ = 0b001;
+            break;
+        case 128 << 10:
+            boardsize_ = 0b010;
+            break;
+        case 256 << 10:
+            boardsize_ = 0b011;
+            break;
+        case 512 << 10:
+            boardsize_ = 0b100;
+            break;
+        case 1 << 20:
+            boardsize_ = 0b101;
+            break;
+        case 2 << 20:
+            boardsize_ = 0b110;
+            break;
+        case 4 << 20:
+            boardsize_ = 0b111;
+            break;
+        case 8 << 20:
+            boardsize_ = 0b000;
+            break;
+        default:
+            throw std::runtime_error { "Unsupported fastmem size $" + hexstring(fastsize) };
+        }
+
+        #if 0
+        auto read_expansion_byte = [this](uint8_t ofs) -> uint8_t {
+            uint8_t b = (read_u8(ofs + 2, ofs + 2) & 0xf0) >> 4;
+            b |= read_u8(ofs, ofs) & 0xf0;
+            return ~b;
+        };
+        std::cout << "Read PN: $" << hexfmt(read_expansion_byte(0x04)) << "\n";
+        std::cout << "Read MN: $" << hexfmt(read_expansion_byte(0x10) << 8 | read_expansion_byte(0x14), 4) << "\n";
+        std::cout << "Read SN: $" << hexfmt(read_expansion_byte(0x18) << 24 | read_expansion_byte(0x1C) << 16 | read_expansion_byte(0x20) << 8 | read_expansion_byte(0x24)) << "\n";
+        #endif
+    }
+
+    uint8_t read_u8(uint32_t, uint32_t offset) override
+    {
+        if (mode_ != mode::autoconf)
+            return 0xff;
+
+        const uint8_t product_number = 0x12;
+        const uint16_t hw_manufacturer = 0x1234;
+        const uint32_t serial_no = 0x12345678;
+
+        switch (offset) {
+            // $00/$02 Not inverted
+        case 0x00:
+            return 0xc0 | 0x20; // bit5: link into free list, board type 0b11
+        case 0x02:
+            return boardsize_ << 4; // boardsize, next card not on this board
+            // $04/06 Inverted, product number
+        case 0x04:
+            return static_cast<uint8_t>(~(product_number & 0xf0));
+        case 0x06:
+            return static_cast<uint8_t>(~((product_number & 0x0f) << 4));
+            // $08/$0A Inverted, can be shut-up/prefer 8MB space
+        case 0x08:
+        case 0x0a:
+            return 0xff;
+            // $0C/$0E Inverted, must be 0
+        case 0x0c:
+        case 0x0e:
+            return 0xff;
+            // $10/$12 Inverted, high byte of hardware manufacturer ID
+        case 0x10:
+            return static_cast<uint8_t>(~((hw_manufacturer >> 8) & 0xf0));
+        case 0x12:
+            return static_cast<uint8_t>(~(((hw_manufacturer >> 8) & 0x0f) << 4));
+            // $14/$16 Inverted, low byte of hardware manufacturer ID
+        case 0x14:
+            return static_cast<uint8_t>(~(hw_manufacturer & 0xf0));
+        case 0x16:
+            return static_cast<uint8_t>(~((hw_manufacturer & 0x0f) << 4));
+            // $18-$26 Inverted, serial #
+        case 0x18:
+            return static_cast<uint8_t>(~((serial_no >> 24) & 0xf0));
+        case 0x1A:
+            return static_cast<uint8_t>(~(((serial_no >> 24) & 0x0f) << 4));
+        case 0x1C:
+            return static_cast<uint8_t>(~((serial_no >> 16) & 0xf0));
+        case 0x1E:
+            return static_cast<uint8_t>(~(((serial_no >> 16) & 0x0f) << 4));
+        case 0x20:
+            return static_cast<uint8_t>(~((serial_no >> 8) & 0xf0));
+        case 0x22:
+            return static_cast<uint8_t>(~(((serial_no >> 8) & 0x0f) << 4));
+        case 0x24:
+            return static_cast<uint8_t>(~(serial_no & 0xf0));
+        case 0x26:
+            return static_cast<uint8_t>(~((serial_no & 0x0f) << 4));
+            // $28/$2A Inverted, high byte of optional ROM vector
+        case 0x28:
+        case 0x2A:
+            return 0xff;
+            // $2C/$2E Inverted, low byte of optional ROM vector
+        case 0x2C:
+        case 0x2E:
+            return 0xff;
+            // $30/$32 Inverted, read reserved must be 0
+        case 0x30:
+        case 0x32:
+            return 0xff;
+            // $34-$3E Inverted, reserved must be 0
+        case 0x34:
+        case 0x36:
+        case 0x38:
+        case 0x3A:
+        case 0x3C:
+        case 0x3E:
+            return 0xff;
+            // $40-42 Not inverted, interrupt status
+        case 0x40:
+        case 0x42:
+            return 0;
+            // $44/46 Inverted, reserved must be 0
+        case 0x44:
+        case 0x46:
+            return 0xff;
+            // $48/$4A write only
+            // $4C/$4E write only
+            // $50-$7E Inverted reserved must be 0
+        default:
+            if (!(offset & 1) && offset >= 0x50 && offset <= 0x7E)
+                return 0xFF;
+        }
+        std::cout << "TODO: autoconf read 8 to offset $" << hexfmt(offset) << "\n";
+        return 0xff;
+    }
+
+    uint16_t read_u16(uint32_t addr, uint32_t offset) override
+    {
+        return read_u8(addr, offset) << 8 | read_u8(addr, offset+1);
+    }
+
+    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
+    {
+        switch (offset) {
+            // $48/$4A Write only, not inverted: Base address (A23..A16)
+        case 0x48:
+            std::cout << "[Autconf] A23..A20 = $" << hexfmt(val >> 4, 1) << " (auto config done)\n";
+            assert(val == 0x20);
+            assert(mode_ == mode::autoconf);
+            mode_ = mode::active;
+            return;
+        case 0x4A:
+            std::cout << "[Autconf] A19..A16 = $" << hexfmt(val, 1) << "\n";
+            assert(val == 0x00);
+            assert(mode_ == mode::autoconf);
+            return;
+            // $4C/$4E Shutup register
+        case 0x4C:
+        case 0x4E:
+            std::cout << "[Autoconf] Shutting up\n";
+            assert(mode_ == mode::autoconf);
+            mode_ = mode::shutup;
+            return;
+        }
+
+        // $4C/$4E
+        std::cout << "TODO: autoconf write 8 to offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
+    }
+
+    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
+    {
+        std::cout << "TODO: autoconf write 16 to offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
+    }
+
+private:
+    uint8_t boardsize_;
+    enum class mode { autoconf, shutup, active } mode_;
+};
 
 int main(int argc, char* argv[])
 {
@@ -287,6 +480,8 @@ int main(int argc, char* argv[])
         rom_area_handler rom { mem, read_file(cmdline_args.rom) };
         cia_handler cias { mem, rom, drives };
         custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size };
+        autoconf_handler autoconf { cmdline_args.fast_size };
+        mem.register_handler(autoconf, 0xe80000, 0x80000);
 
         if (cmdline_args.slow_size) {
             slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
@@ -303,6 +498,8 @@ int main(int argc, char* argv[])
             df0.insert_disk(read_file(cmdline_args.df0));
         if (!cmdline_args.df1.empty())
             df1.insert_disk(read_file(cmdline_args.df1));
+
+        std::cout << "Memory configuration: Chip: " << (cmdline_args.chip_size >> 10) << " KB, Slow: " << (cmdline_args.slow_size >> 10) << " KB, Fast: " << (cmdline_args.fast_size >> 10) << " KB\n";
 
         //rom_tag_scan(rom.rom());
 
