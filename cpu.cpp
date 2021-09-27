@@ -315,7 +315,8 @@ private:
             res = read_reg(state_.A(ea & ea_xn_mask));
             return;
         case ea_m_A_ind_pre:
-            step_res_.clock_cycles += 2;
+            if (idx == 0)
+                step_res_.clock_cycles += 2;
             [[fallthrough]];
         case ea_m_A_ind:
         case ea_m_A_ind_post:
