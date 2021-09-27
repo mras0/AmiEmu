@@ -774,6 +774,7 @@ struct custom_state {
     bool bltdwrite;
     bool bltinpoly;
     uint32_t bltdpt;
+    uint8_t bltblockingcpu;
 
     uint32_t coplc[2];
     uint16_t diwstrt;
@@ -1115,6 +1116,7 @@ public:
         const uint8_t period = blitcycles[usef][0];
         assert(s_.bltcycle < period);
         const uint8_t cycle = blitcycles[usef][1 + s_.bltcycle];
+        bool no_dma = s_.bltblockingcpu == 3;
 
         const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
         bool dma = false;
@@ -1134,6 +1136,8 @@ public:
         case 0: { // A
             if (s_.blitstate == custom_state::blit_final)
                 break;
+            if (no_dma)
+                return false;
             do_dma(0);
             dma = true;
             break;
@@ -1141,6 +1145,8 @@ public:
         case 1: { // B
             if (s_.blitstate == custom_state::blit_final)
                 break;
+            if (no_dma)
+                return false;
             do_dma(1);
             dma = true;
             const uint8_t bshift = s_.bltcon1 >> BC1_BSHIFTSHIFT;
@@ -1154,12 +1160,16 @@ public:
         case 2: { // C
             if (s_.blitstate == custom_state::blit_final)
                 break;
+            if (no_dma)
+                return false;
             do_dma(2);
             dma = true;
             break;
         }
         case 3: { // D
             if (s_.bltdwrite) {
+                if (no_dma)
+                    return false;
                 chip_write(s_.bltdpt, s_.bltdat[3]);
                 dma = true;
             }
@@ -1254,6 +1264,7 @@ public:
         s_.bltinpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);      
         s_.bltdpt = 0;
         s_.blitstate = custom_state::blit_running;
+        s_.bltblockingcpu = 0;
         if (DEBUG_BLITTER) {
             DBGOUT << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
             for (int i = 0; i < 4; ++i) {
@@ -1404,7 +1415,7 @@ public:
         return true;
     }
 
-    step_result step()
+    step_result step(bool cpu_wants_access)
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
 
@@ -1781,15 +1792,18 @@ public:
                 }
                 
                 // Blitter
-                if (do_blitter()) {
+                if (do_blitter())
                     break;
-                }
 
                 res.free_chip_cycle = true;
             } while (0);
         } else if (!(s_.hpos & 1))
             res.free_chip_cycle = true;
-        
+
+        if (!res.free_chip_cycle && cpu_wants_access && !(s_.dmacon & DMAF_BLITHOG))
+            ++s_.bltblockingcpu;
+        else
+            s_.bltblockingcpu = 0;
 
         // CIA tick rate is 1/10th of (base) CPU speed
         if (s_.hpos % 10 == 0) {
@@ -2490,9 +2504,9 @@ custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia)
 
 custom_handler::~custom_handler() = default;
 
-custom_handler::step_result custom_handler::step()
+custom_handler::step_result custom_handler::step(bool cpu_wants_access)
 {
-    return impl_->step();
+    return impl_->step(cpu_wants_access);
 }
 
 void custom_handler::set_serial_data_handler(const serial_data_handler& handler)

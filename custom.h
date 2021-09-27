@@ -26,7 +26,7 @@ public:
         bool free_chip_cycle;
     };
 
-    step_result step();
+    step_result step(bool cpu_wants_access);
 
     void set_serial_data_handler(const serial_data_handler& handler);
     void set_rbutton_state(bool pressed);

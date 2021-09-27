@@ -379,9 +379,9 @@ int main(int argc, char* argv[])
             cycles_todo += cycles;
         });
 
-        auto cstep = [&]() {
+        auto cstep = [&](bool cpu_waiting) {
             cpu_active = false;
-            custom_step = custom.step();
+            custom_step = custom.step(cpu_waiting);
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
                 g.set_active(false);
                 debug_mode = true;
@@ -393,7 +393,7 @@ int main(int argc, char* argv[])
 
         auto do_all_custom_cylces = [&]() {
             while (cycles_todo) {
-                cstep();
+                cstep(false);
                 --cycles_todo;
             }
         };
@@ -408,7 +408,7 @@ int main(int argc, char* argv[])
             cycles_todo += 2;
             do_all_custom_cylces();
             while (!custom_step.free_chip_cycle) {
-                cstep();
+                cstep(true);
             } 
             cycles_todo = 2;
         });
@@ -683,7 +683,7 @@ unknown_command:
                 if (cpu_step.clock_cycles == 0) {
                     // CPU is stopped
                     do {
-                        cstep();
+                        cstep(false);
                     } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
                 }
                 else
