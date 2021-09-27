@@ -29,6 +29,7 @@
 #include "harddisk.h"
 #include "rtc.h"
 #include "state_file.h"
+#include "adf.h"
 
 namespace {
 
@@ -309,6 +310,7 @@ struct command_line_arguments {
     std::string df0;
     std::string df1;
     std::string hd;
+    std::string exe;
     uint32_t chip_size;
     uint32_t slow_size;
     uint32_t fast_size;
@@ -325,6 +327,7 @@ struct command_line_arguments {
         sf.handle(df0);
         sf.handle(df1);
         sf.handle(hd);
+        sf.handle(exe);
         sf.handle(chip_size);
         sf.handle(slow_size);
         sf.handle(fast_size);
@@ -393,6 +396,8 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_string_arg("hd", args.hd))
                 continue;
+            else if (get_string_arg("exe", args.exe))
+                continue;
             else if (get_string_arg("rom", args.rom))
                 continue;
             else if (get_size_arg("chip", args.chip_size, max_chip_size))
@@ -439,6 +444,9 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
         args.cpu_scale = 1;
     if (!args.floppy_speed)
         args.floppy_speed = 16;
+
+    if (!args.exe.empty() && !args.df0.empty())
+        usage("-exe and -df0 are incompatible");
     return args;
 }
 
@@ -454,7 +462,6 @@ int main(int argc, char* argv[])
             state = std::make_unique<state_file>(state_file::dir::load, cmdline_args.state_filename);
             cmdline_args.handle_state(*state);
         }
-
         disk_drive df0 {"DF0:"}, df1 {"DF1:"};
         disk_drive* drives[max_drives] = { &df0, &df1 };
         std::unique_ptr<ram_handler> slow_ram;
@@ -492,6 +499,19 @@ int main(int argc, char* argv[])
 
         if (!cmdline_args.df0.empty())
             df0.insert_disk(read_file(cmdline_args.df0));
+        else if (!cmdline_args.exe.empty()) {
+            // Create auto-booting (OFS) disk with the exectuable
+            const auto file = read_file(cmdline_args.exe);
+            std::string filename = cmdline_args.exe;
+            if (auto pos = filename.find_last_of("/\\"); pos != std::string::npos)
+                filename = filename.substr(pos + 1);
+            auto ss = ":" + filename;
+            auto disk = adf::new_disk("test");
+            disk.make_dir("S");
+            disk.write_file("s/startup-sequence", std::vector<uint8_t>(ss.begin(), ss.end()));
+            disk.write_file(filename, file);
+            df0.insert_disk(std::vector<uint8_t>(disk.get()));
+        }
         if (!cmdline_args.df1.empty())
             df1.insert_disk(read_file(cmdline_args.df1));
 
