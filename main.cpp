@@ -268,8 +268,10 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
     if (args.rom.empty()) {
         args.rom = "rom.bin";
     }
-    if (args.chip_size == 0)
-        args.chip_size = 1 << 20;
+    if (args.chip_size == 0 && args.slow_size == 0) {
+        args.chip_size = 512 << 10;
+        args.slow_size = 512 << 10;
+    }
     return args;
 }
 
