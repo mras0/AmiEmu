@@ -645,6 +645,25 @@ constexpr uint8_t blitcycles[16][5] = {
     { 3, A, B, C    }, // E      A B C        A0 B0 C0 A1 B1 C1 A2 B2 C2
     { 4, A, B, C, D }, // F      A B C D      A0 B0 C0  - A1 B1 C1 D0 A2 B2 C2 D1 D2
 };
+// See Amiga_Hardware_Manual_Errata.pdf (Note: Only 1,5,9 and D are different from the nomral cycle diagrams)
+constexpr uint8_t blitcycles_fill[16][5] = {
+    { 1, I          }, // 0          none
+    { 3, I, D, I    }, // 1            D       - D0  -  - D1  -  - D2
+    { 2, C, I       }, // 2          C        C0  - C1  - C2
+    { 3, C, D, I    }, // 3          C D      C0  -  - C1 D0  - C2 D1  - D2
+    { 3, B, I, I    }, // 4        B          B0  -  - B1  -  - B2
+    { 4, I, B, D, I }, // 5        B   D       - B0  -  -  - B1 D0  -  - B2 D1  - D2
+    { 3, B, C, I    }, // 6        B C        B0 C0  - B1 C1  - B2 C2
+    { 4, B, C, D, I }, // 7        B C D      B0 C0  -  - B1 C1 D0  - B2 C2 D1  - D2
+    { 2, A, I       }, // 8      A            A0  - A1  - A2
+    { 3, A, D, I    }, // 9      A     D      A0  -  - A1 D0  - A2 D1  - D2
+    { 2, A, C       }, // A      A   C        A0 C0 A1 C1 A2 C2
+    { 3, A, C, D    }, // B      A   C D      A0 C0  - A1 C1 D0 A2 C2 D1  - D2
+    { 3, A, B, I    }, // C      A B          A0 B0  - A1 B1  - A2 B2
+    { 4, A, B, D, I }, // D      A B   D      A0 B0  -  - A1 B1 D0  - A2 B2 D1  - D2
+    { 3, A, B, C    }, // E      A B C        A0 B0 C0 A1 B1 C1 A2 B2 C2
+    { 4, A, B, C, D }, // F      A B C D      A0 B0 C0  - A1 B1 C1 D0 A2 B2 C2 D1 D2
+};
 #undef A
 #undef B
 #undef C
@@ -1200,10 +1219,12 @@ public:
             return false;
         }
 
+        const bool fillmode = !!(s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR));
         const uint8_t usef = (s_.bltcon0 >> 8) & 0xf;
-        const uint8_t period = blitcycles[usef][0];
+        const auto cd = fillmode ? blitcycles_fill : blitcycles;
+        const uint8_t period = cd[usef][0];
         assert(s_.bltcycle < period);
-        const uint8_t cycle = blitcycles[usef][1 + s_.bltcycle];
+        const uint8_t cycle = cd[usef][1 + s_.bltcycle];
         bool no_dma = s_.bltblockingcpu >= 3;
 
         const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
@@ -1291,7 +1312,7 @@ public:
                 // Nothing for C
 
                 uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), ahold, s_.bltbhold, s_.bltdat[2]);
-                if (s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR)) {
+                if (fillmode) {
                     for (uint8_t bit = 0; bit < 16; ++bit) {
                         const uint16_t mask = 1U << bit;
                         const bool match = !!(val & mask);
