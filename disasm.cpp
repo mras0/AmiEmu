@@ -161,22 +161,17 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
         case ea_m_A_ind_index: {
             assert(eaw < inst.ilen);
             const auto extw = iwords[eaw++];
-            if (extw & (7 << 8)) {
-                os << "Full extension word/scale not supported\n";
-                assert(0);
-                break;
-            } else {
-                auto disp = static_cast<int8_t>(extw & 255);
-                os << "$";
-                if (disp < 0) {
-                    os << "-";
-                    disp = -disp;
-                }
-                os << hexfmt(static_cast<uint8_t>(disp)) << "(A" << (ea & 7) << ",";
-                os << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
-                os << ")";
-                break;
+            // Note: 68000 ignores scale in bits 9/10 and full extension word bit (8)
+            auto disp = static_cast<int8_t>(extw & 255);
+            os << "$";
+            if (disp < 0) {
+                os << "-";
+                disp = -disp;
             }
+            os << hexfmt(static_cast<uint8_t>(disp)) << "(A" << (ea & 7) << ",";
+            os << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
+            os << ")";
+            break;
         }
         case ea_m_Other:
             switch (ea & ea_xn_mask) {
@@ -208,22 +203,16 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
             case ea_other_pc_index: {
                 assert(eaw < inst.ilen);
                 const auto extw = iwords[eaw++];
-                if (extw & (7 << 8)) {
-                    os << "Full extension word/scale not supported\n";
-                    assert(0);
-                    break;
-                } else {
-                    auto disp = static_cast<int8_t>(extw & 255);
-                    os << "$";
-                    if (disp < 0) {
-                        os << "-";
-                        disp = -disp;
-                    }
-                    os << hexfmt(static_cast<uint8_t>(disp)) << "(PC,";
-                    os << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
-                    os << ")";
-                    break;
+                // Note: 68000 ignores scale in bits 9/10 and full extension word bit (8)
+                auto disp = static_cast<int8_t>(extw & 255);
+                os << "$";
+                if (disp < 0) {
+                    os << "-";
+                    disp = -disp;
                 }
+                os << hexfmt(static_cast<uint8_t>(disp)) << "(PC,";
+                os << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
+                os << ")";
                 break;
             }
             case ea_other_imm:

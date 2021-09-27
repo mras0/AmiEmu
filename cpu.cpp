@@ -175,6 +175,9 @@ public:
                 const auto ea = inst_->ea[i];
                 if ((ea >> ea_m_shift) == ea_m_A_ind_pre) {
                     state_.A(ea & ea_xn_mask) -= opsize_bytes(inst_->size);
+                    // Stack pointer is always kept word aligned
+                    if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
+                        state_.A(7)--;
                 }
                 handle_ea(i);
             }
@@ -261,6 +264,9 @@ public:
                 const auto ea = inst_->ea[i];
                 if ((ea >> ea_m_shift) == ea_m_A_ind_post) {
                     state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
+                    // Stack pointer is always kept word aligned
+                    if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
+                        state_.A(7)++;
                 }
             }
         }
@@ -333,7 +339,7 @@ private:
         case ea_m_A_ind_index: {
             assert(iword_idx_ < inst_->ilen);
             const auto extw = iwords_[iword_idx_++];
-            assert(!(extw & (7 << 8)));
+            // Scale in bits 9/10 and full extension word format (bit 8) is ignored on 68000
             res = state_.A(ea & ea_xn_mask) + sext(extw, opsize::b);
             uint32_t r = (extw >> 12) & 7;
             if ((extw >> 15) & 1) {
@@ -364,7 +370,7 @@ private:
             case ea_other_pc_index: {
                 assert(iword_idx_ < inst_->ilen);
                 const auto extw = iwords_[iword_idx_++];
-                assert(!(extw & (7 << 8)));
+                // Scale in bits 9/10 and full extension word format (bit 8) is ignored on 68000
                 res = start_pc_ + 2 + sext(extw, opsize::b);
                 uint32_t r = (extw >> 12) & 7;
                 if ((extw >> 15) & 1) {
