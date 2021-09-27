@@ -797,7 +797,7 @@ std::string replace(const std::string& templ, const std::string& needle, const s
 
 struct tester {
     static constexpr uint32_t code_pos = 0x1000;
-    static constexpr uint32_t code_size = 0x2000;
+    static constexpr uint32_t code_size = 0x1000;
     memory_handler mem { code_pos + code_size };
     std::vector<uint16_t> code_words;
 
@@ -1476,7 +1476,7 @@ bool run_timing_tests()
     };
 
     const uint32_t code_pos = 0x1000;
-    const uint32_t code_size = 0x2000;
+    const uint32_t code_size = 0x1000;
     memory_handler mem { code_pos + code_size };
     auto& ram = mem.ram();
     std::vector<uint16_t> insts;

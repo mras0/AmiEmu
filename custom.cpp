@@ -837,12 +837,17 @@ struct custom_state {
 
 class custom_handler::impl : public memory_area_handler {
 public:
-    explicit impl(memory_handler& mem_handler, cia_handler& cia)
+    explicit impl(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end)
         : mem_ { mem_handler }
         , cia_ { cia }
         , chip_ram_mask_ { static_cast<uint32_t>(mem_.ram().size()) - 2 } // -1 for normal mask, -2 for word aligned mask
     {
-        mem_.register_handler(*this, 0xDFF000, 0x1000);    
+        mem_.register_handler(*this, 0xDFF000, 0x1000);
+        for (uint32_t addr = slow_end; addr < 0xDC'0000; addr += 256 << 10) {
+            assert((addr & ((256 << 10) - 1)) == 0);
+            // Mirror custom registers (due to partial decoding), this is necessary for e.g. KS1.2
+            mem_.register_handler(*this, addr + (256 << 10) - 0x1000, 0x1000);
+        }
         reset();
     }
 
@@ -1865,6 +1870,8 @@ public:
 
     uint16_t read_u16(uint32_t, uint32_t offset) override
     {
+        offset &= 0xffe;
+
         switch (offset) {
         case DMACONR: // $002
             return s_.dmacon;
@@ -1927,6 +1934,8 @@ public:
 
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
+        offset &= 0xffe;
+
         //std::cerr << "Write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
         auto write_partial = [offset, &val](uint32_t& r) {
             if (offset & 2) {
@@ -2503,8 +2512,8 @@ uint16_t custom_handler::impl::internal_read(uint16_t reg)
     }
 }
 
-custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia)
-    : impl_ { std::make_unique<impl>(mem_handler, cia) }
+custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end)
+    : impl_ { std::make_unique<impl>(mem_handler, cia, slow_end) }
 {
 }
 

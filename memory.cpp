@@ -7,14 +7,16 @@
 uint8_t default_handler::read_u8(uint32_t addr, uint32_t)
 {
     // Don't warn a bunch when scanning for ROM tags / I/O space
-    if (addr < 0xe00000) std::cerr << "[MEM] Unhandled byte read from $" << hexfmt(addr) << "\n";
+    if (addr < 0xf00000)
+        std::cerr << "[MEM] Unhandled byte read from $" << hexfmt(addr) << "\n";
     //return 0xff;
     return 0;
 }
 uint16_t default_handler::read_u16(uint32_t addr, uint32_t)
 {
     // Don't warn a bunch when scanning for ROM tags / I/O space
-    if (addr < 0xe00000) std::cerr << "[MEM] Unhandled word read from $" << hexfmt(addr) << "\n";
+    if (addr < 0xf00000)
+        std::cerr << "[MEM] Unhandled word read from $" << hexfmt(addr) << "\n";
     //return 0xffff;
     return 0;
 }
@@ -127,13 +129,13 @@ uint16_t rom_area_handler::read_u16(uint32_t, uint32_t offset)
 void rom_area_handler::write_u8(uint32_t addr, uint32_t offset, uint8_t val)
 {
     std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
-    throw std::runtime_error { "FIXME" };
+    throw std::runtime_error { "Write to ROM" };
 }
 
 void rom_area_handler::write_u16(uint32_t addr, uint32_t offset, uint16_t val)
 {
     std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
-    throw std::runtime_error { "FIXME" };
+    throw std::runtime_error { "Write to ROM" };
 }
 
 void memory_handler::register_handler(memory_area_handler& h, uint32_t base, uint32_t len)
@@ -156,6 +158,7 @@ void memory_handler::unregister_handler(memory_area_handler& h, uint32_t base, u
 
 uint8_t memory_handler::read_u8(uint32_t addr)
 {
+    addr &= 0xffffff;
     auto& a = find_area(addr);
     const uint8_t data = a.handler->read_u8(addr, addr - a.base);
     track(addr, data, 1, false);
@@ -164,6 +167,7 @@ uint8_t memory_handler::read_u8(uint32_t addr)
 
 uint16_t memory_handler::read_u16(uint32_t addr)
 {
+    addr &= 0xffffff;
     if (addr & 1) {
         track(addr, 0, 2, false);
         throw std::runtime_error { "Word read from odd address " + hexstring(addr) };
@@ -176,6 +180,7 @@ uint16_t memory_handler::read_u16(uint32_t addr)
 
 uint32_t memory_handler::read_u32(uint32_t addr)
 {
+    addr &= 0xffffff;
     // TODO: Handle if write to two different areas...
     if (addr & 1) {
         track(addr, 0, 4, false);
@@ -189,6 +194,7 @@ uint32_t memory_handler::read_u32(uint32_t addr)
 
 void memory_handler::write_u8(uint32_t addr, uint8_t val)
 {
+    addr &= 0xffffff;
     track(addr, val, 1, true);
     auto& a = find_area(addr);
     return a.handler->write_u8(addr, addr - a.base, val);
@@ -196,6 +202,7 @@ void memory_handler::write_u8(uint32_t addr, uint8_t val)
 
 void memory_handler::write_u16(uint32_t addr, uint16_t val)
 {
+    addr &= 0xffffff;
     track(addr, val, 2, true);
     if (addr & 1)
         throw std::runtime_error { "Word write to odd address " + hexstring(addr) };
@@ -206,6 +213,7 @@ void memory_handler::write_u16(uint32_t addr, uint16_t val)
 
 void memory_handler::write_u32(uint32_t addr, uint32_t val)
 {
+    addr &= 0xffffff;
     track(addr, val, 4, true);
     
     // TODO: Handle if write to two different areas...
@@ -218,12 +226,19 @@ void memory_handler::write_u32(uint32_t addr, uint32_t val)
 
 memory_handler::area& memory_handler::find_area(uint32_t& addr)
 {
-    addr &= 0xffffff;
+    assert(addr < 0x1000000);
     for (auto& a : areas_) {
         if (addr >= a.base && addr < a.base + a.len)
             return a;
     }
     if (addr < ram_area_.len) {
+        return ram_area_;
+    }
+
+    // Chip mem is mirrored up to 2MB
+    if (addr < max_chip_size) {
+        assert((ram_area_.len & (ram_area_.len - 1)) == 0);
+        addr &= ram_area_.len - 1;
         return ram_area_;
     }
     return def_area_;

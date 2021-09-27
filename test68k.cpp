@@ -781,7 +781,7 @@ void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_sta
         check("A" + std::to_string(i), check_state.regs[CT_AREG+i], after.A(i));
     if (exc) {
         // TODO: This is pretty insufficient
-        check("PC (after exception)", 0xECC000U | exc << 4, after.pc);
+        check("PC (after exception)", 0xFCC000U | exc << 4, after.pc);
         // TODO: SR&SP...
     } else {
         check("SP", check_state.regs[CT_AREG + 7], after.usp);
@@ -813,9 +813,9 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
 
     // XXX: For checking exceptions (see validate_test)
     for (int exc = 2; exc < 12; ++exc)
-        put_u32(&ram[exc * 4], 0xECC000 | (exc << 4)); 
+        put_u32(&ram[exc * 4], 0xFCC000 | (exc << 4)); 
     for (int exc = 32; exc < 48; ++exc)
-        put_u32(&ram[exc * 4], 0xECC000 | (exc << 4)); // Trap vectors
+        put_u32(&ram[exc * 4], 0xFCC000 | (exc << 4)); // Trap vectors
 
     winuae_test_state cur_state;
     memset(&cur_state, 0, sizeof(cur_state));

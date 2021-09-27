@@ -201,6 +201,9 @@ struct command_line_arguments {
     std::string rom;
     std::string df0;
     std::string df1;
+    uint32_t chip_size;
+    uint32_t slow_size;
+    uint32_t fast_size;
 };
 
 void usage(const std::string& msg)
@@ -211,33 +214,62 @@ void usage(const std::string& msg)
 
 command_line_arguments parse_command_line_arguments(int argc, char* argv[])
 {
-    command_line_arguments args;
+    command_line_arguments args {};
     for (int i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-df0")) {
-            if (++i == argc)
-                usage("Missing df0 argument");
-            if (!args.df0.empty())
-                usage("Multiple df0 arguments");
-            args.df0 = argv[i];
-        } else if (!strcmp(argv[i], "-df1")) {
-            if (++i == argc)
-                usage("Missing df1 argument");
-            if (!args.df1.empty())
-                usage("Multiple df1 arguments");
-            args.df1 = argv[i];
-        } else if (!strcmp(argv[i], "-rom")) {
-            if (++i == argc)
-                usage("Missing rom argument");
-            if (!args.rom.empty())
-                usage("Multiple rom arguments");
-            args.rom = argv[i];
-        } else {
-            usage("Unrecognized command line parameter: " + std::string { argv[i] });
+        if (argv[i][0] == '-') {
+            auto get_string_arg = [&](const std::string& name, std::string& arg) {
+                if (name.compare(&argv[i][1]) != 0)
+                    return false;
+                if (++i == argc)
+                    usage("Missing argument for " + name);
+                if (!arg.empty())
+                    usage(name + " specified multiple times");
+                arg = argv[i];
+                return true;
+            };
+            auto get_size_arg = [&](const std::string& name, uint32_t& arg, uint32_t max_size) {
+                std::string s = arg ? " " : "";// Non-empty if already specified so get_string_arg will warn
+                if (!get_string_arg(name, s))
+                    return false;
+                
+                char* ep = nullptr;
+                uint32_t mult = 1;
+                const auto num = strtoul(s.c_str(), &ep, 10);
+                if (*ep == 'k' || *ep == 'K') {
+                    ++ep;
+                    mult = 1<<10;
+                } else if (*ep == 'm' || *ep == 'M') {
+                    ++ep;
+                    mult = 1 << 20;
+                }
+                if (*ep)
+                    usage("Invalid number for " + name);
+                if (!num || num >= 16 << 20 || static_cast<uint64_t>(num) * mult > max_size || ((num * mult) & ((256 << 10) - 1)))
+                    usage("Invalid or out of range number for mult");
+                arg = num * mult;
+                return true;
+            };
+
+            if (get_string_arg("df0", args.df0))
+                continue;
+            else if (get_string_arg("df1", args.df1))
+                continue;
+            else if (get_string_arg("rom", args.rom))
+                continue;
+            else if (get_size_arg("chip", args.chip_size, max_chip_size))
+                continue;
+            else if (get_size_arg("slow", args.slow_size, max_slow_size))
+                continue;
+            else if (get_size_arg("fast", args.fast_size, max_fast_size))
+                continue;
         }
+        usage("Unrecognized command line parameter: " + std::string { argv[i] });
     }
     if (args.rom.empty()) {
         args.rom = "rom.bin";
     }
+    if (args.chip_size == 0)
+        args.chip_size = 1 << 20;
     return args;
 }
 
@@ -247,14 +279,21 @@ int main(int argc, char* argv[])
         const auto cmdline_args = parse_command_line_arguments(argc, argv);
         disk_drive df0 {"DF0:"}, df1 {"DF1:"};
         disk_drive* drives[max_drives] = { &df0, &df1 };
-        memory_handler mem { 1U << 20 };
+        std::unique_ptr<ram_handler> slow_ram;
+        std::unique_ptr<ram_handler> fast_ram;
+        memory_handler mem { cmdline_args.chip_size };
         rom_area_handler rom { mem, read_file(cmdline_args.rom) };
         cia_handler cias { mem, rom, drives };
-        custom_handler custom { mem, cias };
+        custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size };
 
-        //const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
-        //ram_handler slow_ram { slow_size }; // For KS1.2
-        //mem.register_handler(slow_ram, slow_base, slow_size);
+        if (cmdline_args.slow_size) {
+            slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
+            mem.register_handler(*slow_ram, slow_base, cmdline_args.slow_size);
+        }
+        if (cmdline_args.fast_size) {
+            fast_ram = std::make_unique<ram_handler>(cmdline_args.fast_size);
+            mem.register_handler(*fast_ram, fast_base, cmdline_args.fast_size);
+        }
 
         m68000 cpu { mem };
 
@@ -403,7 +442,7 @@ int main(int argc, char* argv[])
             if (!cpu_active)
                 return;
             assert(size == 1 || size == 2); (void)size;
-            if (addr >= min_rom_addr) {
+            if (addr >= min_rom_addr || (addr >= fast_base && addr < fast_base + max_fast_size)) {
                 cycles_todo += 4;
                 return;
             }
