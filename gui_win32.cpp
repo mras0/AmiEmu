@@ -1013,10 +1013,10 @@ private:
 
 class config_dialog : public window_base<config_dialog> {
 public:
-    static void run(HWND parent, std::array<std::string, 4>& disk_filenames, bool& joystick_mode)
+    static void run(HWND parent, std::array<std::string, 4>& disk_filenames, bool& joystick_mode, bool& fullscreen)
     {
         bool done = false;
-        auto wnd = new config_dialog { done, disk_filenames, joystick_mode };
+        auto wnd = new config_dialog { done, disk_filenames, joystick_mode, fullscreen };
         EnableWindow(parent, FALSE);
         wnd->do_create(L"Configuration", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
 
@@ -1040,14 +1040,17 @@ private:
     HWND last_focus_ = nullptr;
     std::array<std::string, 4>& disk_filenames_;
     bool& joystick_mode_;
+    bool& fullscreen_;
     static constexpr int max_disks = 2;
     HWND filename_edit_[max_disks];
     HWND joystick_mode_ctrl_;
+    HWND fullscreen_ctrl_;
 
-    config_dialog(bool& done, std::array<std::string, 4>& disk_filenames, bool& joystick_mode)
+    config_dialog(bool& done, std::array<std::string, 4>& disk_filenames, bool& joystick_mode, bool& fullscreen)
         : done_ { done }
         , disk_filenames_ { disk_filenames }
         , joystick_mode_ { joystick_mode }
+        , fullscreen_ { fullscreen }
     {
     }
 
@@ -1081,6 +1084,10 @@ private:
         joystick_mode_ctrl_ = CreateWindowA("BUTTON", "&Joystick mode", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, xmargin, y, button_w*2, h, hwnd, reinterpret_cast<HMENU>(400), hInstance, nullptr);
         if (joystick_mode_)
             SendMessage(joystick_mode_ctrl_, BM_SETCHECK, 1, 0);
+
+        fullscreen_ctrl_ = CreateWindowA("BUTTON", "&Fullscreen", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, xmargin*2 + button_w*2, y, button_w * 2, h, hwnd, reinterpret_cast<HMENU>(400), hInstance, nullptr);
+        if (fullscreen_)
+            SendMessage(fullscreen_ctrl_, BM_SETCHECK, 1, 0);
         y += h + ymargin;
 
         int x = xmargin;
@@ -1125,6 +1132,7 @@ private:
                     }
                 }
                 joystick_mode_ = !!SendMessage(joystick_mode_ctrl_, BM_GETCHECK, 0, 0);
+                fullscreen_ = !!SendMessage(fullscreen_ctrl_, BM_GETCHECK, 0, 0);
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
             } else if (id == IDCANCEL && code == BN_CLICKED) {
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
@@ -1163,10 +1171,9 @@ public:
         SetProcessDPIAware(); // Avoid GUI scaling (must be called before any windows are created)
 
         std::unique_ptr<impl> wnd { new impl { width, height, disk_filenames } };
-        const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
         RECT r = { 0, 0, width * gfx_scale, height * gfx_scale + extra_height };
-        AdjustWindowRect(&r, style, FALSE);
-        wnd->do_create(title_, style, 100, 100, r.right - r.left, r.bottom - r.top, nullptr);
+        AdjustWindowRect(&r, default_window_style_, FALSE);
+        wnd->do_create(title_, default_window_style_, 100, 100, r.right - r.left, r.bottom - r.top, nullptr);
 
         // Position serial data window to the right of the main window
         GetWindowRect(wnd->handle(), &r);
@@ -1288,6 +1295,9 @@ private:
         int countdown;
     } disk_activity_[4] = {};
     static constexpr int disk_activity_countdown_max = 25; // ~0.5s
+    WINDOWPLACEMENT old_placement_;
+    DWORD old_style_ = 0;
+    static constexpr auto default_window_style_ = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
 
     impl(int width, int height, const std::array<std::string, 4>& disk_filenames)
         : width_ { width }
@@ -1296,9 +1306,16 @@ private:
     {
     }
 
+    static void modify_window_class(WNDCLASS& wc)
+    {
+        wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    }
+
     void repaint_extra()
     {
-        RECT r = { 0, height_ * gfx_scale, width_ * gfx_scale, height_ * gfx_scale + extra_height };
+        RECT cr;
+        GetClientRect(handle(), &cr);
+        RECT r = { cr.left, cr.bottom - extra_height, cr.right, cr.bottom };
         InvalidateRect(handle(), &r, FALSE);
     }
 
@@ -1430,7 +1447,9 @@ private:
                     if (on_pause_)
                         on_pause_(true);
                     std::array<std::string, 4> disk_filenames = disk_filenames_;
-                    config_dialog::run(hwnd, disk_filenames, joystick_mode_);
+                    const bool fullscreen_before = !!old_style_;
+                    bool fullscreen = fullscreen_before;
+                    config_dialog::run(hwnd, disk_filenames, joystick_mode_, fullscreen);
                     for (int i = 0; i < 4; ++i) {
                         if (disk_filenames[i] == disk_filenames_[i])
                             continue;
@@ -1440,6 +1459,8 @@ private:
                         disk_filenames_[i] = disk_filenames[i];
                         events_.push_back(evt);
                     }
+                    if (fullscreen_before != fullscreen)
+                        toggle_fullscreen();
                     if (was_captured)
                         capture_mouse();
                     if (on_pause_)
@@ -1512,19 +1533,16 @@ private:
         PostQuitMessage(0);
     }
 
-    void on_erase_background(HWND, HDC)
-    {
-    }
-
     void on_paint(HWND hwnd)
     {
         PAINTSTRUCT ps;
         if (BeginPaint(hwnd, &ps) && !IsRectEmpty(&ps.rcPaint)) {
-            const auto w = width_ * gfx_scale;
-            const auto h = height_ * gfx_scale;
+            RECT r;
+            GetClientRect(handle(), &r);
+            const auto w = r.right - r.left;
+            const auto h = (r.bottom - r.top) - extra_height;
             RECT bck { 0, h, w, h + extra_height };
             FillRect(ps.hdc, &bck, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-
             SetBkColor(ps.hdc, RGB(0, 0, 0));
             for (int i = 0; i < 4; ++i) {
                 const auto& act = disk_activity_[i];
@@ -1533,7 +1551,7 @@ private:
                     SetTextColor(ps.hdc, act.write ? RGB(n, 0, 0) : RGB(n, n, n));
                     char msg[16];
                     n = _snprintf(msg, sizeof(msg), "DF%d: $%02X", i, act.track);
-                    TextOutA(ps.hdc, 30 + 100 * i, height_ * gfx_scale + 5, msg, n);
+                    TextOutA(ps.hdc, 30 + 100 * i, h + 5, msg, n);
                 }
             }
 
@@ -1542,6 +1560,38 @@ private:
             FillRect(ps.hdc, &power_led_rect, power_led_brush);
             DeleteObject(power_led_brush);
             EndPaint(hwnd, &ps);
+        }
+    }
+
+    // https://devblogs.microsoft.com/oldnewthing/20100412-00/?p=14353
+    void toggle_fullscreen()
+    {
+        const auto style = GetWindowLong(handle(), GWL_STYLE);
+        auto bw = width_ * gfx_scale;
+        auto bh = height_ * gfx_scale;
+
+        if (style & WS_OVERLAPPEDWINDOW) {
+            MONITORINFO mi = { sizeof(mi) };
+            if (GetWindowPlacement(handle(), &old_placement_) && GetMonitorInfo(MonitorFromWindow(handle(), MONITOR_DEFAULTTOPRIMARY), &mi)) {
+                const auto mw = mi.rcMonitor.right - mi.rcMonitor.left;
+                const auto mh = mi.rcMonitor.bottom - mi.rcMonitor.top;
+
+                const double scale = std::min(static_cast<double>(mw) / bw, static_cast<double>(mh - extra_height) / bh);
+
+                bw = static_cast<unsigned>(bw * scale);
+                bh = static_cast<unsigned>(bh * scale);
+
+                old_style_ = style;
+                SetWindowLong(handle(), GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
+                SetWindowPos(handle(), HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mw, mh, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+                MoveWindow(bitmap_window_->handle(), (mw - bw)/2, ((mh - extra_height) - bh)/2, bw, bh, TRUE);
+            }
+        } else {
+            SetWindowLong(handle(), GWL_STYLE, old_style_);
+            SetWindowPlacement(handle(), &old_placement_);
+            SetWindowPos(handle(), NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            MoveWindow(bitmap_window_->handle(), 0, 0, bw, bh, TRUE);
+            old_style_ = 0;
         }
     }
 };
