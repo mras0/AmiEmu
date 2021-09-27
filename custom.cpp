@@ -2424,6 +2424,8 @@ public:
         case BLTBMOD:
             s_.bltmod[1] = val & ~1U;
             return;
+        case 0x068: // ??
+            return;
         case BLTAMOD:
             s_.bltmod[0] = val & ~1U;
             return;
@@ -2445,7 +2447,11 @@ public:
         case BLTADAT:
             s_.bltdat[0] = val;
             return;
-        case DSKSYNC: // $07E:
+        case 0x076: // ?
+        case 0x078: // SPRHDAT (AGA)
+        case 0x07A: // BPLHDAT (AGA)
+            return; // Ignore for now
+        case DSKSYNC: // $07E
             s_.dsksync = val;
             return;
         case COPJMP1: // $088

@@ -1174,6 +1174,12 @@ public:
     void update_image(const uint32_t* data)
     {
         bitmap_window_->update_image(data);
+        for (int i = 0; i < 4; ++i) {
+            if (disk_activity_[i].countdown) {
+                repaint_extra();
+                --disk_activity_[i].countdown;
+            }
+        }
     }
 
     void led_state(uint8_t s)
@@ -1181,8 +1187,7 @@ public:
         assert(s < 2);
         if (s != led_state_) {
             led_state_ = s;
-            RECT r = { 0, height_, width_, height_ + extra_height};
-            InvalidateRect(handle(), &r, FALSE);
+            repaint_extra();
         }
     }
 
@@ -1232,6 +1237,15 @@ public:
         on_pause_ = on_pause;
     }
 
+    void disk_activty(uint8_t idx, uint8_t track, bool write)
+    {
+        assert(idx < 4);
+        disk_activity_[idx].track = track;
+        disk_activity_[idx].write = write;
+        disk_activity_[idx].countdown = disk_activity_countdown_max;
+        repaint_extra();
+    }
+
 private:
     friend window_base<impl>;
     static constexpr const wchar_t* const class_name_ = L"Display";
@@ -1249,12 +1263,24 @@ private:
     std::array<std::string, 4> disk_filenames_;
     bool joystick_mode_ = false;
     on_pause_callback on_pause_;
+    struct disk_activity {
+        uint8_t track;
+        bool write;
+        int countdown;
+    } disk_activity_[4] = {};
+    static constexpr int disk_activity_countdown_max = 25; // ~0.5s
 
     impl(int width, int height, const std::array<std::string, 4>& disk_filenames)
         : width_ { width }
         , height_ { height }
         , disk_filenames_ { disk_filenames }
     {
+    }
+
+    void repaint_extra()
+    {
+        RECT r = { 0, height_, width_, height_ + extra_height };
+        InvalidateRect(handle(), &r, FALSE);
     }
 
     void do_enqueue_keyboard_event(bool pressed, WPARAM vk)
@@ -1460,6 +1486,18 @@ private:
             RECT bck { 0, height_, width_, height_ + extra_height };
             FillRect(ps.hdc, &bck, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 
+            SetBkColor(ps.hdc, RGB(0, 0, 0));
+            for (int i = 0; i < 4; ++i) {
+                const auto& act = disk_activity_[i];
+                if (act.countdown) {
+                    int n = act.countdown * 255 / disk_activity_countdown_max;
+                    SetTextColor(ps.hdc, act.write ? RGB(n, 0, 0) : RGB(n, n, n));
+                    char msg[16];
+                    n = _snprintf(msg, sizeof(msg), "DF%d: $%02X", i, act.track);
+                    TextOutA(ps.hdc, 30 + 100 * i, height_ + 5, msg, n);
+                }
+            }
+
             RECT power_led_rect = { width_ - led_width - 16, (height_ + extra_height) - led_height - border_height, width_ - 16, (height_ + extra_height) - border_height };
             HBRUSH power_led_brush = CreateSolidBrush(led_state_ & 1 ? RGB(0, 255, 0) : RGB(0, 0, 0));
             FillRect(ps.hdc, &power_led_rect, power_led_brush);
@@ -1544,4 +1582,9 @@ void gui::set_debug_windows_visible(bool visible)
 void gui::set_on_pause_callback(const on_pause_callback& on_pause)
 {
     impl_->set_on_pause_callback(on_pause);
+}
+
+void gui::disk_activty(uint8_t idx, uint8_t track, bool write)
+{
+    impl_->disk_activty(idx, track, write);
 }

@@ -419,11 +419,11 @@ int main(int argc, char* argv[])
             }
         };
 
-        df0.set_disk_activity_handler([](uint8_t track, bool write) {
-            std::cout << "DF0: " << (write ? "Write" : "Read") << " track $" << hexfmt(track) << "\n";
+        df0.set_disk_activity_handler([&](uint8_t track, bool write) {
+            g.disk_activty(0, track, write);
         });
-        df1.set_disk_activity_handler([](uint8_t track, bool write) {
-            std::cout << "DF1: " << (write ? "Write" : "Read") << " track $" << hexfmt(track) << "\n";
+        df1.set_disk_activity_handler([&](uint8_t track, bool write) {
+            g.disk_activty(1, track, write);
         });
 
 #ifdef TRACE_LOG
@@ -596,7 +596,6 @@ int main(int argc, char* argv[])
         });
 
         //cpu.trace(&std::cout);
-        breakpoints.push_back(0x00e900fa);
 
         for (bool quit = false; !quit;) {
             try {
