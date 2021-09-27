@@ -169,6 +169,8 @@ public:
         inst_ = &instructions[iwords_[0]];
 
         if ((inst_->extra & extra_priv_flag) && !(state_.sr & srm_s)) {
+            if (iwords_[0] == reset_instruction_num)
+                iwords_[0] = illegal_instruction_num; // HACK: Don't let main reset...
             state_.pc = start_pc_; // "The saved value of the program counter is the address of the first word of the instruction causing the privilege violation.
             do_trap(interrupt_vector::privililege_violation);
             trace_active = false;

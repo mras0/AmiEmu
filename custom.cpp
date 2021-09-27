@@ -2362,7 +2362,9 @@ public:
                         v = 0;
             }
             // Need to return hpos == 0 for many vamiga tests
-            //h = (h + 1) % hpos_max;
+            #if 0 // cputest cycle exact requires this
+            h = (h + 1) % hpos_max;
+            #endif
             return static_cast<uint16_t>((v & 0xff) << 8 | h);
         }
         case DSKDATR: // $008
