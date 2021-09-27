@@ -346,6 +346,7 @@ public:
                 const uint8_t nbpls = (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0;
 
                 if (!s_.bpldat_shift_pixels) {
+                    //if (s_.dmacon & DMAF_RASTER) std::cout << "hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ")" << " reloading\n";
                     for (int i = 0; i < nbpls; ++i)
                         s_.bpldat_shift[i] = s_.bpldat[i];
                     s_.bpldat_shift_pixels = 16;
@@ -405,7 +406,7 @@ public:
                     const int bpl = (s_.bplcon0 & BPLCON0F_HIRES ? hires_bpl_sched : lores_bpl_sched)[colclock & 7] - 1;
 
                     if (bpl >= 0 && bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0)) {
-                        //std::cout << "hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ")" << " BPL DMA shift_pixels=" << (int)s_.bpldat_shift_pixels << "\n";
+                        //std::cout << "hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ")" << " BPL " << bpl << " DMA shift_pixels=" << (int)s_.bpldat_shift_pixels << "\n";
                         s_.bpldat[bpl] = do_dma(s_.bplpt[bpl]);
                         break;
                     }
@@ -424,6 +425,7 @@ public:
 
         if (++s_.hpos == hpos_per_line) {
             s_.hpos = 0;
+            s_.bpldat_shift_pixels = 0; // Any remaining pixels are lost, force re-read of bpldat
             cia_.increment_tod_counter(1);
             if ((s_.dmacon & DMAF_RASTER) && vert_disp) {
                 for (int bpl = 0; bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0); ++bpl) {
