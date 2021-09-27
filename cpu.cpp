@@ -30,6 +30,19 @@ const char* const conditional_strings[16] = {
 
 }
 
+std::string ccr_string(uint16_t sr)
+{
+    char s[6], *d = s;
+    for (unsigned i = 5; i--;) {
+        if ((sr & (1 << i)))
+            *d++ = "CVZNX"[i];
+        else
+            *d++ ='-';
+    }
+    *d = 0;
+    return s;
+}
+
 void print_cpu_state(std::ostream& os, const cpu_state& s)
 {
     for (int i = 0; i < 8; ++i) {
@@ -44,14 +57,8 @@ void print_cpu_state(std::ostream& os, const cpu_state& s)
         os << "A" << i << "=" << hexfmt(s.A(i));
     }
     os << "\n";
-    os << "PC=" << hexfmt(s.pc) << " SR=" << hexfmt(s.sr) << " SSP=" << hexfmt(s.ssp) << " USP=" << hexfmt(s.usp) << " CCR: ";
+    os << "PC=" << hexfmt(s.pc) << " SR=" << hexfmt(s.sr) << " SSP=" << hexfmt(s.ssp) << " USP=" << hexfmt(s.usp) << " CCR: " << ccr_string(s.sr);
 
-    for (unsigned i = 5; i--;) {
-        if ((s.sr & (1 << i)))
-            os << "CVZNX"[i];
-        else
-            os << '-';
-    }
     if (s.stopped)
         os << " (stopped)";
     os << '\n';
@@ -735,14 +742,15 @@ private:
         assert(inst_->nea == 2 && inst_->size == opsize::b);
         const auto r = read_ea(0);
         const auto l = read_ea(1);
-        auto res = l + r + !!(state_.sr & srm_x);
+        const auto res = l + r + !!(state_.sr & srm_x);
         const auto carry = ((l & r) | ((l | r) & ~res)) & 0x88;
         const auto carry10 = (((res + 0x66) ^ res) & 0x110) >> 1;
-        res += (carry | carry10) - ((carry | carry10) >> 2);
-        write_ea(1, res);
-        state_.update_sr(static_cast<sr_mask>(srm_c | srm_x), res & 0xf00 ? srm_c | srm_x : 0);
-        if (res & 0xff)
-            state_.update_sr(srm_z, 0);
+        const auto res2 = res + ((carry | carry10) - ((carry | carry10) >> 2));
+        write_ea(1, res2);
+        uint8_t ccr = (res2 & 0xf00 ? srm_c | srm_x : 0) | (res2 & 0xff ? 0 : state_.sr & srm_z) | (res2 & 0x80 ? srm_n : 0);
+        if (!(res & 0x80) && (res2 & 0x80))
+            ccr |= srm_v;
+        state_.update_sr(srm_ccr, ccr);
     }
 
     void handle_ADD()
@@ -1246,13 +1254,14 @@ private:
         // SBCD with l = 0
         const uint32_t r = read_ea(0);
         const uint32_t l = 0;
-        auto res = l - r - !!(state_.sr & srm_x);
+        const auto res = l - r - !!(state_.sr & srm_x);
         const auto carry10 = ((~l & r) | (~(l ^ r) & res)) & 0x88;
-        res -= carry10 - (carry10 >> 2);
-        write_ea(0, res);
-        state_.update_sr(static_cast<sr_mask>(srm_c | srm_x), res & 0xf00 ? srm_c | srm_x : 0);
-        if (res & 0xff)
-            state_.update_sr(srm_z, 0);
+        const auto res2 = res - (carry10 - (carry10 >> 2));
+        write_ea(0, res2);
+        uint8_t ccr = (res2 & 0xf00 ? srm_c | srm_x : 0) | (res2 & 0xff ? 0 : state_.sr & srm_z) | (res2 & 0x80 ? srm_n : 0);
+        if ((res & 0x80) && !(res2 & 0x80))
+            ccr |= srm_v;
+        state_.update_sr(srm_ccr, ccr);
     }
 
     void handle_NEG()
@@ -1443,13 +1452,14 @@ private:
     {
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
-        auto res = l - r - !!(state_.sr & srm_x);
+        const auto res = l - r - !!(state_.sr & srm_x);
         const auto carry10 = ((~l & r) | (~(l ^ r) & res)) & 0x88;
-        res -= carry10 - (carry10 >> 2);
-        write_ea(1, res);
-        state_.update_sr(static_cast<sr_mask>(srm_c | srm_x), res & 0xf00 ? srm_c | srm_x : 0);
-        if (res & 0xff)
-            state_.update_sr(srm_z, 0);
+        const auto res2 = res - (carry10 - (carry10 >> 2));
+        write_ea(1, res2);
+        uint8_t ccr = (res2 & 0xf00 ? srm_c | srm_x : 0) | (res2 & 0xff ? 0 : state_.sr & srm_z) | (res2 & 0x80 ? srm_n : 0);
+        if ((res & 0x80) && !(res2 & 0x80))
+            ccr |= srm_v;
+        state_.update_sr(srm_ccr, ccr);
     }
 
     void handle_Scc()

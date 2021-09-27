@@ -176,7 +176,7 @@ bool run_tests()
     const std::string test_path = "../../Misc/m68k-tester-work/m68k-tests/";
     const char* const testnames[] = {
         // OK
-        "gen-opcode-abcd.bin",
+        //"gen-opcode-abcd.bin", // Checked by winuae tests, incompatible due to implementation of undefined flags
         "gen-opcode-addb.bin",
         "gen-opcode-addl.bin",
         "gen-opcode-addw.bin",
@@ -214,7 +214,7 @@ bool run_tests()
         "gen-opcode-lsrb.bin",
         "gen-opcode-lsrl.bin",
         "gen-opcode-lsrw.bin",
-        "gen-opcode-nbcd.bin",
+        //"gen-opcode-nbcd.bin", // Checked by winuae tests, incompatible due to implementation of undefined flags
         "gen-opcode-negb.bin",
         "gen-opcode-negl.bin",
         "gen-opcode-negw.bin",
@@ -227,7 +227,7 @@ bool run_tests()
         "gen-opcode-orb.bin",
         "gen-opcode-orl.bin",
         "gen-opcode-orw.bin",
-        "gen-opcode-sbcd.bin",
+        //"gen-opcode-sbcd.bin", // Checked by winuae tests, incompatible due to implementation of undefined flags
         "gen-opcode-scc.bin",
         "gen-opcode-scs.bin",
         "gen-opcode-seq.bin",
@@ -248,10 +248,7 @@ bool run_tests()
         "gen-opcode-subxw.bin",
         "gen-opcode-svc.bin",
         "gen-opcode-svs.bin",
-#if 0
-        // Not implemented
         "gen-opcode-tas.bin"
-#endif
     };
 
     for (const auto& t : testnames) {
@@ -789,7 +786,11 @@ void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_sta
     } else {
         check("SP", check_state.regs[CT_AREG + 7], after.usp);
         check("PC", check_state.pc, after.pc);
-        check("SR", static_cast<uint16_t>(check_state.sr), after.sr);
+        if (static_cast<uint16_t>(check_state.sr) != after.sr) {
+            std::ostringstream oss;
+            oss << "Test failed for " << test_header.inst_name << ": SR expected=$" << hexfmt(check_state.sr) << " (" << ccr_string(static_cast<uint16_t>(check_state.sr)) << ") " << " actual=$" << hexfmt(after.sr) << " (" << ccr_string(after.sr) << ")";
+            throw std::runtime_error { oss.str() };
+        }
     }
     // TODO: Check cycles
 }
@@ -938,7 +939,7 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "CHK.W");
+    //run_winuae_mnemonic_test(basedir / "ABCD.B");
     //assert(0);
 
     const std::vector<const char*> skip = {
@@ -946,8 +947,6 @@ bool run_winuae_tests()
         "RTE",
         // Not implemented
         "RESET",
-        // TODO (Undefinde flags?)
-        "ABCD", "SBCD", "NBCD",
     };
     std::vector<std::string> failed;
     int errors = 0;

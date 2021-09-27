@@ -154,6 +154,7 @@ struct cpu_state {
     }
 };
 
+std::string ccr_string(uint16_t sr);
 void print_cpu_state(std::ostream& os, const cpu_state& s);
 
 class memory_handler;
