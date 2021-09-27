@@ -563,6 +563,15 @@ void restore_value(winuae_test_file& tf, uint32_t& val, uint8_t ct)
 void restore_rel(winuae_test_file& tf, uint32_t& val, uint8_t ct)
 {
     switch (ct & CT_SIZE_MASK) {
+    case CT_RELATIVE_START_WORD:
+        val += static_cast<int16_t>(tf.read_u16());
+        return;
+    case CT_ABSOLUTE_WORD:
+        val = static_cast<int16_t>(tf.read_u16());
+        return;
+    case CT_ABSOLUTE_LONG:
+        val = tf.read_u32();
+        return;
     case CT_RELATIVE_START_BYTE:
         val += static_cast<int8_t>(tf.read_u8());
         return;
@@ -606,13 +615,6 @@ memwrite_info get_memwrite_info(winuae_test_file& tf, uint8_t ct)
 
 void restore_mem(winuae_test_file& tf, uint8_t ct, bool store)
 {
-    switch (ct & CT_SIZE_MASK) {
-        // TODO: Remember store
-    case CT_ABSOLUTE_WORD:
-        throw std::runtime_error { "TODO in restore_mem: CT_ABSOLUTE_WORD" };
-    case CT_ABSOLUTE_LONG:
-        throw std::runtime_error { "TODO in restore_mem: CT_ABSOLUTE_LONG" };
-    }
     if ((ct & CT_DATA_MASK) == CT_MEMWRITES) {
         assert(store == false);
         assert((ct & CT_SIZE_MASK) == CT_PC_BYTES);
@@ -643,10 +645,9 @@ void restore_mem(winuae_test_file& tf, uint8_t ct, bool store)
         
         return;
     } else {
-        assert((ct & CT_SIZE_MASK) == CT_RELATIVE_START_WORD);
         const memwrite_info mwi = get_memwrite_info(tf, ct);
         if (debug_winuae_tests)
-            std::cout << "Restore mem addr=$" << hexfmt(mwi.addr) << " old = $" << hexfmt(mwi.old) << " mv = $" << hexfmt(mwi.val) << " size=" << (int)mwi.size << " store=" << store << "\n"; 
+            std::cout << "Restore mem (ct=$" << hexfmt(ct) << ") addr=$" << hexfmt(mwi.addr) << " old = $" << hexfmt(mwi.old) << " mv = $" << hexfmt(mwi.val) << " size=" << (int)mwi.size << " store=" << store << "\n"; 
         do_memwrite(mwi, store);
     }
 }
@@ -679,13 +680,22 @@ void restore(winuae_test_file& tf, winuae_test_state& state, uint8_t ct)
         return;
         //        const uint8_t CT_FPSR = 21;
         //        const uint8_t CT_FPCR = 22;
-        //        const uint8_t CT_CYCLES = 25;
+    case CT_CYCLES:
+        restore_value(tf, state.cycles, ct);
+        if (debug_winuae_tests)
+            std::cout << "TODO: cycles=$" << hexfmt(state.cycles) << "\n";
+        return;
     case CT_ENDPC:
         restore_value(tf, state.endpc, ct);
         if (debug_winuae_tests)
             std::cout << "TODO: endpc=$" << hexfmt(state.endpc) << "\n";
         return;
-        //        const uint8_t CT_BRANCHTARGET = 27;
+    case CT_BRANCHTARGET:
+        restore_value(tf, state.branchtarget, ct);
+        if (debug_winuae_tests)
+            std::cout << "TODO: branchtarget=$" << hexfmt(state.branchtarget) << "\n";
+        state.branchtarget_mode = tf.read_u8();
+        return;
     case CT_SRCADDR:
         restore_value(tf, state.srcaddr, ct);
         if (debug_winuae_tests)
@@ -725,8 +735,11 @@ void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_sta
         if (ct & CT_END) {
             if (debug_winuae_tests)
                 std::cout << "End of validation. ct=$" << hexfmt(ct) << "\n";
-            assert((ct & CT_BRANCHED) == 0);
             const uint8_t exc = ct & CT_EXCEPTION_MASK;
+            if (ct & CT_BRANCHED) {
+                assert(!exc);
+                check("Branched", check_state.branchtarget, after.pc);
+            }
             if (exc) {
                 std::cout << "TODO: exception exc = " << (int)exc << "\n";
                 assert(0);
@@ -738,7 +751,7 @@ void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_sta
         if (mode < 16) {
             restore_value(tf, check_state.regs[mode], ct);
             if (debug_winuae_tests)
-                std::cout << "Validate restored " << (mode < 8 ? 'D' : 'A') << (int)(mode&7) <<  "=$" << hexfmt(check_state.sr) << "\n";
+                std::cout << "Validate restored " << (mode < 8 ? 'D' : 'A') << (int)(mode & 7) << "=$" << hexfmt(check_state.regs[mode]) << "\n";
             continue;
         } else if (mode == CT_SR) {
             restore_value(tf, check_state.sr, ct);
@@ -855,8 +868,10 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
                     input_state.ssp = test_header.super_stack_memory;
                     input_state.usp = test_header.user_stack_memory;
                     input_state.pc = cur_state.pc;
-                    assert(maxccr < 32);
-                    input_state.sr = ccr & 1 ? 31 : 0;
+                    if (maxccr >= 32)
+                        input_state.sr = ccr & 0xff;
+                    else
+                        input_state.sr = ccr & 1 ? 31 : 0;
                     input_state.A(7) = cur_state.regs[15];
 
                     m68000 cpu { mem, input_state };
@@ -869,7 +884,7 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
                         std::cerr << "\n\nInput state:\n";
                         print_cpu_state(std::cerr, input_state);
                         std::vector<uint16_t> iwords;
-                        for (uint32_t addr = cur_state.pc; addr < cur_state.endpc; addr += 2) {
+                        for (uint32_t addr = cur_state.pc; addr < cur_state.endpc + 2 /*HACK*/; addr += 2) {
                             iwords.push_back(get_u16(&ram[addr]));
                         }
 
@@ -905,9 +920,12 @@ bool run_winuae_tests()
 
     test_lowmem = read_file((basedir/"lmem.dat").string());
     test_testmem = read_file((basedir / "tmem.dat").string());
-    
+
     const std::vector<const char*> skip = {
-        "ANDSR"
+        // Require excpetion handling
+        "ANDSR", "MV2SR", "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP",
+        // assert
+        "MVMEL", "ROL", "ROR",
     };
     bool errors = false;
     for (auto& p : fs::directory_iterator(basedir)) {

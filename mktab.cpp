@@ -419,7 +419,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
 
         if (isbitop) {
             assert(osize == opsize::none && nea == 2);
-            ai.osize = (ea[1] >= 0b010'000 && ea[1] != ea_imm) ? opsize::b : opsize::l;
+            ai.osize = (ea[1] >= 0b010'000) ? opsize::b : opsize::l;
         }
 
         std::string name = desc.name;
