@@ -1091,6 +1091,11 @@ bool run_simple_tests()
             {}, 0,
             {}, 0,
         },
+        { // ASL.L D2, D2
+            { 0xe5a2 },
+            { 0, 0, 0xFFFFFFFF }, 0,
+            { 0, 0, 0 }, srm_v | srm_z
+        },
     };
 
     auto make_state = [](const uint32_t d[8], uint16_t ccr, uint32_t pc, uint64_t icount) {

@@ -830,7 +830,7 @@ private:
             const auto mask = cnt >= nb ? ~0U : ~((osmask - 1) >> cnt) & (osmask - 1);
             bool v = false;
             if (orig_val & osmask)
-                v = (orig_val & mask) != mask;
+                v = (orig_val & mask) != mask || cnt >= nb;
             else
                 v = !!(orig_val & mask);
             if (v)
