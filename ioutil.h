@@ -4,6 +4,7 @@
 #include <iosfwd>
 #include <stdint.h>
 #include <string>
+#include <vector>
 
 class num_formatter {
 public:
@@ -43,5 +44,7 @@ std::string binstring(T n, int w = static_cast<int>(sizeof(T) * 8))
 {
     return detail::do_format(binfmt(n, w));
 }
+
+std::vector<uint8_t> read_file(const std::string& path);
 
 #endif

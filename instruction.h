@@ -20,6 +20,18 @@ constexpr uint32_t opsize_msb_mask(opsize size)
     return size == opsize::b ? 0x80 : size == opsize::w ? 0x8000 : 0x80000000;
 }
 
+constexpr int32_t sext(uint32_t val, opsize size)
+{
+    switch (size) {
+    case opsize::b:
+        return static_cast<int8_t>(val & 0xff);
+    case opsize::w:
+        return static_cast<int16_t>(val & 0xfffff);
+    default:
+        return static_cast<int32_t>(val);
+    }
+}
+
 enum class inst_type {
     ILLEGAL,
     ABCD,

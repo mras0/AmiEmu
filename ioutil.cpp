@@ -2,6 +2,7 @@
 #include <ostream>
 #include <cassert>
 #include <sstream>
+#include <fstream>
 
 std::ostream& operator<<(std::ostream& os, const num_formatter& nf)
 {
@@ -22,4 +23,25 @@ std::string detail::do_format(const num_formatter& nf)
     std::ostringstream os;
     os << nf;
     return os.str();
+}
+
+std::vector<uint8_t> read_file(const std::string& path)
+{
+    std::ifstream in { path, std::ifstream::binary };
+    if (!in) {
+        throw std::runtime_error { "Error opening " + path };
+    }
+
+    in.seekg(0, std::ifstream::end);
+    const auto len = in.tellg();
+    in.seekg(0, std::ifstream::beg);
+
+    std::vector<uint8_t> buf(len);
+    if (len) {
+        in.read(reinterpret_cast<char*>(&buf[0]), len);
+    }
+    if (!in) {
+        throw std::runtime_error { "Error reading from " + path };
+    }
+    return buf;
 }
