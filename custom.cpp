@@ -1179,11 +1179,6 @@ public:
 #ifdef DISK_DMA_DEBUG
             std::cout << "Write to DMACON val=$" << hexfmt(val) << " dmacon=$" << hexfmt(s_.dmacon) << "\n";
 #endif
-            if ((s_.dmacon & DMAF_COPPER) && s_.copper_pt == 0) {
-                std::cout << "HACK: Loading copper pointer early from $" << hexfmt(s_.coplc[0]) << "\n";
-                TODO_ASSERT(s_.coplc[0]);
-                s_.copper_pt = s_.coplc[0];
-            }
             return;
         case INTENA:  // $09A
             setclr(s_.intena, val);

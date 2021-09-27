@@ -236,6 +236,7 @@ public:
             HANDLE_INST(SUBQ);
             HANDLE_INST(SUBX);
             HANDLE_INST(SWAP);
+            HANDLE_INST(TRAP);
             HANDLE_INST(TRAPV);
             HANDLE_INST(TST);
             HANDLE_INST(UNLK);
@@ -680,7 +681,7 @@ private:
 
     void do_trap(interrupt_vector vec)
     {
-        assert(vec < interrupt_vector::level1); // Should use do_interrupt
+        assert(vec < interrupt_vector::level1 || vec > interrupt_vector::level7); // Should use do_interrupt
         do_interrupt_impl(vec, 7); // XXX: IPL 7?
     }
 
@@ -1434,6 +1435,12 @@ private:
             ccr |= srm_z;
 
         state_.update_sr(srm_ccr_no_x, ccr);
+    }
+
+    void handle_TRAP()
+    {
+        assert(inst_->nea == 1 && ea_data_[0] < 16);
+        do_trap(static_cast<interrupt_vector>(32 + (ea_data_[0] & 0xf)));
     }
 
     void handle_TRAPV()

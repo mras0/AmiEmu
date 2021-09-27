@@ -78,16 +78,24 @@ int main(int argc, char* argv[])
         //ram_handler slow_ram { slow_size }; // For KS1.2
         //mem.register_handler(slow_ram, slow_base, slow_size);
 
+        //const char* disk = "../../Misc/AmigaWorkbench/Workbench13.adf";
+        const char* disk = R"(..\..\misc\amiga\c2p\out\c2ptest.adf)";
+
         m68000 cpu { mem };
 
         for (int i = 1; i < argc; ++i) {
             if (!strcmp(argv[i], "-trace"))
                 cpu.trace(&std::cout);
+            else if (!strcmp(argv[i], "-df0")) {
+                if (++i == argc)
+                    throw std::runtime_error { "Missing disk argument" };
+                disk = argv[i];
+            }
             else
                 throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
         }
 
-        df0.insert_disk(read_file("../../Misc/AmigaWorkbench/Workbench13.adf"));
+        df0.insert_disk(read_file(disk));
 
         //rom_tag_scan(rom.rom());
 
@@ -203,14 +211,14 @@ int main(int argc, char* argv[])
                     events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
                 }
-                const int trace_len = 1000;
+                const int trace_len = 50;
                 //f 00fc0f54
                 // w 0 dff058 2 w
                 //if (cpu.state().pc == 0x00FE8DCE) {
                 //    cpu.trace(&std::cout);
                 //    trace_cnt = trace_len;
                 //}
-                //if (cpu.instruction_count() == 6433261-10) {
+                //if (cpu.instruction_count() == 7092578-4) {
                 //    cpu.trace(&std::cout);
                 //    trace_cnt = trace_len+1;
                 //}

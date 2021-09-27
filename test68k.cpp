@@ -806,8 +806,11 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
     memcpy(&ram[test_header.test_low_memory_start], &test_lowmem[0], test_lowmem.size());
     memcpy(&ram[test_header.test_memory_addr], &test_testmem[0], test_testmem.size());
 
+    // XXX: For checking exceptions (see validate_test)
     for (int exc = 2; exc < 12; ++exc)
-        put_u32(&ram[exc * 4], 0xECC000 | (exc << 4)); // XXX: For checking exceptions (see validate_test)
+        put_u32(&ram[exc * 4], 0xECC000 | (exc << 4)); 
+    for (int exc = 32; exc < 48; ++exc)
+        put_u32(&ram[exc * 4], 0xECC000 | (exc << 4)); // Trap vectors
 
     winuae_test_state cur_state;
     memset(&cur_state, 0, sizeof(cur_state));
@@ -931,14 +934,14 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "RTE");
+    //run_winuae_mnemonic_test(basedir / "TRAP");
     //assert(0);
 
     const std::vector<const char*> skip = {
         // Not checked
         "RTE",
         // Not implemented
-        "RESET", "CHK", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
+        "RESET", "CHK", "MVPMR", "MVPRM", "RTR", "TAS",
         // TODO (Undefinde flags?)
         "ABCD", "SBCD", "NBCD",
     };
