@@ -50,6 +50,7 @@ public:
     void set_active(bool act);
     bool debug_prompt(std::string& line);
     void set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom);
+    void set_debug_windows_visible(bool visible);
 
 private:
     class impl;

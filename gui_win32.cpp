@@ -8,6 +8,7 @@
 #include "color_util.h"
 #include "memory.h"
 
+#define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <commdlg.h>
@@ -617,7 +618,7 @@ private:
                         MessageBox(hwnd, msg, L"Invalid color value", MB_ICONSTOP);
                         return 0;
                     }
-                    newpal[i] = val;
+                    newpal[i] = static_cast<uint16_t>(val);
                 }
                 memcpy(pal_, newpal, sizeof(newpal));
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
@@ -641,7 +642,7 @@ public:
     static memory_visualizer_window* create(int x, int y)
     {
         std::unique_ptr<memory_visualizer_window> wnd { new memory_visualizer_window {} };
-        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, 800, 680, nullptr);
+        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW, x, y, 800, 800, nullptr);
         return wnd.release();
     }
 
@@ -659,13 +660,14 @@ private:
     static constexpr int toolbar_margin_x = 10;
     static constexpr int toolbar_margin_y = 10;
     static constexpr int toolbar_width_ = 200;
-    static constexpr uint8_t maxplanes = 5;
+    static constexpr uint8_t maxplanes = 6;
 
     enum field {
         F_WIDTH,
         F_HEIGHT,
-        F_PLANES,
-        F_MODULO,
+        F_BPLCON0,
+        F_MODULO1,
+        F_MODULO2,
         F_PL1,
         F_PL2,
         F_PL3,
@@ -678,13 +680,15 @@ private:
     } fields[] = {
         { L"Width", 320 },
         { L"Height", 256 },
-        { L"Planes", 1 },
-        { L"Modulo", 0 },
+        { L"BPLCON0", 1<<12 },
+        { L"Modulo1", 0 },
+        { L"Modulo2", 0 },
         { L"Plane1", 0 },
         { L"Plane2", 0 },
         { L"Plane3", 0 },
         { L"Plane4", 0 },
         { L"Plane5", 0 },
+        { L"Plane6", 0 },
     };
     uint16_t palette_[32];
     static constexpr auto num_fields = sizeof(fields) / sizeof(*fields);
@@ -693,6 +697,7 @@ private:
     HWND update_button_;
     HWND palette_button_;
     HWND last_focus_ = nullptr;
+    HWND playfield_selection_;
     std::vector<uint8_t> mem_;
     std::vector<uint16_t> custom_;
 
@@ -714,7 +719,7 @@ private:
         for (size_t i = 0; i < num_fields; ++i) {
             const auto& f = fields[i];
             wchar_t text[256];
-            if (i >= F_PL1)
+            if (i >= F_PL1 || i == F_BPLCON0)
                 wsprintfW(text, L"$%X", f.val);
             else
                 wsprintfW(text, L"%d", f.val);
@@ -733,6 +738,9 @@ private:
 
         y += toolbar_margin_y * 2 + elem_y;
         palette_button_ = CreateWindow(L"BUTTON", L"&Palette", WS_CHILD | WS_VISIBLE | WS_TABSTOP, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(301), hInstance, nullptr);
+
+        y += toolbar_margin_y * 2 + elem_y;
+        playfield_selection_ = CreateWindow(L"BUTTON", L"&Other playfield", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(302), hInstance, nullptr);
 
         SetFocus(field_combo_[0]);
 
@@ -764,6 +772,9 @@ private:
                 update_from_custom();
             } else if (id == 301 && code == BN_CLICKED) {
                 palette_edit_dialog::run(hwnd, palette_, custom_);
+                update();
+            } else if (id == 302 && code == BN_CLICKED) {
+                // Other playfield
                 update();
             }
             break;
@@ -803,28 +814,26 @@ private:
         try {
             const int width = get_field(F_WIDTH);
             const int height = get_field(F_HEIGHT);
-            const int nbpls = get_field(F_PLANES);
-            const int16_t mod = static_cast<int16_t>(get_field(F_MODULO));
+            const int bplcon0 = get_field(F_BPLCON0);
+            const int16_t mod1 = static_cast<int16_t>(get_field(F_MODULO1));
+            const int16_t mod2 = static_cast<int16_t>(get_field(F_MODULO2));
             uint32_t pt[maxplanes];
 
             for (size_t i = 0; i < maxplanes; ++i)
                 pt[i] = get_field(static_cast<field>(F_PL1 + i));
 
 
-            if (nbpls > maxplanes)
-                throw std::runtime_error("bpls=" + std::to_string(nbpls) + " is not supported");
-            
             if (width != bitmap_window_->width() || height != bitmap_window_->height()) {
                 bitmap_window_->set_size(width, height);
                 SetWindowPos(bitmap_window_->handle(), nullptr, toolbar_width_, 0, width, height, SWP_NOZORDER);
             }
-
+            const bool altpf = !!SendMessage(playfield_selection_, BM_GETCHECK, 0, 0);
+            const int nbpls = std::min(6, (bplcon0 >> 12) & 7);
             std::vector<uint32_t> bitmap(static_cast<size_t>(width * height));
             const uint32_t ptmask = static_cast<uint32_t>(mem_.size() - 1);
             for (int y = 0; y < height; ++y) {
                 uint16_t data[maxplanes];
-
-
+                uint32_t hamcolor = rgb4_to_8(palette_[0]);
                 for (int x = 0; x < width; ++x) {
                     if ((x & 15) == 0) {
                         for (int p = 0; p < nbpls; ++p) {
@@ -841,11 +850,42 @@ private:
                         data[p] <<= 1;
                     }
 
-                    bitmap[x + y * width] = rgb4_to_8(palette_[idx]);
+                    if (bplcon0 & 0x400) { // Dual playfield
+                        if (altpf) {
+                            bitmap[x + y * width] = rgb4_to_8(palette_[8 + (((idx & 2) >> 1) | ((idx & 8) >> 2) | ((idx & 32) >> 3))]);
+                        } else {
+                            bitmap[x + y * width] = rgb4_to_8(palette_[(idx & 1) | ((idx & 4) >> 1) | ((idx & 16) >> 2)]);
+                        }
+                    } else if (bplcon0 & 0x800) { // HAM
+                        const int ibits = ((nbpls + 1) & ~1) - 2;
+                        const int val = (idx & 0xf) << (8 - ibits);
+                        switch (idx >> ibits) {
+                        case 0: // Palette entry
+                            hamcolor = rgb4_to_8(palette_[idx & 0xf]);
+                            break;
+                        case 1: // Modify B
+                            hamcolor = (hamcolor & 0xffff00) | val;
+                            break;
+                        case 2: // Modify R
+                            hamcolor = (hamcolor & 0x00ffff) | val << 16;
+                            break;
+                        case 3: // Modify G
+                            hamcolor = (hamcolor & 0xff00ff) | val << 8;
+                            break;
+                        default:
+                            assert(false);
+                        }
+                        bitmap[x + y * width] = hamcolor;
+                    } else if (nbpls == 6) { // EHB
+                        const auto val = rgb4_to_8(palette_[idx & 0x1f]);
+                        bitmap[x + y * width] = idx & 0x20 ? (val & 0xfefefe) >> 1 : val;
+                    } else {
+                        bitmap[x + y * width] = rgb4_to_8(palette_[idx]);
+                    }
                 }
 
                 for (int p = 0; p < nbpls; ++p)
-                    pt[p] += mod;
+                    pt[p] += p & 1 ? mod2 : mod1;
             }
 
             bitmap_window_->update_image(bitmap.data());
@@ -870,14 +910,35 @@ private:
         }
 
         const auto bplcon0 = custom_[0x100 / 2];
-        if ((bplcon0 & (0x8c00)) || (bplcon0 & 0x7000) > 0x6000) {
-            std::cout << "Warning: unsupported things in BPLCON0\n";
+        snprintf(temp, sizeof(temp), "$%X", bplcon0);
+        SetWindowTextA(field_combo_[F_BPLCON0], temp);
+
+        const auto ddfstrt = custom_[0x92 / 2] & 0xfc;
+        const auto ddfstop = custom_[0x94 / 2] & 0xfc;
+
+        unsigned w;
+        if (bplcon0 & 0x8000) {
+            w = ((ddfstop - ddfstrt) / 4 + 2) * 16;
+            if ((ddfstop - ddfstrt)/4 & 1) // Hack
+                w += 16;
         } else {
-            const int nbpls = (bplcon0>>12) & 7;
-            snprintf(temp, sizeof(temp), "%d", nbpls);
-            SetWindowTextA(field_combo_[F_PLANES], temp);
+            w = ((ddfstop - ddfstrt) / 8 + 1) * 16;
         }
 
+        snprintf(temp, sizeof(temp), "%d", w);
+        SetWindowTextA(field_combo_[F_WIDTH], temp);
+
+        const auto ydiwstart = custom_[0x8e / 2] >> 8;
+        const auto ydiwstop = custom_[0x90 / 2] >> 8 | (custom_[0x90 / 2] & 0x8000 ? 0 : 0x100);
+
+        snprintf(temp, sizeof(temp), "%d", ydiwstop-ydiwstart+1);
+        SetWindowTextA(field_combo_[F_HEIGHT], temp);
+
+        snprintf(temp, sizeof(temp), "%d", static_cast<int16_t>(custom_[0x108/2])); // BPL1MOD
+        SetWindowTextA(field_combo_[F_MODULO1], temp);
+
+        snprintf(temp, sizeof(temp), "%d", static_cast<int16_t>(custom_[0x10A / 2])); // BPL2MOD
+        SetWindowTextA(field_combo_[F_MODULO2], temp);
 
         InvalidateRect(handle(), nullptr, FALSE);
         update();
@@ -970,6 +1031,11 @@ public:
     void set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom)
     {
         mem_vis_window_->set_debug_memory(mem, custom);
+    }
+
+    void set_debug_windows_visible(bool visible)
+    {
+        ShowWindow(mem_vis_window_->handle(), visible ? SW_SHOW : SW_HIDE);
     }
 
 private:
@@ -1231,4 +1297,9 @@ bool gui::debug_prompt(std::string& line)
 void gui::set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom)
 {
     impl_->set_debug_memory(mem, custom);
+}
+
+void gui::set_debug_windows_visible(bool visible)
+{
+    impl_->set_debug_windows_visible(visible);
 }

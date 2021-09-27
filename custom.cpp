@@ -679,7 +679,7 @@ public:
             if (draw)
                 chip_write(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
         }
-        s_.bplpt[3] = s_.bplpt[2];
+        s_.bltpt[3] = s_.bltpt[2];
     }
 
     void do_blit()
@@ -899,7 +899,7 @@ public:
         return true;
     }
 
-    void step()
+    uint32_t step()
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
 
@@ -1331,6 +1331,8 @@ public:
                     pause_copper();
             }
         }
+
+        return s_.vpos << 8 | s_.hpos >> 1;
     }
 
     uint8_t read_u8(uint32_t addr, uint32_t offset) override
@@ -1667,12 +1669,9 @@ public:
         return 0;
     }
 
-    const uint32_t* new_frame()
+    const uint32_t* frame()
     {
-        if (s_.hpos == 0 && s_.vpos == 0) {
-            return gfx_buf_;
-        }
-        return nullptr;
+        return gfx_buf_;
     }
 
     std::vector<uint16_t> get_regs()
@@ -1975,9 +1974,9 @@ custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia)
 
 custom_handler::~custom_handler() = default;
 
-void custom_handler::step()
+uint32_t custom_handler::step()
 {
-    impl_->step();
+    return impl_->step();
 }
 
 uint8_t custom_handler::current_ipl() const
@@ -1985,9 +1984,9 @@ uint8_t custom_handler::current_ipl() const
     return impl_->current_ipl();
 }
 
-const uint32_t* custom_handler::new_frame()
+const uint32_t* custom_handler::frame()
 {
-    return impl_->new_frame();
+    return impl_->frame();
 }
 
 void custom_handler::set_serial_data_handler(const serial_data_handler& handler)

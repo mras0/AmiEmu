@@ -360,8 +360,8 @@ int main(int argc, char* argv[])
         constexpr uint32_t invalid_pc = ~0U;
         bool debug_mode = false;
         uint32_t wait_for_pc = invalid_pc;
-        bool new_frame_since_last_check = false;
-        bool waiting_for_new_frame = false;
+        uint32_t wait_for_vpos = ~0U;
+        uint32_t last_vpos = 0;
         std::unique_ptr<std::ofstream> trace_file;
 
         for (bool quit = false; !quit;) {
@@ -407,15 +407,16 @@ int main(int argc, char* argv[])
                     debug_mode = true;
                     wait_for_pc = invalid_pc;
                 }
-                if (waiting_for_new_frame && new_frame_since_last_check) {
+                if (wait_for_vpos == last_vpos) {
                     g.set_active(false);
                     debug_mode = true;
-                    waiting_for_new_frame = false;
+                    wait_for_vpos = ~0U;
                 }
 
                 if (debug_mode) {
                     const auto& s = cpu.state();
                     g.set_debug_memory(mem.ram(), custom.get_regs());
+                    g.set_debug_windows_visible(true);
                     cpu.show_state(std::cout);
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
@@ -516,9 +517,34 @@ int main(int argc, char* argv[])
                             goto exit_debug;
                         } else if (args[0] == "zf") {
                             // Wait for next frame
-                            new_frame_since_last_check = false;
-                            waiting_for_new_frame = true;
+                            wait_for_vpos = 0;
                             goto exit_debug;
+                        } else if (args[0] == "zv") {
+                            // Wait for video position
+                            if (args.size() > 1) {
+                                uint32_t waitpos = 0;
+                                auto vpos = from_hex(args[1]);
+                                if (vpos.first && vpos.second <= 313) {
+                                    waitpos = vpos.second << 8;
+                                    if (args.size() > 2) {
+                                        auto hpos = from_hex(args[2]);
+                                        if (hpos.first && hpos.second <= 0xE3) {
+                                            waitpos |= hpos.second;
+                                        } else {
+                                            std::cout << "Invalid hpos\n";
+                                            waitpos = ~0U;
+                                        }
+                                    }
+                                    if (waitpos != ~0U) {
+                                        wait_for_vpos = waitpos;
+                                        goto exit_debug;
+                                    }
+                                } else {
+                                    std::cout << "Invalid vpos\n";
+                                }
+                            } else {
+                                std::cout << "Missing argument(s) vpos [hpos]\n";
+                            }
                         } else {
 unknown_command:
                             std::cout << "Unknown command \"" << args[0] << "\"\n";
@@ -528,14 +554,14 @@ unknown_command:
                     if (0) {
 exit_debug:
                         debug_mode = false;
+                        g.set_debug_windows_visible(false);
                         g.set_active(true);
-
                     }
 
                 }
 
                 cpu.step(custom.current_ipl());
-                custom.step();
+                last_vpos = custom.step();
 
 #ifdef TRACE_LOG
                 if (cpu.instruction_count() == trace_start_inst) {
@@ -549,23 +575,21 @@ exit_debug:
                 }
 #endif
 
-                if (auto f = custom.new_frame()) {
-                    g.update_image(f);
+                if (last_vpos == 0) {
                     if (disk_chosen_countdown) {
                         if (--disk_chosen_countdown == 0) {
                             std::cout << "DF0: Inserting disk\n";
                             df0.insert_disk(std::move(pending_disk));
                         }
                     }
-                    new_frame_since_last_check = true;
                     goto update;
                 }
                 if (!steps_to_update--) {
                 update:
+                    g.update_image(custom.frame());
                     g.led_state(cias.power_led_on());
                     serdata_flush();
                     auto new_events = g.update();
-                    assert(events.empty()); // events are comming too fast to process
                     events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
                 }

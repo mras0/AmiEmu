@@ -140,6 +140,8 @@ void memory_handler::register_handler(memory_area_handler& h, uint32_t base, uin
 {
     auto a = &find_area(base);
     assert(a == &def_area_ || a == &ram_area_);
+    (void)a;
+    (void)len;
     areas_.push_back(area {
         base, len, &h });
 }
@@ -148,6 +150,9 @@ void memory_handler::unregister_handler(memory_area_handler& h, uint32_t base, u
 {
     auto& a = find_area(base);
     assert(a.base == base && a.len == len && a.handler == &h);
+    (void)h;
+    (void)a;
+    (void)len;
     areas_.erase(areas_.begin() + (&a - &areas_[0]));
 }
 
