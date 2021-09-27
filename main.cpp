@@ -361,6 +361,14 @@ int main(int argc, char* argv[])
         if (cmdline_args.slow_size) {
             slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
             mem.register_handler(*slow_ram, slow_base, cmdline_args.slow_size);
+            // Mirror up to 0xd80000
+            const uint32_t slow_end = slow_base + max_slow_size;
+            for (uint32_t addr = slow_base + cmdline_args.slow_size; addr < slow_end; addr += cmdline_args.slow_size) {
+                uint32_t size = cmdline_args.slow_size;
+                if (addr + size > slow_end)
+                    size = slow_end - addr;
+                mem.register_handler(*slow_ram, addr, size);
+            }
         }
         if (cmdline_args.fast_size) {
             fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);

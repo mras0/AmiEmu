@@ -10,7 +10,7 @@ constexpr uint32_t slow_base = 0xc00000;
 constexpr uint32_t fast_base = 0x200000;
 constexpr uint32_t max_chip_size = fast_base;
 constexpr uint32_t max_fast_size = 0x800000;
-constexpr uint32_t max_slow_size = 0xdc0000 - slow_base;
+constexpr uint32_t max_slow_size = 0xd80000 - slow_base;
 
 class state_file;
 
