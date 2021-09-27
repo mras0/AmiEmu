@@ -2289,15 +2289,15 @@ public:
             case 1: // SPRxCTL
                 s_.sprctl[spr] = val;
                 s_.spr_armed[spr] = false;
-                s_.spr_dma_states[spr] = sprite_dma_state::stopped;
                 if (s_.sprite_vpos_start(spr) != s_.sprite_vpos_end(spr) && s_.sprite_vpos_start(spr) >= s_.vpos) {
                     if (DEBUG_SPRITE)
                         DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Setting active waiting for VPOS=$" << hexfmt(s_.sprite_vpos_start(spr)) << " end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
                     s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_waiting;
-                } else {
+                    s_.spr_dma_states[spr] = sprite_dma_state::stopped;
+                } else if (s_.spr_dma_states[spr] == sprite_dma_state::fetch_ctl) {
                     if (DEBUG_SPRITE)
                         DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Disabling start=$" << hexfmt(s_.sprite_vpos_start(spr)) << " == end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
-                    s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
+                    s_.spr_dma_states[spr] = sprite_dma_state::stopped;
                 }
                 return;
             case 2: // SPRxDATA (low word)
