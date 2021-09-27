@@ -678,6 +678,8 @@ int main(int argc, char* argv[])
             rtc.handle_state(sf);
             autoconf.handle_state(sf);
             cpu.handle_state(sf);
+            sf.handle(cpu_ipl);
+            sf.handle(cpu_ipl_delay);
             if (sf.loading()) {
                 // Fake up something for the debugger
                 cpu_step.current_pc = cpu_step.last_pc = cpu.state().pc;
@@ -699,7 +701,6 @@ int main(int argc, char* argv[])
             // HACK: Delay IPL change from Paula by 3 CCKs.
             // Reality is more complicated: https://github.com/dirkwhoffmann/vAmiga/issues/274
             // And below isn't correct if Paula IPL changes between delay start and end, but let's see...
-            // TODO: This should also be in state file...
             if (cpu_ipl_delay) {
                 if (--cpu_ipl_delay == 0)
                     cpu_ipl = custom_step.ipl;
