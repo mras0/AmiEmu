@@ -13,6 +13,7 @@
     X(VHPOSR  , 0x006 , 0) /* Read vert and horiz. position of beam                   */ \
     X(POTGOR  , 0x016 , 0) /* Pot port data read(formerly POTINP)                     */ \
     X(SERDATR , 0x018 , 0) /* Serial port data and status read                        */ \
+    X(INTREQR , 0x01E , 0) /* Interrupt request bits read                             */ \
     X(SERDAT  , 0x030 , 1) /*                                                         */ \
     X(SERPER  , 0x032 , 1) /* Serial port period and control                          */ \
     X(POTGO   , 0x034 , 1) /* Pot port data write and start                           */ \
@@ -407,12 +408,12 @@ public:
 
         if (++s_.hpos == hpos_per_line) {
             s_.hpos = 0;
-            assert(s_.bpldat_shift_pixels == 0);
             // TODO: bplmod if in disp area
             if (++s_.vpos == vpos_per_field) {
                 s_.copper_pt = s_.coplc[0];
                 s_.copper_inst_ofs = 0;
                 s_.vpos = 0;
+                s_.intreq |= INTF_VERTB;
             }
         }
     }
@@ -426,14 +427,19 @@ public:
     uint16_t read_u16(uint32_t, uint32_t offset) override
     {
         switch (offset) {
-        case VPOSR:
+        case DMACONR: // $002
+            // TODO: blitter status
+            return s_.dmacon;
+        case VPOSR:   // $004
             // TODO: Bit15 LOF (long frame)
             return (s_.vpos >> 8)&1;
-        case VHPOSR:
+        case VHPOSR:  // $006
             return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
-        case SERDATR:
+        case SERDATR: // $018
             // Don't spam in DiagROM
             return 0xff;
+        case INTREQR: // $01E
+            return s_.intreq;
         }
 
         std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
@@ -514,9 +520,11 @@ public:
             assert(!(s_.dmacon & (DMAF_BLITTER | DMAF_SPRITE | DMAF_DISK | DMAF_AUD3 | DMAF_AUD2 | DMAF_AUD1 | DMAF_AUD0)));
             return;
         case INTENA:  // $09A
+            assert(!(val & INTF_SETCLR) || ((val & 0x3fff) == INTF_VERTB));
             setclr(s_.intena, val);
             return;
         case INTREQ:  // $09C
+            val &= ~INTF_INTEN;
             setclr(s_.intreq, val);
             return;
         case BPLCON0: // $100
@@ -546,6 +554,27 @@ public:
                   << " val $" << hexfmt(val) << "\n";
     }
 
+    uint8_t current_ipl() const
+    {
+        if (!(s_.intena & INTF_INTEN))
+            return 0;
+        const auto active = s_.intena & s_.intreq;
+        if (!active)
+            return 0;
+        // Find highest priority active interrupt
+        constexpr uint8_t ipl[INTB_EXTER+1] = {
+            1, 1, 1, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 6
+        };
+        for (uint8_t i = INTB_EXTER+1; i--;) {
+            if ((active & (1 << i))) {
+                return ipl[i];
+
+            }
+        }
+        assert(0);
+        return 0;
+    }
+
     const uint32_t* new_frame()
     {
         if (s_.hpos == 0 && s_.vpos == 0) {
@@ -570,6 +599,11 @@ custom_handler::~custom_handler() = default;
 void custom_handler::step()
 {
     impl_->step();
+}
+
+uint8_t custom_handler::current_ipl() const
+{
+    return impl_->current_ipl();
 }
 
 const uint32_t* custom_handler::new_frame()

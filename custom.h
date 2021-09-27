@@ -14,6 +14,7 @@ public:
 
     void step();
 
+    uint8_t current_ipl() const; // 0..7
     const uint32_t* new_frame();
 
 private:

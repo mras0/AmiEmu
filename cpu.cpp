@@ -117,9 +117,15 @@ public:
         os << '\n';
     }
 
-    void step()
+    void step(uint8_t current_ipl)
     {
+        assert(current_ipl < 8);
+
         ++instruction_count_;
+
+        if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
+            do_interrupt(current_ipl);
+        }
 
         if (trace_)
             print_cpu_state(*trace_, state_);
@@ -624,16 +630,11 @@ private:
         return val;
     }
 
-    void do_trap(interrupt_vector vec)
+    void do_interrupt_impl(interrupt_vector vec, uint8_t ipl)
     {
-        //std::cerr << "[CPU] Trap $" << hexfmt(static_cast<uint8_t>(vec)) << " triggered at PC=$" << hexfmt(start_pc_) << "\n";
-
+        assert(vec > interrupt_vector::reset_pc); // RESET doesn't save anything
         const uint16_t saved_sr = state_.sr;
-        const uint8_t vec_num = static_cast<uint8_t>(vec);
-        assert(vec_num < static_cast<uint8_t>(interrupt_vector::level1)); // TODO: Update IPL, get from bus cycle
-        assert(vec_num > static_cast<uint8_t>(interrupt_vector::reset_pc)); // RESET doesn't save anything
-
-        state_.update_sr(static_cast<sr_mask>(srm_trace | srm_s), srm_s); // Clear trace, set superviser mode
+        state_.update_sr(static_cast<sr_mask>(srm_trace | srm_s | srm_ipl), srm_s | ipl << sri_ipl); // Clear trace, set superviser mode
         // Now always on supervisor stack
 
         // From MC68000UM 6.2.5
@@ -647,6 +648,20 @@ private:
         push_u16(saved_sr);
 
         state_.pc = mem_.read_u32(static_cast<uint32_t>(vec) * 4);
+    }
+
+    void do_trap(interrupt_vector vec)
+    {
+        assert(vec < interrupt_vector::level1); // Should use do_interrupt
+        do_interrupt_impl(vec, 7); // XXX: IPL 7?
+    }
+
+    void do_interrupt(uint8_t ipl)
+    {
+        assert(ipl >= 1 && ipl <= 7);
+        // Amiga detail: Uses non-autovector and ignores the special bus cycle where A3-A1 is is to IPL and all other address lines are high to simple read from ROM
+        const auto vec = mem_.read_u8(0xfffffff1 | ipl << 1);        
+        do_interrupt_impl(static_cast<interrupt_vector>(vec), ipl);
     }
 
     void handle_ADD()
@@ -1164,7 +1179,7 @@ void m68000::show_state(std::ostream& os)
     impl_->show_state(os);
 }
 
-void m68000::step()
+void m68000::step(uint8_t current_ipl)
 {
-    impl_->step();
+    impl_->step(current_ipl);
 }

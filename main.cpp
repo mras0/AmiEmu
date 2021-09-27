@@ -38,7 +38,7 @@ int main(int argc, char* argv[])
 
         for (;;) {
             try {
-                cpu.step();
+                cpu.step(custom.current_ipl());
                 custom.step();
                 if (auto f = custom.new_frame())
                     g.update_image(f);

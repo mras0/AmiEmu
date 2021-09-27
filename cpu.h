@@ -142,7 +142,8 @@ public:
     uint64_t instruction_count() const;
     void trace(std::ostream* os);
     void show_state(std::ostream& os);
-    void step();
+
+    void step(uint8_t current_ipl = 0);
 
 private:
     class impl;
