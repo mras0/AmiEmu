@@ -811,7 +811,7 @@ public:
             const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
             const auto he = s_.copper_inst[1] & 0xfe;
 
-            if (!(s_.copper_inst[1] & 0x8000) && !(s_.dmacon & DMAF_BLTDONE)) {
+            if (!(s_.copper_inst[1] & 0x8000) && (s_.dmacon & DMAF_BLTDONE)) {
                 // Blitter wait
             } else if ((s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he))) {
                 if (DEBUG_COPPER)
