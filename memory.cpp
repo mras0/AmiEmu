@@ -93,6 +93,7 @@ rom_area_handler::rom_area_handler(memory_handler& mem_handler, std::vector<uint
     }
 
     if (size == 1024 * 1024) {
+        mem_handler_.register_handler(*this, 0xe00000, size); // Extension ROM needs to be at 0xe00000?
         mem_handler_.register_handler(*this, 0xf00000, size);
         return;
     }

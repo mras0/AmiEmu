@@ -201,7 +201,8 @@
     X(COLOR29  , 0x1BA , 1) /* Color table 29                                          */ \
     X(COLOR30  , 0x1BC , 1) /* Color table 30                                          */ \
     X(COLOR31  , 0x1BE , 1) /* Color table 31                                          */ \
-    X(FMODE    , 0x1FC,  1) /* Fetch mode (AGA)                                        */ \
+    X(DIWHIGH  , 0x1E4 , 1) /* Display window - upper bits for start/stop (AGA)        */ \
+    X(FMODE    , 0x1FC , 1) /* Fetch mode (AGA)                                        */ \
 // keep this line clear (for macro continuation)
 
 
@@ -825,7 +826,16 @@ public:
 #endif
             s_.copper_inst_ofs = 0; // Fetch next instruction
         }
+    }
 
+    void copjmp(int idx)
+    {
+        assert(idx == 0 || idx == 1);
+        s_.copper_inst_ofs = 0;
+        s_.copper_pt = s_.coplc[idx];
+#ifdef COPPER_DEBUG
+        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Copper jump to COP" << (idx+1) << "LC: $" << hexfmt(s_.coplc[idx]) << "\n";
+#endif
     }
 
     void step()
@@ -1231,6 +1241,12 @@ public:
             return s_.intena;
         case INTREQR: // $01E
             return s_.intreq;
+        case COPJMP1: // $088
+            copjmp(0);
+            return 0;
+        case COPJMP2: // $08A
+            copjmp(1);
+            return 0;
         }
 
         std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
@@ -1427,12 +1443,10 @@ public:
             TODO_ASSERT(val == 0x4489);
             return;
         case COPJMP1: // $088
-            s_.copper_inst_ofs = 0;
-            s_.copper_pt = s_.coplc[0];
+            copjmp(0);
             return;
         case COPJMP2: // $08A
-            s_.copper_inst_ofs = 0;
-            s_.copper_pt = s_.coplc[1];
+            copjmp(1);
             return;
         case DIWSTRT: // $08E
             s_.diwstrt = val;
@@ -1482,9 +1496,9 @@ public:
         case BPLMOD2: // $10A
             s_.bplmod2 = val;
             return;
-        case FMODE: // $1FC
-            return;
-        case 0x1fe: // NO-OP
+        case DIWHIGH: // $1E4
+        case FMODE:   // $1FC
+        case 0x1fe:   // NO-OP
             return;
         }
         std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"

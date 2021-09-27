@@ -101,6 +101,8 @@ public:
         // Lower side=first
         const uint8_t tracknum = !side_ + cyl_ * 2;
 
+        //std::cout << "[DISK] Reading track " << (int)tracknum << "\n";
+
         for (uint8_t sec = 0; sec < NUMSECS; ++sec) {
             const uint8_t* raw_data = &data_[(tracknum * NUMSECS + sec) * TD_SECTOR];
             put_u32(&dest[0], fill); // Preamble
