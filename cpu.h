@@ -15,9 +15,9 @@ enum sr_bit_index {
     sri_x     = 4, // Extend
     // System byte
     sri_ipl   = 8,  // 3 bits Interrupt priority mask
-    sri_m     = 12, // Master/interrupt state
+    sri_m     = 12, // Master/interrupt state (not supported on 68000)
     sri_s     = 13, // Supervisor/user state
-    sri_trace = 14, // 2 bits Trace (0b00 = No trace, 0b10 = Trace on any instruction, 0b01 = Trace on change of flow, 0b11 = Undefined)
+    sri_trace = 14, // 2 bits Trace (0b00 = No trace, 0b10 = Trace on any instruction, 0b01 = Trace on change of flow, 0b11 = Undefined) (only one trace level supported on 680000)
 };
 
 enum sr_mask : uint16_t {

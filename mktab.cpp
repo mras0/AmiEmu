@@ -79,8 +79,8 @@ constexpr const inst_desc insts[] = {
     {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , 0 },
     {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , 0 },
     {"MOVE"              , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " , block_An, ea_sr }, // Move from SR
-    {"MOVE"              , "B  " , "0 1 0 0 0 1 0 0 1 1 M     Xn   " , "   " , block_An, ea_ccr << 8 }, // Move to CCR
-    {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " , block_An, ea_sr << 8 }, // Move to SR
+    {"MOVE"              , " W " , "0 1 0 0 0 1 0 0 1 1 M     Xn   " , "   " , block_An, ea_ccr << 8 }, // Move to CCR
+    {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " , block_An | priv_inst, ea_sr << 8 }, // Move to SR
     {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " },
     {"CLR"               , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " },
     {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " },

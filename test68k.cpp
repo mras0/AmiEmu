@@ -900,7 +900,7 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
                         cpu.step();
                         validate_test(test_file, cpu.state(), check_state);
                     } catch (const std::exception& e) {
-                        std::cerr << "Test failed after " << cpu.instruction_count() << " instructions\n";
+                        std::cerr << "Test failed after " << test_count << " tests\n";
                         std::cerr << "\n\nInput state:\n";
                         print_cpu_state(std::cerr, input_state);
                         std::vector<uint16_t> iwords;
@@ -943,12 +943,13 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "ANDSR.W");
+    //run_winuae_mnemonic_test(basedir / "DIVU.W");
     //assert(0);
 
     const std::vector<const char*> skip = {
+        "MV2SR", // Bugged?
         // Require excpetion handling
-        "MV2SR", "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
+        "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
         // Not implemented
         "CHK", "EORSR", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
         // TODO (Undefinde flags?)

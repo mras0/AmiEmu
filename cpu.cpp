@@ -519,10 +519,9 @@ private:
             break;
         default:
             if (ea == ea_sr) {
-                assert(!(val & srm_illegal));
-                // Note: MOVE to SR is not actually privileged until 68010
-                assert((state_.sr & srm_s) || inst_->type == inst_type::MOVE);
-                state_.sr = static_cast<uint16_t>(val);
+                assert((state_.sr & srm_s));
+                val &= ~(srm_m | 1 << 14); // Clear unsupported bits
+                state_.sr = static_cast<uint16_t>(val & ~srm_illegal);
                 return;
             } else if (ea == ea_ccr) {
                 state_.update_sr(srm_ccr, val & srm_ccr);
@@ -898,21 +897,26 @@ private:
     void handle_DIVU()
     {
         assert(inst_->nea == 2 && inst_->size == opsize::w && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
-        auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
         const auto d = read_ea(0);
-        if (!d)
-            throw std::runtime_error { "TODO: Handle division by zero" };
+        if (!d) {
+            do_trap(interrupt_vector::zero_divide);
+            return;
+        }
+             
+        auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
 
         const auto q = reg / d;
         const auto r = reg % d;
-        reg = (q & 0xffff) | (r & 0xffff) << 16;
         uint16_t ccr = 0;
-        if (q & 0x8000)
-            ccr |= srm_n;
-        if (!q)
-            ccr |= srm_z;
-        if (q > 0x8000)
-            ccr |= srm_v;
+        if (q > 0xffff) {
+            ccr = srm_v | srm_n;
+        } else {
+            if (q & 0x8000)
+                ccr |= srm_n;
+            if (!q)
+                ccr |= srm_z;
+            reg = (q & 0xffff) | (r & 0xffff) << 16;
+        }
         state_.update_sr(srm_ccr_no_x, ccr);
     }
 
@@ -1020,8 +1024,8 @@ private:
         assert(inst_->nea == 2);
         const uint32_t src = read_ea(0);
         write_ea(1, src);
-        // Reading/writing SR/CCR should not update flags
-        if (inst_->ea[0] != ea_sr && inst_->ea[0] != ea_ccr && inst_->ea[1] != ea_sr && inst_->ea[1] != ea_ccr)
+        // Reading/writing SR/CCR/USP should not update flags
+        if (inst_->ea[0] != ea_sr && inst_->ea[0] != ea_ccr && inst_->ea[0] != ea_usp && inst_->ea[1] != ea_sr && inst_->ea[1] != ea_ccr && inst_->ea[1] != ea_usp)
             update_flags(srm_ccr_no_x, src, 0);
     }
 
