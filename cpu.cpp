@@ -136,6 +136,7 @@ public:
         }
 
         if (inst_->type == inst_type::ILLEGAL) {
+            state_.pc = start_pc_; // Same as for privililege violation
             switch (iwords_[0] >> 12) {
             case 0xA:
                 do_trap(interrupt_vector::line_1010);

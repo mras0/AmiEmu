@@ -1082,8 +1082,12 @@ bool run_simple_tests()
             { 0x44FC, 0x0007 },
             {}, 0,
             {}, srm_c | srm_v | srm_z,
-
-        }
+        },
+        { // NOP
+            { 0x4E71 },
+            {}, 0,
+            {}, 0,
+        },
     };
 
     auto make_state = [](const uint32_t d[8], uint16_t ccr, uint32_t pc) {

@@ -3,6 +3,12 @@
 #include <stdexcept>
 #include <cassert>
 
+//#define TRACE_LOG
+
+#ifdef TRACE_LOG
+#include <sstream>
+#endif
+
 #include "ioutil.h"
 #include "instruction.h"
 #include "disasm.h"
@@ -189,6 +195,14 @@ int main(int argc, char* argv[])
             }
         };
 
+#ifdef TRACE_LOG
+        std::ostringstream oss;
+        constexpr size_t pc_log_size = 0x1000;
+        std::string pc_log[pc_log_size];
+        size_t pc_log_pos = 0;
+        constexpr size_t trace_start_inst = 200'000'000;
+#endif
+
         const unsigned steps_per_update = 10000;
         unsigned steps_to_update = 0;
         int trace_cnt = -1;
@@ -212,6 +226,18 @@ int main(int argc, char* argv[])
 
                 cpu.step(custom.current_ipl());
                 custom.step();
+
+#ifdef TRACE_LOG
+                if (cpu.instruction_count() == trace_start_inst) {
+                    std::cout << "Starting trace\n";
+                    cpu.trace(&oss);
+                } else if (cpu.instruction_count() > trace_start_inst) {
+                    pc_log[pc_log_pos] = oss.str();
+                    oss.str("");
+                    oss.clear();
+                    pc_log_pos = (pc_log_pos + 1) % pc_log_size;
+                }
+#endif
 
                 if (auto f = custom.new_frame()) {
                     g.update_image(f);
@@ -242,9 +268,15 @@ int main(int argc, char* argv[])
                         break;
                 }
             } catch (const std::exception& e) {
+#ifdef TRACE_LOG
+                for (size_t i = 0; i < sizeof(pc_log) / sizeof(*pc_log); ++i) {
+                    std::cerr << pc_log[(pc_log_pos + i) % pc_log_size] << "\n";
+                }
+#endif
                 cpu.show_state(std::cerr);
                 std::cerr << "\n" << e.what() << "\n\n";
 
+#ifndef TRACE_LOG
                 // Wait for GUI to exit
                 serdata_flush();
                 for (;;) {
@@ -252,6 +284,9 @@ int main(int argc, char* argv[])
                         if (evt.type == gui::event_type::quit)
                             throw;
                 }
+#else
+                throw;
+#endif
             }
         }
 
