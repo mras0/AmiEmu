@@ -171,7 +171,7 @@ void rom_tag_scan(const std::vector<uint8_t>& rom)
     constexpr uint32_t romtag = 0x4AFC;
 
     /*
-    FC00B6  4AFC                        RTC_MATCHWORD   (start of ROMTAG marker)
+FC00B6  4AFC                        RTC_MATCHWORD   (start of ROMTAG marker)
 FC00B8  00FC00B6                    RT_MATCHTAG     (pointer RTC_MATCHWORD)
 FC00BC  00FC323A                    RT_ENDSKIP      (pointer to end of code)
 FC00C0  00                          RT_FLAGS        (no flags)

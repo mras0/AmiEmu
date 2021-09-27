@@ -76,9 +76,13 @@ public:
             if (cyl_ == 0)
                 flags &= ~DSKF_TRACK0;
             flags &= ~DSKF_PROT;
-            if (motor_)
-                flags &= ~DSKF_RDY;
         }
+        // When the motor is off the RDY bit is used for drive identification.
+        // The 32-bit ID of a normal drive is all 1's, which means /RDY should
+        // always be reset (active low). If proper drive ID is to be supported
+        // we need to shift out one bit from a 32-bit register.
+        // See http://amigadev.elowar.com/read/ADCD_2.1/Hardware_Manual_guide/node01AB.html
+        flags &= ~DSKF_RDY;
         if (DEBUG_DISK) {
             *debug_stream << name_ << " State";
             if (!(flags & DSKF_RDY))
