@@ -467,8 +467,8 @@ struct custom_state {
     uint32_t dskpt;
     uint16_t dsklen;
     uint16_t dskwait; // HACK
-
     uint16_t dsklen_act;
+    uint16_t dsksync;
 
     uint32_t copper_pt;
     uint16_t copper_inst[2];
@@ -584,6 +584,17 @@ public:
     {
         s_.cur_mouse_x = static_cast<uint8_t>(s_.cur_mouse_x + dx);
         s_.cur_mouse_y = static_cast<uint8_t>(s_.cur_mouse_y + dy);
+    }
+
+    void show_debug_state(std::ostream& os)
+    {
+        cia_.show_debug_state(os);
+        os << "DSK PT: " << hexfmt(s_.dskpt) << " LEN: " << hexfmt(s_.dsklen_act) << " ADK: " << hexfmt(s_.adkcon) << " SYNC: " << hexfmt(s_.dsksync) << "\n";
+        os << "DMACON: " << hexfmt(s_.dmacon) << " INTENA: " << hexfmt(s_.intena) << " INTREQ: " << hexfmt(s_.intreq) << " VPOS: " << hexfmt(s_.vpos) << " HPOS: " << hexfmt(s_.hpos) << "\n";
+        os << "INT: " << hexfmt(s_.intena & s_.intreq, 4) << " IPL: " << hexfmt(current_ipl()) << "\n";
+        os << "COP1LC: " << hexfmt(s_.coplc[0]) << " COP2LC: " << hexfmt(s_.coplc[1]) << " COPPTR: " << hexfmt(s_.copper_pt) << "\n";
+        os << "DIWSTRT: " << hexfmt(s_.diwstrt) << " DIWSTOP: " << hexfmt(s_.diwstop) << " DDFSTRT: " << hexfmt(s_.ddfstrt) << " DDFSTOP: " << hexfmt(s_.ddfstop) << "\n";
+        os << "BPLCON 0: " << hexfmt(s_.bplcon0) << " 1: " << hexfmt(s_.bplcon1) << " 2: " << hexfmt(s_.bplcon2) << "\n";
     }
 
     void log_blitter_state()
@@ -1094,9 +1105,11 @@ public:
                         const uint16_t nwords = s_.dsklen_act & 0x3FFF;
                         TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
                         TODO_ASSERT(nwords > 0);
+                        TODO_ASSERT(!(s_.adkcon & 0x400) || s_.dsksync == 0x4489);
 #ifdef DISK_DMA_DEBUG
                         std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << "\n";
 #endif
+                        // TODO: Skip to 2nd sync word if WORDSYNC ($400) enabled?
                         std::vector<uint8_t> data(nwords * 2);
                         cia_.active_drive().read_mfm_track(&data[0], nwords);
 
@@ -1504,7 +1517,7 @@ public:
             s_.bltdat[0] = val;
             return;
         case DSKSYNC: // $07E:
-            TODO_ASSERT(val == 0x4489);
+            s_.dsksync = val;
             return;
         case COPJMP1: // $088
             copjmp(0);
@@ -1641,4 +1654,9 @@ void custom_handler::set_rbutton_state(bool pressed)
 void custom_handler::mouse_move(int dx, int dy)
 {
     impl_->mouse_move(dx, dy);
+}
+
+void custom_handler::show_debug_state(std::ostream& os)
+{
+    impl_->show_debug_state(os);
 }

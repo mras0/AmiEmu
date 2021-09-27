@@ -2,6 +2,7 @@
 #define CIA_H
 
 #include <memory>
+#include <iosfwd>
 #include "memory.h"
 #include "disk_drive.h"
 
@@ -19,6 +20,7 @@ public:
     void set_lbutton_state(bool pressed);
     bool power_led_on() const;
     disk_drive& active_drive(); // For DMA
+    void show_debug_state(std::ostream& os);
 
 private:
     class impl;

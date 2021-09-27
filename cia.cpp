@@ -327,6 +327,24 @@ public:
         return *drives_[drive];
     }
 
+    void show_debug_state(std::ostream& os)
+    {
+        for (int idx = 0; idx < 2; ++idx) {
+            auto& s = s_[idx];
+            os << (char)('A' + idx) << ": CRA " << hexfmt(s.cr[0]) << " CRB " << hexfmt(s.cr[1]) << " ICR " << hexfmt(s.icrdata) << " IM " << hexfmt(s.icrmask);
+            os << " TA " << hexfmt(s.timer_val[0]) << " (" << hexfmt(s.timer_latch[0]) << ") TB " << hexfmt(s.timer_val[1]) << " (" << hexfmt(s.timer_latch[1]) << ")\n";
+            os << "TOD " << hexfmt(s.counter, 6) << " (" << hexfmt(s.counter_latch, 6) << ") ALARM " << hexfmt(s.alarm) << " ";
+            os << (s.counter_latch & latch_active_mask ? 'L' : ' ') << "\n";
+        }
+
+        for (int drv = 0; drv < max_drives; ++drv) {
+            if (!drives_[drv])
+                continue;
+            os << "DF" << drv << ": ";
+            drives_[drv]->show_debug_state(os);
+        }
+    }
+
 private:
     memory_handler& mem_handler_;
     rom_area_handler& rom_handler_;
@@ -687,4 +705,9 @@ bool cia_handler::power_led_on() const
 disk_drive& cia_handler::active_drive()
 {
     return impl_->active_drive();
+}
+
+void cia_handler::show_debug_state(std::ostream& os)
+{
+    impl_->show_debug_state(os);
 }

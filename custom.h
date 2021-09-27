@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <functional>
+#include <iosfwd>
 #include "memory.h"
 
 constexpr unsigned graphics_width  = 768; // 24*16*2
@@ -25,6 +26,8 @@ public:
     void set_serial_data_handler(const serial_data_handler& handler);
     void set_rbutton_state(bool pressed);
     void mouse_move(int dx, int dy);
+
+    void show_debug_state(std::ostream& os);
 
 private:
     class impl;

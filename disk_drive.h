@@ -28,6 +28,7 @@ public:
     void dir_step();
     void read_mfm_track(uint8_t* dest, uint16_t wordcount);
     void set_disk_activity_handler(const disk_activity_handler& handler);
+    void show_debug_state(std::ostream& os);
 
 private:
     class impl;

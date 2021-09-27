@@ -228,7 +228,7 @@ int main(int argc, char* argv[])
         char escape_sequence[32];
         uint8_t escape_sequence_pos = 0;
         uint8_t crlf = 0;
-        custom.set_serial_data_handler([&](uint8_t numbits, uint8_t data) { 
+        custom.set_serial_data_handler([&]([[maybe_unused]] uint8_t numbits, uint8_t data) {
             assert(numbits == 8);
             if (data == 0x1b) {
                 assert(escape_sequence_pos == 0);
@@ -312,7 +312,6 @@ int main(int argc, char* argv[])
 
         const unsigned steps_per_update = 10000;
         unsigned steps_to_update = 0;
-        int trace_cnt = -1;
         std::vector<gui::event> events;
         std::vector<uint8_t> pending_disk;
         uint32_t disk_chosen_countdown = 0;
@@ -385,11 +384,15 @@ int main(int argc, char* argv[])
                         if (args.empty())
                             continue;
                         assert(!args[0].empty());
-                        if (args[0] == "t")
-                            break;
-                        else if (args[0] == "r")
-                            show_state();
-                        else if (args[0] == "g") {
+                        if (args[0] == "c") {
+                            custom.show_debug_state(std::cout);
+                        } else if (args[0] == "d") {
+                            auto [valid, pc, lines] = get_addr_and_lines(args, disasm_pc, 10);
+                            if (valid) {
+                                disasm_pc = pc;
+                                disasm_pc += disasm_stmts(mem, disasm_pc, lines);
+                            }
+                        } else if (args[0] == "g") {
                             debug_mode = false;
                             g.set_active(true);
                             break;
@@ -402,19 +405,21 @@ int main(int argc, char* argv[])
                                 hexdump16(std::cout, addr, data.data(), data.size());
                                 hexdump_addr = addr + lines * 16;
                             }
-                        } else if (args[0] == "d") {
-                            auto [valid, pc, lines] = get_addr_and_lines(args, disasm_pc, 10);
-                            if (valid) {
-                                disasm_pc = pc;
-                                disasm_pc += disasm_stmts(mem, disasm_pc, lines);
-                            }
+                        } else if (args[0] == "q") {
+                            quit = true;
+                            break;
+                        } else if (args[0] == "r") {
+                            show_state();
+                        } else if (args[0] == "t") {
+                            break;
                         } else if (args[0] == "z") {
                             wait_for_pc = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
                             debug_mode = false;
                             g.set_active(true);
                             break;
-                        } else
+                        } else {
                             std::cout << "Unknown command \"" << args[0] << "\"\n";
+                        }
                     }
                 }
 
@@ -452,21 +457,6 @@ int main(int argc, char* argv[])
                         df0.insert_disk(std::move(pending_disk));
                     }
                 }
-                const int trace_len = 50;
-                //f 00fc0f54
-                // w 0 dff058 2 w
-                //if (cpu.state().pc == 0x00001168) {
-                //    cpu.trace(&std::cout);
-                //    trace_cnt = trace_len;
-                //}
-                //if (cpu.instruction_count() == 64074349) {
-                //    cpu.trace(&std::cout);
-                //    trace_cnt = trace_len+1;
-                //}
-                if (trace_cnt >= 0) {
-                    if (trace_cnt-- == 0)
-                        break;
-                }
             } catch (const std::exception& e) {
 #ifdef TRACE_LOG
                 for (size_t i = 0; i < sizeof(pc_log) / sizeof(*pc_log); ++i) {
@@ -477,13 +467,9 @@ int main(int argc, char* argv[])
                 std::cerr << "\n" << e.what() << "\n\n";
 
 #ifndef TRACE_LOG
-                // Wait for GUI to exit
                 serdata_flush();
-                for (;;) {
-                    for (const auto& evt : g.update())
-                        if (evt.type == gui::event_type::quit)
-                            throw;
-                }
+                debug_mode = true;
+                g.set_active(false);
 #else
                 throw;
 #endif

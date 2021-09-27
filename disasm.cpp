@@ -95,7 +95,7 @@ std::string reg_list_string(uint16_t list, bool reverse)
     return res;
 }
 
-void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iwords)
+void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, [[maybe_unused]] size_t num_iwords)
 {
     assert(iwords && num_iwords);
     const auto& inst = instructions[iwords[0]];

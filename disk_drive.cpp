@@ -1,6 +1,7 @@
 #include "disk_drive.h"
 #include <stdexcept>
 #include <cassert>
+#include <ostream>
 #include "ioutil.h"
 #include "memory.h"
 
@@ -28,13 +29,13 @@ constexpr uint32_t fill = 0xaaaaaaaa; // MFM encoded 0
 void put_split_long(uint8_t* dest, uint32_t l)
 {
     put_u32(dest, (l >> 1) & 0x55555555); // odd
-    put_u32(dest + 4, l & 0x55555555);        // even
+    put_u32(dest + 4, l & 0x55555555);    // even
 }
 
 void put_split_long_fill(uint8_t* dest, uint32_t l)
 {
     put_u32(dest, ((l >> 1) & 0x55555555) | fill); // odd
-    put_u32(dest + 4, (l & 0x55555555) | fill); // even
+    put_u32(dest + 4, (l & 0x55555555) | fill);    // even
 }
 
 uint32_t checksum(const uint8_t* data, uint32_t nlongs)
@@ -162,6 +163,11 @@ public:
         disk_activity_handler_ = handler;
     }
 
+    void show_debug_state(std::ostream& os)
+    {
+        os << "motor " << (motor_ ? "on" : "off") << " cylinder " << (int)cyl_ << " side " << (int)side_ << " (" << (side_ ? "upper" : "lower") << ")" << " dir " << (int)seek_dir_ << " (towards " << (seek_dir_ ? "outside(0)" : "center(79)") << ")\n";
+    }
+
 private:
     std::vector<uint8_t> data_;
     bool motor_ = false;
@@ -211,4 +217,9 @@ void disk_drive::read_mfm_track(uint8_t* dest, uint16_t wordcount)
 void disk_drive::set_disk_activity_handler(const disk_activity_handler& handler)
 {
     impl_->set_disk_activity_handler(handler);
+}
+
+void disk_drive::show_debug_state(std::ostream& os)
+{
+    impl_->show_debug_state(os);
 }
