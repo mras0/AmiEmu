@@ -943,15 +943,15 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "DIVS.W");
+    //run_winuae_mnemonic_test(basedir / "MVUSP2R.L");
     //assert(0);
 
     const std::vector<const char*> skip = {
         "MV2SR", // Bugged?
         // Require excpetion handling
-        "MVR2USP", "MVUSP2R", "ORSR", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
+        "MVR2USP", "MVUSP2R", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
         // Not implemented
-        "CHK", "EORSR", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
+        "CHK", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
         // TODO (Undefinde flags?)
         "ABCD", "SBCD", "NBCD",
     };
@@ -968,9 +968,6 @@ bool run_winuae_tests()
             failed.push_back(p.path().filename().string());
             ++errors;
         }
-
-        // Temp:
-        //assert(!errors);
     }
     if (errors) {
         std::cout << "Failed:";

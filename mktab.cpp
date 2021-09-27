@@ -55,7 +55,7 @@ constexpr const inst_desc insts[] = {
 //                                  1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0
 //   Name                  Sizes    5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0   Immeditate
 //
-    //{"ORI.B #I, CCR"     , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" },
+    {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" , ~priv_inst, ea_ccr << 8 }, // ORI to CCR
     {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ORI to SR
     {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" , ~priv_inst, ea_ccr << 8 }, // ANDI to CCR
@@ -63,8 +63,8 @@ constexpr const inst_desc insts[] = {
     {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"ADD"               , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    //{"EORI.B #I, CCR"    , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
-    //{"EORI.W #I, SR"     , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" },
+    {"EOR"               , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" , ~priv_inst, ea_ccr << 8 }, // EORI to CCR
+    {"EOR"               , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // EORI to SR
     {"EOR"               , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"CMP"               , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"BTST"              , "B L" , "0 0 0 0 1 0 0 0 0 0 M     Xn   " , "B N" },
