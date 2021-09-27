@@ -20,6 +20,14 @@ constexpr void put_u16(uint8_t* d, uint16_t val)
     d[1] = static_cast<uint8_t>(val);
 }
 
+constexpr void put_u32(uint8_t* d, uint32_t val)
+{
+    d[0] = static_cast<uint8_t>(val >> 24);
+    d[1] = static_cast<uint8_t>(val >> 16);
+    d[2] = static_cast<uint8_t>(val >> 8);
+    d[3] = static_cast<uint8_t>(val);
+}
+
 class memory_area_handler {
 public:
     virtual uint8_t read_u8(uint32_t addr, uint32_t offset) = 0;

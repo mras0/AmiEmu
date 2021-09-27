@@ -1,8 +1,11 @@
 #include <iostream>
+#include <filesystem>
 #include "ioutil.h"
 #include "cpu.h"
 #include "memory.h"
 #include "disasm.h"
+
+namespace fs = std::filesystem;
 
 constexpr uint32_t get_test_field(uint32_t val, uint32_t start, uint32_t len)
 {
@@ -259,6 +262,624 @@ bool run_tests()
     return true;
 }
 
+void hexdump(const uint8_t* data, size_t size)
+{
+    for (size_t i = 0; i < size;) {
+        const size_t here = std::min(size - i, size_t(16));
+
+        for (size_t j = 0; j < here; ++j)
+            std::cout << hexfmt(data[i + j]) << ' ';
+        std::cout << "\n";
+        i += here;
+    }
+}
+
+class winuae_test_file {
+public:
+    explicit winuae_test_file(const fs::path& p)
+        : p_ { p }
+        , data_ { read_file(p_.string()) }
+        , pos_ { 0 }
+    {
+    }
+    
+    const fs::path& path() const
+    {
+        return p_;
+    }
+
+    const std::vector<uint8_t>& data() const
+    {
+        return data_;
+    }
+
+    size_t size() const
+    {
+        return data_.size();
+    }
+
+    size_t pos() const
+    {
+        return pos_;
+    }
+
+    uint8_t peek_u8()
+    {
+        assert(pos_ < size());
+        return data_[pos_];
+    }
+
+    uint8_t read_u8()
+    {
+        assert(pos_ < size());
+        return data_[pos_++];
+    }
+
+    uint16_t read_u16()
+    {
+        assert(pos_ + 1 < size());
+        const uint16_t n = get_u16(&data_[pos_]);
+        pos_ += 2;
+        return n;
+    }
+
+    uint32_t read_u32()
+    {
+        assert(pos_ + 3 < size());
+        const uint32_t n = get_u32(&data_[pos_]);
+        pos_ += 4;
+        return n;
+    }
+
+    std::string read_string(uint32_t len)
+    {
+        assert(pos_ + len <= size());
+        std::string s;
+        s.resize(len);
+        s.assign(reinterpret_cast<const char*>(&data_[pos_]), len);
+        pos_ += len;
+        while (!s.empty() && s.back() == 0)
+            s.pop_back();
+        return s;
+    }
+
+    uint8_t get_at_u8(size_t offset) const
+    {
+        assert(offset < size());
+        return data_[offset];
+    }
+
+private:
+    fs::path p_;
+    std::vector<uint8_t> data_;
+    size_t pos_;
+};
+
+constexpr uint32_t expected_version = 20;
+
+struct winuae_test_header {
+    uint32_t version;
+    uint32_t starttimeid;
+    uint32_t hmem_lmem;
+    uint32_t test_memory_addr;
+    uint32_t test_memory_size;
+    uint32_t opcode_memory_addr;
+    uint32_t lvl_mask;
+    uint32_t fpu_model;
+    uint32_t test_low_memory_start;
+    uint32_t test_low_memory_end;
+    uint32_t test_high_memory_start;
+    uint32_t test_high_memory_end;
+    uint32_t safe_memory_start;
+    uint32_t safe_memory_end;
+    uint32_t user_stack_memory;
+    uint32_t super_stack_memory;
+    uint32_t exception_vectors;
+    std::string inst_name;
+};
+
+struct winuae_test_state {
+    uint32_t regs[16];
+    uint32_t pc;
+    uint32_t sr;
+
+    uint32_t cycles;
+	uint32_t srcaddr;
+    uint32_t dstaddr;
+    uint32_t branchtarget;
+    uint8_t  branchtarget_mode;
+    uint32_t endpc;
+};
+
+winuae_test_header read_winuae_test_header(const fs::path& dir)
+{
+    winuae_test_header h;
+    winuae_test_file header_file { dir / "0000.dat" };
+    h.version = header_file.read_u32();
+    if (h.version != expected_version) {
+        throw std::runtime_error { header_file.path().string() + " has invalid version " + std::to_string(h.version) };
+    }
+
+    h.starttimeid = header_file.read_u32();
+    h.hmem_lmem = header_file.read_u32();
+    h.test_memory_addr = header_file.read_u32();
+    h.test_memory_size = header_file.read_u32();
+    h.opcode_memory_addr = header_file.read_u32();
+    h.lvl_mask = header_file.read_u32();
+    h.fpu_model = header_file.read_u32();
+    h.test_low_memory_start = header_file.read_u32();
+    h.test_low_memory_end = header_file.read_u32();
+    h.test_high_memory_start = header_file.read_u32();
+    h.test_high_memory_end = header_file.read_u32();
+    h.safe_memory_start = header_file.read_u32();
+    h.safe_memory_end = header_file.read_u32();
+    h.user_stack_memory = header_file.read_u32();
+    h.super_stack_memory = header_file.read_u32();
+    h.exception_vectors = header_file.read_u32();
+    header_file.read_u32();
+    header_file.read_u32();
+    header_file.read_u32();
+    h.inst_name = header_file.read_string(16);
+    return h;
+}
+
+
+const uint8_t CT_FPREG          = 0;
+const uint8_t CT_DREG           = 0;
+const uint8_t CT_AREG           = 8;
+const uint8_t CT_SSP            = 16;
+const uint8_t CT_MSP            = 17;
+const uint8_t CT_SR             = 18;
+const uint8_t CT_PC             = 19;
+const uint8_t CT_FPIAR          = 20;
+const uint8_t CT_FPSR           = 21;
+const uint8_t CT_FPCR           = 22;
+const uint8_t CT_CYCLES         = 25;
+const uint8_t CT_ENDPC          = 26;
+const uint8_t CT_BRANCHTARGET   = 27;
+const uint8_t CT_SRCADDR        = 28;
+const uint8_t CT_DSTADDR        = 29;
+const uint8_t CT_MEMWRITE       = 30;
+const uint8_t CT_MEMWRITES      = 31;
+const uint8_t CT_DATA_MASK      = 31;
+
+const uint8_t CT_EXCEPTION_MASK = 63;
+
+const uint8_t CT_SIZE_BYTE      = 0 << 5;
+const uint8_t CT_SIZE_WORD      = 1 << 5;
+const uint8_t CT_SIZE_LONG      = 2 << 5;
+const uint8_t CT_SIZE_FPU       = 3 << 5; // CT_DREG -> CT_FPREG
+const uint8_t CT_SIZE_MASK      = 3 << 5;
+
+// if MEMWRITE or PC
+const uint8_t CT_RELATIVE_START_WORD = 0 << 5; // word
+const uint8_t CT_ABSOLUTE_WORD       = 1 << 5;
+const uint8_t CT_ABSOLUTE_LONG       = 2 << 5;
+// if MEMWRITES
+const uint8_t CT_PC_BYTES            = 3 << 5;
+// if PC
+const uint8_t CT_RELATIVE_START_BYTE = 3 << 5;
+
+const uint8_t CT_END            = 0x80;
+const uint8_t CT_END_FINISH     = 0xff;
+const uint8_t CT_END_INIT       = 0x80 | 0x40;
+const uint8_t CT_END_SKIP       = 0x80 | 0x40 | 0x01;
+const uint8_t CT_SKIP_REGS      = 0x80 | 0x40 | 0x02;
+const uint8_t CT_EMPTY          = CT_END_INIT;
+const uint8_t CT_OVERRIDE_REG   = 0x80 | 0x40 | 0x10;
+const uint8_t CT_BRANCHED       = 0x40;
+
+
+struct memwrite_info {
+    uint32_t addr;
+    uint32_t old;
+    uint32_t val;
+    uint8_t size; // 0-2
+};
+
+constexpr uint32_t low_memory = 0x00000000;
+constexpr uint32_t high_memory = 0xffff8000;
+
+winuae_test_header test_header;
+std::vector<uint8_t> test_lowmem;
+std::vector<uint8_t> test_testmem;
+std::vector<uint8_t>* testram;
+std::vector<memwrite_info> memwrite_restore_list;
+
+void sized_write(uint32_t addr, uint32_t val, int size)
+{
+    auto& ram = *testram;
+    assert(addr < ram.size() && addr + (1 << size) <= ram.size());
+
+    switch (size) {
+    case 0:
+        ram[addr] = static_cast<uint8_t>(val);
+        break;
+    case 1:
+        put_u16(&ram[addr], static_cast<uint16_t>(val));
+        break;
+    case 2:
+        put_u32(&ram[addr], val);
+        break;
+    default:
+        assert(!"Invalid size");
+    }
+}
+
+void do_memwrite(const memwrite_info& mwi, bool store)
+{
+    if (store)
+        memwrite_restore_list.push_back(mwi);
+    sized_write(mwi.addr, mwi.val, mwi.size);
+}
+
+void do_memwrite_restore()
+{
+    for (size_t i = memwrite_restore_list.size(); i--;) {
+        const auto& mwi = memwrite_restore_list[i];
+        sized_write(mwi.addr, mwi.old, mwi.size);
+    }
+    memwrite_restore_list.clear();
+}
+
+void restore_value(winuae_test_file& tf, uint32_t& val, uint8_t ct)
+{
+    switch (ct & CT_SIZE_MASK) {
+    case CT_SIZE_BYTE:
+        val &= 0xffffff00;
+        val |= tf.read_u8();
+        return;
+    case CT_SIZE_WORD:
+        val &= 0xffff0000;
+        val |= tf.read_u16();
+        return;
+    case CT_SIZE_LONG:
+        val = tf.read_u32();
+        return;
+    }
+    throw std::runtime_error { "Invalid CT in restore_value: $" + hexstring(ct) };
+}
+
+void restore_rel(winuae_test_file& tf, uint32_t& val, uint8_t ct)
+{
+    switch (ct & CT_SIZE_MASK) {
+    case CT_RELATIVE_START_BYTE:
+        val += static_cast<int8_t>(tf.read_u8());
+        return;
+    }
+    throw std::runtime_error { "Invalid CT in restore_rel: $" + hexstring(ct) + " size = " + std::to_string((ct>>5)&3) };
+}
+
+void restore_value_new_ct(winuae_test_file& tf, uint32_t& val)
+{
+    restore_value(tf, val, tf.read_u8());
+}
+
+uint32_t get_addr(winuae_test_file& tf, uint8_t ct)
+{
+    switch (ct & CT_SIZE_MASK) {
+    case CT_ABSOLUTE_WORD: {
+        const int16_t ofs = static_cast<int16_t>(tf.read_u16());
+        if (ofs < 0) {
+            return high_memory + (32768U + ofs);
+        } else {
+            return low_memory + ofs;
+        }
+    }
+    case CT_ABSOLUTE_LONG:
+        return tf.read_u32();
+    case CT_RELATIVE_START_WORD:
+        return test_header.opcode_memory_addr + static_cast<int16_t>(tf.read_u16());
+    }
+    throw std::runtime_error { "Not supported in get_addr: ct=$" + hexstring(ct) };
+}
+
+memwrite_info get_memwrite_info(winuae_test_file& tf, uint8_t ct)
+{
+    memwrite_info mwi {};
+    mwi.addr = get_addr(tf, ct);
+    restore_value_new_ct(tf, mwi.old);
+    mwi.size = ((tf.peek_u8() >> 5) & 3);
+    restore_value_new_ct(tf, mwi.val);
+    return mwi;
+}
+
+void restore_mem(winuae_test_file& tf, uint8_t ct, bool store)
+{
+    switch (ct & CT_SIZE_MASK) {
+        // TODO: Remember store
+    case CT_ABSOLUTE_WORD:
+        throw std::runtime_error { "TODO in restore_mem: CT_ABSOLUTE_WORD" };
+    case CT_ABSOLUTE_LONG:
+        throw std::runtime_error { "TODO in restore_mem: CT_ABSOLUTE_LONG" };
+    }
+    if ((ct & CT_DATA_MASK) == CT_MEMWRITES) {
+        assert(store == false);
+        assert((ct & CT_SIZE_MASK) == CT_PC_BYTES);
+        const uint8_t next_byte = tf.read_u8();
+        const uint32_t offset = (next_byte >> 5);
+        uint16_t count = next_byte & 31;
+        if (count == 31) {
+            count = tf.read_u8();
+            if (!count)
+                count = 256;
+        } else if (count == 0)
+            count = 32;
+
+        auto& ram = *testram;
+        const uint32_t addr = test_header.opcode_memory_addr + offset;
+        assert(addr < ram.size() && addr + count < ram.size());
+
+        std::cout << "Writing " << (int)count << " bytes to $" << hexfmt(addr) << ": ";
+        for (uint16_t i = 0; i < count; ++i) {
+            const uint8_t b = tf.read_u8();
+            std::cout << hexfmt(b);
+            ram[addr + i] = b;
+        }
+        std::cout << "\n";
+        
+        return;
+    } else {
+        assert((ct & CT_SIZE_MASK) == CT_RELATIVE_START_WORD);
+        const memwrite_info mwi = get_memwrite_info(tf, ct);
+        std::cout << "Restore mem addr=$" << hexfmt(mwi.addr) << " old = $" << hexfmt(mwi.old) << " mv = $" << hexfmt(mwi.val) << " size=" << (int)mwi.size << " store=" << store << "\n"; 
+        do_memwrite(mwi, store);
+    }
+}
+
+void restore(winuae_test_file& tf, winuae_test_state& state, uint8_t ct)
+{
+    assert(!(ct & CT_END));
+
+    const uint8_t mode = ct & CT_DATA_MASK;
+    uint32_t val = 0;
+
+    //std::cout << "Restore ct=$" << hexfmt(ct) << " mode = " << (int)mode << " size = " << (ct >> 5) << "\n";
+
+    if (mode < 16) {
+        restore_value(tf, state.regs[mode], ct);
+        std::cout << "TODO: " << (mode < CT_AREG ? "D" : "A") << (int)(mode & 7) << " = $" << hexfmt(state.regs[mode]) << "\n";
+        return;
+    }
+    switch (mode) {
+    case CT_SSP:
+    case CT_MSP:
+    case CT_SR:
+    case CT_PC:
+        break;
+    case CT_FPIAR:
+        restore_value(tf, val, ct);
+        std::cout << "Ignoring FPIAR=$" << hexfmt(val) << "\n";
+        return;
+        //        const uint8_t CT_FPSR = 21;
+        //        const uint8_t CT_FPCR = 22;
+        //        const uint8_t CT_CYCLES = 25;
+    case CT_ENDPC:
+        restore_value(tf, state.endpc, ct);
+        std::cout << "TODO: endpc=$" << hexfmt(state.endpc) << "\n";
+        return;
+        //        const uint8_t CT_BRANCHTARGET = 27;
+    case CT_SRCADDR:
+        restore_value(tf, state.srcaddr, ct);
+        std::cout << "TODO: srcaddr=$" << hexfmt(state.srcaddr) << "\n";
+        return;
+    case CT_DSTADDR:
+        restore_value(tf, state.dstaddr, ct);
+        std::cout << "TODO: dstaddr=$" << hexfmt(state.dstaddr) << "\n";
+        return;
+    case CT_MEMWRITE:
+        restore_mem(tf, ct, true);
+        return;
+    case CT_MEMWRITES:
+        restore_mem(tf, ct, false);
+        return;
+    }
+    throw std::runtime_error { "Not handled in restore: ct=$" + hexstring(ct) + " mode=" + std::to_string(mode) };
+}
+
+void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_state& check_state)
+{
+    assert(tf.peek_u8() != CT_END_SKIP);
+
+    (void)after; // TODO
+
+    auto check = [](const std::string& desc, auto expected, auto actual) {
+        if (expected == actual)
+            return;
+        std::ostringstream oss;
+        oss << "Test failed for " << test_header.inst_name << ": " << desc << " expected=$" << hexfmt(expected) << " actual=$" << hexfmt(actual);
+        throw std::runtime_error { oss.str() };
+    };
+
+    for (;;) {
+        const uint8_t ct = tf.read_u8();
+        if (ct & CT_END) {
+            std::cout << "End of validation. ct=$" << hexfmt(ct) << "\n";
+            assert((ct & CT_BRANCHED) == 0);
+            const uint8_t exc = ct & CT_EXCEPTION_MASK;
+            if (exc) {
+                std::cout << "TODO: exception exc = " << (int)exc << "\n";
+                assert(0);
+            }
+            break;
+        }
+
+        const uint8_t mode = ct & CT_DATA_MASK;
+        if (mode < 16) {
+            restore_value(tf, check_state.regs[mode], ct);
+            std::cout << "Validate restored " << (mode < 8 ? 'D' : 'A') << (int)(mode&7) <<  "=$" << hexfmt(check_state.sr) << "\n";
+            continue;
+        } else if (mode == CT_SR) {
+            restore_value(tf, check_state.sr, ct);
+            std::cout << "Validate restored SR=$" << hexfmt(check_state.sr) << "\n";
+            continue;
+        } else if (mode == CT_PC) {
+            restore_rel(tf, check_state.pc, ct);
+            std::cout << "Validate restored PC=$" << hexfmt(check_state.pc) << "\n";
+            continue;
+        } else if (mode == CT_CYCLES) {
+            restore_value(tf, check_state.cycles, ct);
+            continue;
+        } else if (mode == CT_MEMWRITE) {
+            const memwrite_info mwi = get_memwrite_info(tf, ct);
+            std::cout << "TODO: validate mem addr=$" << hexfmt(mwi.addr) << " old = $" << hexfmt(mwi.old) << " mv = $" << hexfmt(mwi.val) << " size=" << (int)mwi.size << "\n"; 
+            assert(0);
+            continue;
+        }
+        std::cout << "TODO: validate mode=" << (int)mode << "\n";
+
+        assert(0);
+    }
+
+    for (int i = 0; i < 8; ++i)
+        check("D" + std::to_string(i), check_state.regs[i], after.d[i]);
+    for (int i = 0; i < 8; ++i)
+        check("A" + std::to_string(i), check_state.regs[CT_AREG+i], after.A(i));
+    check("PC", check_state.pc, after.pc);
+    check("SR", static_cast<uint16_t>(check_state.sr), after.sr);
+    // TODO: Check cycles
+}
+
+bool run_winuae_mnemonic_test(const fs::path& dir)
+{
+    test_header = read_winuae_test_header(dir);
+    assert(test_header.test_low_memory_end < test_header.test_memory_addr);
+    assert(test_header.test_low_memory_start == 0 && test_header.test_low_memory_end == test_lowmem.size());
+    assert(test_header.test_memory_size == test_testmem.size());
+    assert(test_header.opcode_memory_addr >= test_header.test_memory_addr && test_header.opcode_memory_addr < test_header.test_memory_addr + test_header.test_memory_size);
+
+    std::cout << "Testing " << test_header.inst_name << " from dir " << dir.stem() << "\n";
+
+    memory_handler mem { test_header.test_memory_addr + test_header.test_memory_size };
+    auto& ram = mem.ram();
+    testram = &ram;
+    memcpy(&ram[test_header.test_low_memory_start], &test_lowmem[0], test_lowmem.size());
+    memcpy(&ram[test_header.test_memory_addr], &test_testmem[0], test_testmem.size());
+
+
+    winuae_test_state cur_state;
+    memset(&cur_state, 0, sizeof(cur_state));
+    cur_state.sr = 0; //interrupt_mask << 8;
+    cur_state.srcaddr = 0xffffffff;
+    cur_state.dstaddr = 0xffffffff;
+    cur_state.branchtarget = 0xffffffff;
+    cur_state.pc = test_header.opcode_memory_addr;
+    cur_state.endpc = test_header.opcode_memory_addr;
+
+    for (unsigned test_file_num = 1;; ++test_file_num) {
+        char filename[32];
+        snprintf(filename, sizeof(filename), "%04u.dat", test_file_num);
+        winuae_test_file test_file { dir / filename };
+        const auto version = test_file.read_u32();
+        const auto starttimeid = test_file.read_u32();
+        const auto flags = test_file.read_u32();
+        if (version != expected_version) {
+            throw std::runtime_error { test_file.path().string() + " has invalid version " + std::to_string(version) };
+        }
+        if (starttimeid != test_header.starttimeid) {
+            throw std::runtime_error { test_file.path().string() + " has invalid timestamp" };
+        }
+        if (test_file.get_at_u8(test_file.size() - 2) != CT_END_FINISH) {
+            throw std::runtime_error { test_file.path().string() + " has invalid footer" };
+        }
+        test_file.read_u32();
+        assert(test_file.pos() == 16);
+
+        //std::cout << "instruction_size = " << (flags & 3) << "\n"; // 0=b 1=w 2=l
+
+        unsigned test_count = 0;
+        while (test_file.pos() < test_file.size()-1) {
+            for (;;) {
+                const uint8_t ct = test_file.read_u8();
+                if (ct == CT_END_FINISH)
+                    goto done;
+                if (ct == CT_END_INIT)
+                    break;
+                restore(test_file, cur_state, ct);
+            }
+            
+            winuae_test_state check_state = cur_state;
+
+            uint8_t extraccr = 0;
+            for (;;) {
+                const uint8_t ccrmode = test_file.read_u8();
+                const uint8_t maxccr = (ccrmode & 0x3f);
+                for (uint8_t ccr = 0; ccr < maxccr; ++ccr) {
+                    std::cout << "Testing CCR=$" << hexfmt(ccr) << "\n";
+                    assert(test_file.peek_u8() != CT_OVERRIDE_REG);
+
+                    if (test_file.peek_u8() == CT_END_SKIP) {
+                        test_file.read_u8();
+                        std::cout << "Skipping\n";
+                        continue;
+                    }
+
+                    cpu_state input_state {};
+                    memcpy(input_state.d, &cur_state.regs[0], sizeof(input_state.d));
+                    memcpy(input_state.a, &cur_state.regs[8], sizeof(input_state.a));
+                    input_state.ssp = test_header.super_stack_memory;
+                    input_state.usp = test_header.user_stack_memory;
+                    input_state.pc = cur_state.pc;
+                    assert(maxccr < 32);
+                    input_state.sr = ccr & 1 ? 31 : 0;
+                    input_state.A(7) = cur_state.regs[15];
+
+                    m68000 cpu { mem, input_state };
+                    cpu.step();
+
+                    try {
+                        validate_test(test_file, cpu.state(), check_state);
+                    } catch (...) {
+                        std::cerr << "Test failed after " << cpu.instruction_count() << " instructions\n";
+                        std::cerr << "\n\nInput state:\n";
+                        print_cpu_state(std::cerr, input_state);
+                        std::vector<uint16_t> iwords;
+                        for (uint32_t addr = cur_state.pc; addr < cur_state.endpc; addr += 2) {
+                            iwords.push_back(get_u16(&ram[addr]));
+                        }
+
+                        disasm(std::cerr, cur_state.pc, &iwords[0], iwords.size());
+                        std::cerr << "\n";
+                        std::cerr << "\n\nActual state:\n";
+                        print_cpu_state(std::cerr, cpu.state());
+                        throw;
+                    }
+                    ++test_count;
+                }
+
+                extraccr = test_file.read_u8();
+                if (extraccr == CT_END)
+                    break;
+                std::cout << "TODO: extraccr = $" << hexfmt(extraccr) << "\n";
+                assert(0);
+            }
+        }
+    done:
+        assert(test_file.pos() == test_file.size() - 1);
+        if (test_file.get_at_u8(test_file.size() - 1) == CT_END_FINISH)
+            break; // Last file
+    }
+
+    return true;
+}
+
+bool run_winuae_tests()
+{
+    const fs::path basedir = R"(c:\dev\WinUAE\od-win32\winuae_msvc15\Release\data\68000_Basic\)";
+
+    test_lowmem = read_file((basedir/"lmem.dat").string());
+    test_testmem = read_file((basedir / "tmem.dat").string());
+    
+    for (auto& p : fs::directory_iterator(basedir)) {
+        if (!p.is_directory())
+            continue;
+        if (!run_winuae_mnemonic_test(basedir / p))
+            return false;
+    }
+    std::cout << "All tests OK!\n";
+    return false; // XXX
+}
+
 bool run_simple_tests()
 {
     const uint32_t code_pos = 0x1000;
@@ -438,6 +1059,9 @@ int main()
 {
     try {
         if (!run_simple_tests())
+            return 1;
+
+        if (!run_winuae_tests())
             return 1;
 
         if (!run_tests())
