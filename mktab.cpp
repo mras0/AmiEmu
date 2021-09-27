@@ -27,11 +27,12 @@ constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
 constexpr uint8_t extra_priv_flag = 1 << 2; // Instruction is privileged (causes a trap if executed in user mode)
 
-constexpr const unsigned block_Dn   = 1U << 0;
-constexpr const unsigned block_An   = 1U << 1;
-constexpr const unsigned block_swap = 1U << 29;
-constexpr const unsigned priv_inst  = 1U << 30;
-constexpr const unsigned block_Imm  = 1U << 31;
+constexpr const unsigned block_Dn     = 1U << 0;
+constexpr const unsigned block_An     = 1U << 1;
+constexpr const unsigned word_if_none = 1U << 28;
+constexpr const unsigned block_swap   = 1U << 29;
+constexpr const unsigned priv_inst    = 1U << 30;
+constexpr const unsigned block_Imm    = 1U << 31;
 
 struct inst_desc {
     const char* name;
@@ -135,10 +136,10 @@ constexpr const inst_desc insts[] = {
     {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   " , 0 },
     {"ADDX"              , "BWL" , "1 1 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
     {"ADDA"              , " WL" , "1 1 0 1 An    Sz1 1 M     Xn   " , "   " , 0},
-    {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
-    {"LSd"               , "BWL" , "1 1 1 0 0 0 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
-    {"ROXd"              , "BWL" , "1 1 1 0 0 1 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
-    {"ROd"               , "BWL" , "1 1 1 0 0 1 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
+    {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
+    {"LSd"               , "BWL" , "1 1 1 0 0 0 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
+    {"ROXd"              , "BWL" , "1 1 1 0 0 1 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
+    {"ROd"               , "BWL" , "1 1 1 0 0 1 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm | word_if_none },
     {"ASd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 0 Dn   " , "   " , block_An | block_Imm },
     {"LSd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 1 Dn   " , "   " , block_An | block_Imm },
     {"ROXd"              , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 0 Dn   " , "   " , block_An | block_Imm },
@@ -469,6 +470,11 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                 ai.osize = opsize::b;
                 assert(data != 0xff);
             }
+        }
+
+        if (ai.osize == opsize::none && (desc.block & word_if_none)) {
+            // for bit shift/rotate on just EA
+            ai.osize = opsize::w;
         }
 
         if (ai.osize != opsize::none) {
