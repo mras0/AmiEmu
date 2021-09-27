@@ -480,6 +480,12 @@ struct custom_state {
     uint16_t spr_hold_b[8];
     uint8_t spr_hold_cnt[8];
 
+    uint16_t bltw;
+    uint16_t blth;
+    uint16_t bltaold;
+    uint16_t bltbold;
+    uint16_t bltbhold;
+
     uint32_t coplc[2];
     uint16_t diwstrt;
     uint16_t diwstop;
@@ -515,8 +521,6 @@ struct custom_state {
     uint32_t bltpt[4];
     uint16_t bltdat[4];
     int16_t  bltmod[4];
-    uint16_t bltw;
-    uint16_t blth;
 
     uint16_t sprite_vpos_start(uint8_t spr)
     {
@@ -592,46 +596,6 @@ public:
 
     void do_blitter_line()
     {
-#if 0
-        The line goes from (x1 ,y1) to (x2,y2).
-
-        dx = max (abs (x2 - x1), abs (y2 - y1) )
-        dy = min (abs (x2 - x1), abs (y2 - y1) )
-
-        BLTADAT = $8000
-        BLTBDAT = line texture pattern ($FFFF for a solid line)
-        BLTAFWM = $FFFF
-        BLTALWM = $FFFF
-        BLTAMOD = 4 * (dy-dx)
-        BLTBMOD = 4 * dy
-        BLTCMOD = width of the bitplane in bytes
-        BLTDMOD = width of the bitplane in bytes
-        BLTAPT = (4 * dy) - (2 * dx)
-        BLTBPT = unused
-        BLTCPT = word containing the first pixel of the line
-        BLTDPT = word containing the first pixel of the line
-        BLTCON0 bits 15-12 = x1 modulo 15
-        BLTCON0 bits SRCA, SRCC, and SRCD = 1
-        BLTCON0 bit SRCB = 0
-        if exclusive-or line mode:          _   _
-            then BLTCON0 LF control byte = ABC + AC
-                                                _
-            else BLTCON0 LF control byte = AB + AC
-        
-        BLTCON1 bit LINEMODE = 1
-        BLTCON1 bit OVFLAG = 0
-        BLTCON1 bits 4-2 = octant number from table
-        BLTCON1 bits 15-12 = start bit for line texture (0 = last significant
-                bit)
-        if (((4 * dy) - (2 * dx)) < 0):
-            then BLTCON1 bit SIGNFLAG = 1
-            else BLTCON1 bit SIGNFLAG = 0
-        if one pixel/row:
-            then BLTCON1 bit ONEDOT = 1
-            else BLTCON1 bit ONEDOT = 0
-        BLTSIZE bits 15-6 = dx + 1
-        BLTSIZE bits 5-0 = 2
-#endif
         assert(s_.bltdat[0] == 0x8000);
         assert(s_.bltcon0 & (BC0F_SRCA | BC0F_SRCC | BC0F_DEST));
         assert(!(s_.bltcon0 & BC0F_SRCB));
@@ -730,30 +694,40 @@ public:
                 s_.bltdat[index] = mem_.read_u16(s_.bltpt[index]);
                 incr_ptr(s_.bltpt[index]);
             };
-            auto shift_val = [&](uint16_t& oldval, uint16_t newval, uint8_t shift) {
-                const uint16_t res = reverse
-                    ? ((oldval << 16) | (newval)) << shift
-                    : ((oldval << 16) | (newval)) >> shift;
-                oldval = newval;
-                return res;
-            };
 
-            uint16_t areg = 0; // Cleared at EOL?
-            uint16_t breg = 0; // Cleared at EOL?
             for (uint16_t y = 0; y < s_.blth; ++y) {
                 bool inpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);
                 for (uint16_t x = 0; x < s_.bltw; ++x) {
-                    if (s_.bltcon0 & BC0F_SRCA) do_dma(0);
-                    if (s_.bltcon0 & BC0F_SRCB) do_dma(1);
-                    if (s_.bltcon0 & BC0F_SRCC) do_dma(2);
-                    uint16_t amask = 0xffff;
+
+                    // A
+                    if (s_.bltcon0 & BC0F_SRCA)
+                        do_dma(0);
+                    uint16_t a = s_.bltdat[0], ahold;
                     if (x == 0)
-                        amask &= s_.bltafwm;
+                        a &= s_.bltafwm;
                     if (x == s_.bltw - 1)
-                        amask &= s_.bltalwm;
-                    const uint16_t a = shift_val(areg, s_.bltdat[0] & amask, ashift);
-                    const uint16_t b = shift_val(breg, s_.bltdat[1], bshift);
-                    uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), a, b, s_.bltdat[2]);
+                        a &= s_.bltalwm;
+                    if (reverse)
+                        ahold = ((uint32_t)a << 16 | s_.bltaold) >> (16 - ashift);
+                    else
+                        ahold = ((uint32_t)s_.bltaold << 16 | a) >> ashift;
+                    s_.bltaold = a;
+
+                    // B
+                    if (s_.bltcon0 & BC0F_SRCB) {
+                        do_dma(1);
+                        if (reverse)
+                            s_.bltbhold = ((uint32_t)s_.bltdat[1] << 16 | s_.bltbold) >> (16 - bshift);
+                        else
+                            s_.bltbhold = ((uint32_t)s_.bltbold << 16 | s_.bltdat[1]) >> bshift;
+                        s_.bltbold = s_.bltdat[1];
+                    }
+
+                    // C
+                    if (s_.bltcon0 & BC0F_SRCC)
+                        do_dma(2);
+
+                    uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), ahold, s_.bltbhold, s_.bltdat[2]);
                     any |= val;
                     if (s_.bltcon1 & BC1F_FILL_XOR) {
                         for (uint8_t bit = 0; bit < 16; ++bit) {
@@ -1444,7 +1418,13 @@ public:
             s_.bltdat[2] = val;
             return;
         case BLTBDAT:
+            // B value is shifted immediately
+            if (s_.bltcon1 & BC1F_BLITREVERSE)
+                s_.bltbhold = (((uint32_t)val << 16) | s_.bltbold) >> (16 - (s_.bltcon1 >> BC1_BSHIFTSHIFT));
+            else
+                s_.bltbhold = (((uint32_t)s_.bltbold << 16) | val) >> (s_.bltcon1 >> BC1_BSHIFTSHIFT);
             s_.bltdat[1] = val;
+            s_.bltbold = val;
             return;
         case BLTADAT:
             s_.bltdat[0] = val;
