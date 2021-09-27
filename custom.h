@@ -18,8 +18,12 @@ public:
     ~custom_handler();
 
     using serial_data_handler = std::function<void(uint8_t numbits, uint8_t data)>;
+    struct step_result {
+        uint32_t vhpos;
+        bool free_mem_cycle;
+    };
 
-    uint32_t step();
+    step_result step();
     const uint32_t* frame();
 
     uint8_t current_ipl() const; // 0..7

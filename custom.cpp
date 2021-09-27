@@ -18,10 +18,16 @@
     X(DMACONR  , 0x002 , 0) /* DMA control (and blitter status) read                   */ \
     X(VPOSR    , 0x004 , 0) /* Read vert most signif. bit (and frame flop)             */ \
     X(VHPOSR   , 0x006 , 0) /* Read vert and horiz. position of beam                   */ \
+    X(DSKDATR  , 0x008 , 0) /* Disk data early read (dummy address)                    */ \
     X(JOY0DAT  , 0x00A , 0) /* Joystick-mouse 0 data (vert,horiz)                      */ \
     X(JOY1DAT  , 0x00C , 0) /* Joystick-mouse 1 data (vert,horiz)                      */ \
+    X(CLXDAT   , 0x00E , 0) /* Collision data reg. (read and clear)                    */ \
+    X(ADKCONR  , 0x010 , 0) /* Audio,disk control register read                        */ \
+    X(POT0DAT  , 0x012 , 0) /* Pot counter data left pair (vert, horiz)                */ \
+    X(POT1DAT  , 0x014 , 0) /* Pot counter data right pair (vert, horiz)               */ \
     X(POTGOR   , 0x016 , 0) /* Pot port data read(formerly POTINP)                     */ \
     X(SERDATR  , 0x018 , 0) /* Serial port data and status read                        */ \
+    X(DSKBYTR  , 0x01A , 0) /* Disk data byte and status read                          */ \
     X(INTENAR  , 0x01C , 0) /* Interrupt enable bits read                              */ \
     X(INTREQR  , 0x01E , 0) /* Interrupt request bits read                             */ \
     X(DSKPTH   , 0x020 , 1) /* Disk pointer (high 3 bits)                              */ \
@@ -1184,7 +1190,7 @@ public:
         return true;
     }
 
-    uint32_t step()
+    step_result step()
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
 
@@ -1194,6 +1200,8 @@ public:
         const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < ((~s_.diwstop & 0x8000) >> 7 | s_.diwstop >> 8); // VSTOP MSB is complemented and used as the 9th bit
         const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
         const uint16_t colclock = s_.hpos >> 1;
+
+        step_result res {};
 
         uint8_t spriteidx[8];
         for (uint8_t spr = 0; spr < 8; ++spr) {
@@ -1551,9 +1559,14 @@ public:
                 // Blitter
                 if (s_.blth) {
                     do_blit();
+                    break;
                 }
+
+                res.free_mem_cycle = true;
             } while (0);
-        }
+        } else if (!(s_.hpos & 1))
+            res.free_mem_cycle = true;
+        
 
         // CIA tick rate is 1/10th of (base) CPU speed
         if (s_.hpos % 10 == 0) {
@@ -1603,7 +1616,8 @@ public:
             }
         }
 
-        return s_.vpos << 8 | s_.hpos >> 1;
+        res.vhpos = s_.vpos << 8 | s_.hpos >> 1;
+        return res;
     }
 
     uint8_t read_u8(uint32_t addr, uint32_t offset) override
@@ -1617,10 +1631,6 @@ public:
         switch (offset) {
         case DMACONR: // $002
             return s_.dmacon;
-        case JOY0DAT: // $00A
-            return s_.cur_mouse_y << 8 | s_.cur_mouse_x;
-        case JOY1DAT: // $00C
-            return 0;
         case VPOSR: // $004
             // Hack: Just return a fixed V/HPOS when external sync is enabled (needed for KS1.2)
             if (s_.bplcon0 & BPLCON0F_ERSY)
@@ -1632,11 +1642,27 @@ public:
             if (s_.bplcon0 & BPLCON0F_ERSY)
                 return 0x80;
             return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
+        case DSKDATR: // $008
+            break;
+        case JOY0DAT: // $00A
+            return s_.cur_mouse_y << 8 | s_.cur_mouse_x;
+        case JOY1DAT: // $00C
+            return 0;
+        case CLXDAT:  // $00E
+            break;
+        case ADKCONR: // $010
+            return s_.adkcon;
+        case POT0DAT: // $012
+            break;
+        case POT1DAT: // $014
+            break;
         case POTGOR:  // $016
             // Don't spam in DiagROM
             return 0xFF00 & ~(s_.rmb_pressed ? 0x400 : 0);
         case SERDATR: // $018
             return (3<<12); // Just return transmit buffer empty
+        case DSKBYTR:
+            break;
         case INTENAR: // $01C
             return s_.intena;
         case INTREQR: // $01E
@@ -1647,6 +1673,9 @@ public:
         case COPJMP2: // $08A
             copjmp(1);
             return 0;
+        default:
+            // Don't warn out w/o registers to avoid spam when CLR.W/CLR.L is used
+            return 0xffff;
         }
 
         std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << custom_regname(offset) << ")\n";
@@ -1910,6 +1939,11 @@ public:
             return;
         case BPLMOD2: // $10A
             s_.bplmod2 = val;
+            return;
+        case 0x0F8:  // BPL7PTH
+        case 0x0FA:  // BPL7PTL
+        case 0x0FC:  // BPL8PTH
+        case 0x0FE:  // BPL8PTL
             return;
         case DIWHIGH: // $1E4
         case FMODE:   // $1FC
@@ -2245,7 +2279,7 @@ custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia)
 
 custom_handler::~custom_handler() = default;
 
-uint32_t custom_handler::step()
+custom_handler::step_result custom_handler::step()
 {
     return impl_->step();
 }

@@ -365,7 +365,8 @@ int main(int argc, char* argv[])
         bool debug_mode = false;
         uint32_t wait_for_pc = invalid_pc;
         uint32_t wait_for_vpos = ~0U;
-        uint32_t last_vpos = 0;
+        custom_handler::step_result custom_step {};
+        m68000::step_result cpu_step {}; // Records memory/cycle "deficit" of CPU compared to custom chips
         std::unique_ptr<std::ofstream> trace_file;
 
         for (bool quit = false; !quit;) {
@@ -413,7 +414,7 @@ int main(int argc, char* argv[])
                     debug_mode = true;
                     wait_for_pc = invalid_pc;
                 }
-                if (wait_for_vpos == last_vpos) {
+                if (wait_for_vpos == custom_step.vhpos) {
                     g.set_active(false);
                     debug_mode = true;
                     wait_for_vpos = ~0U;
@@ -567,8 +568,20 @@ exit_debug:
 
                 }
 
-                cpu.step(custom.current_ipl());
-                last_vpos = custom.step();
+                if (!cpu_step.clock_cycles) {
+                    assert(!cpu_step.mem_accesses);
+                    cpu_step = cpu.step(custom.current_ipl());
+                }
+                custom_step = custom.step();
+
+
+                // "Pay off" cycle/mem deficit, not correct but should match speed better
+                if (custom_step.free_mem_cycle && cpu_step.mem_accesses) {
+                    assert(cpu_step.clock_cycles);
+                    --cpu_step.mem_accesses;
+                    --cpu_step.clock_cycles;
+                } else if (cpu_step.clock_cycles > 4 * cpu_step.mem_accesses)
+                    --cpu_step.clock_cycles;
 
 #ifdef TRACE_LOG
                 if (cpu.instruction_count() == trace_start_inst) {
@@ -582,7 +595,7 @@ exit_debug:
                 }
 #endif
 
-                if (last_vpos == 0) {
+                if (custom_step.vhpos == 0) {
                     if (disk_chosen_countdown) {
                         if (--disk_chosen_countdown == 0) {
                             std::cout << drives[pending_disk_drive]->name() << " Inserting disk\n";
