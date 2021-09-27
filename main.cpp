@@ -443,6 +443,10 @@ public:
         mem_handler_.register_handler(*this, 0xDFF000, 0x1000);
     }
 
+    void step()
+    {
+    }
+
     uint8_t read_u8(uint32_t, uint32_t offset) override
     {
         switch (offset) {
@@ -515,8 +519,15 @@ public:
 private:
     memory_handler& mem_handler_;
 
+    //uint16_t hpos = 0; // 1/160 of screen width (280 ns)
+    //uint16_t vpos = 0;
+
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
+    X(BLTDDAT , 0x000 , 0) /* Blitter destination early read (dummy address)          */ \
+    X(DMACONR , 0x002 , 0) /* DMA control (and blitter status) read                   */ \
+    X(VPOSR   , 0x004 , 0) /* Read vert most signif. bit (and frame flop)             */ \
+    X(VHPOSR  , 0x006 , 0) /* Read vert and horiz. position of beam                   */ \
     X(POTGOR  , 0x016 , 0) /* Pot port data read(formerly POTINP)                     */ \
     X(SERDATR , 0x018 , 0) /* Serial port data and status read                        */ \
     X(SERDAT  , 0x030 , 1) /*                                                         */ \
@@ -591,7 +602,6 @@ private:
     X(COLOR29 , 0x1BA , 1) /* Color table 29                                          */ \
     X(COLOR30 , 0x1BC , 1) /* Color table 30                                          */ \
     X(COLOR31 , 0x1BE , 1) /* Color table 31                                          */ \
-
 // keep this line clear (for macro continuation)
 
     static std::string regname(uint32_t offset)
@@ -741,8 +751,8 @@ struct cpu_state {
             return false;
         case conditional::hi: // (not C) and (not Z)
             return !C && !Z;
-        case conditional::ls: // C or V
-            return C || V;
+        case conditional::ls: // C or Z
+            return C || Z;
         case conditional::cc: // not C
             return !C;
         case conditional::cs: // C
@@ -1296,13 +1306,17 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+        const auto osmask = opsize_msb_mask(inst_->size);
         const auto orig_val = val;
         bool carry;
         if (!cnt) {
             carry = false;
-        } else if (cnt <= 32) {
-            carry = !!((val << (cnt - 1)) & opsize_msb_mask(inst_->size));
+        } else if (cnt < 32) {
+            carry = !!((val << (cnt - 1)) & osmask);
             val <<= cnt;
+        } else if (cnt == 32 && inst_->size == opsize::l) {
+            val = 0;
+            carry = !!(orig_val & 1);
         } else {
             val = 0;
             carry = false;
@@ -1310,8 +1324,18 @@ private:
 
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
-        if (arit && ((val ^ orig_val) & opsize_msb_mask(inst_->size)))
-            state_.update_sr(srm_v, srm_v);
+        if (arit && cnt) {
+            const uint32_t nb = 8 * opsize_bytes(inst_->size);
+            // Create mask of all bytes shifted through MSB
+            const auto mask = cnt >= nb ? ~0U : ~((osmask - 1) >> cnt) & (osmask - 1);
+            bool v = false;
+            if (orig_val & osmask)
+                v = (orig_val & mask) != mask;
+            else
+                v = !!(orig_val & mask);
+           if (v)
+               state_.update_sr(srm_v, srm_v);
+        }
     }
 
     void push_u16(uint16_t val)
@@ -1424,15 +1448,14 @@ private:
         bool carry;
         if (!cnt) {
             carry = false;
-        } else if (cnt <= 32) {
+        } else if (cnt < 32) {
             carry = !!((val >> (cnt - 1)) & 1);
-            val >>= cnt;
-            if (msb) {
-                val |= ~0U << cnt;
-            }
+            val = sext(val, inst_->size) >> cnt;
+            if (msb && cnt >= opsize_bytes(inst_->size)*8U) // These bits also count
+                carry = true;
         } else {
             val = msb ? ~0U : 0;
-            carry = false;
+            carry = msb;
         }
 
         write_ea(inst_->nea - 1, val);
@@ -1504,6 +1527,7 @@ private:
         assert(inst_->nea == 1);
         // TODO: read cycle?
         write_ea(0, 0);
+        state_.update_sr(srm_ccr_no_x, srm_z);
     }
 
     void handle_CMP()
@@ -1629,7 +1653,7 @@ private:
         bool carry;
         if (!cnt) {
             carry = false;
-        } else if (cnt <= 32) {
+        } else if (cnt < 32) {
             carry = !!((val >> (cnt - 1)) & 1);
             val >>= cnt;
         } else {
@@ -1738,10 +1762,20 @@ private:
         auto n = read_ea(0);
         const bool overflow = (n == opsize_msb_mask(inst_->size));
         n = -sext(n, inst_->size);
-        update_flags(srm_ccr_no_x, n, 0);
-        if (overflow) // Not tested...
-            state_.update_sr(srm_v, srm_v);
+
+        uint8_t ccr = 0;
+        if (!n) {
+            assert(!overflow);
+            ccr |= srm_z;
+        } else {
+            ccr |= srm_c | srm_x;
+            if (n & opsize_msb_mask(inst_->size))
+                ccr |= srm_n;
+            if (overflow)
+                ccr |= srm_v;
+        }
         write_ea(0, n);
+        state_.update_sr(srm_ccr, ccr);
     }
 
     void handle_NOT()
@@ -1873,6 +1907,7 @@ void run_test_case(const std::string& filename)
     } states[3];
 
     unsigned state_pos = 0;
+    unsigned test_count = 0;
 
     auto build_state = [](const test_state& s, const uint32_t pc_add = 0) {
         cpu_state st {};
@@ -1903,19 +1938,20 @@ void run_test_case(const std::string& filename)
             switch (type) {
             case 1: { // Run test
                 assert(state_pos == 3);
+                ++test_count;
                 const cpu_state input_state    = build_state(states[0]);
                 const cpu_state expected_state = build_state(states[1], static_cast<uint32_t>(2 * inst_words.size())); 
 
                 memset(&ram[0], 0, ram.size());
                 for (unsigned i = 0; i < inst_words.size(); ++i)
-                    put_u16(&ram[static_cast<size_t>(code_pos) + i * 2], inst_words[i]);
+                    put_u16(&ram[static_cast<size_t>(code_pos + i * 2)], inst_words[i]);
 
                 m68000 cpu { mem, input_state };
                 cpu.step();
 
                 const auto& outst = cpu.state();
                 if (memcmp(&outst, &expected_state, sizeof(cpu_state))) {
-                    std::cerr << "Test failed for " << name;
+                    std::cerr << "Test " << test_count << " failed for " << name;
                     for (const auto iw : inst_words)
                         std::cerr << " " << hexfmt(iw);
                     std::cerr << "\n";
@@ -1934,7 +1970,7 @@ void run_test_case(const std::string& filename)
                 break;
             }
             case 2:
-                std::cout << "\nEnd of test series\n\n";
+                //std::cout << "\nEnd of test series\n\n";
                 break;
             default:
                 throw std::runtime_error { "Unsupported END type " + std::to_string(type) };
@@ -1956,11 +1992,11 @@ void run_test_case(const std::string& filename)
             }
             name.assign(reinterpret_cast<const char*>(&data[pos]), name_len);
             pos += name_len;
-            std::cout << "Name: " << name << ", iwords: ";
+            /*std::cout << "Name: " << name << ", iwords: ";
             for (const auto& iw : inst_words) {
                 std::cout << " " << hexfmt(iw);
             }
-            std::cout << "\n";
+            std::cout << "\n";*/
             break;
         }
         case 2: { // CPU State
@@ -1984,9 +2020,9 @@ void run_test_case(const std::string& filename)
         }
         case 3: { // Results
             // Type: 0 = tests, 1 = errors
-            const auto type = get_test_field(w, 2, 1);
-            const auto count = get_test_field(w, 3, 29);
-            std::cout << "Results: type = " << type << " count = " << count << "\n";
+            //const auto type = get_test_field(w, 2, 1);
+            //const auto count = get_test_field(w, 3, 29);
+            //std::cout << "Results: type = " << type << " count = " << count << "\n";
             break;
         }
         }
@@ -1995,18 +2031,14 @@ void run_test_case(const std::string& filename)
     assert(pos == size);
 }
 
-int main(int argc, char* argv[])
+bool run_tests()
 {
-    try {
-        const std::string test_path = "../../Misc/m68k-tester-work/m68k-tests/";
-        const char* const testnames[] = {
-            "gen-opcode-abcd.bin",
+    const std::string test_path = "../../Misc/m68k-tester-work/m68k-tests/";
+    const char* const testnames[] = {
+            // OK
             "gen-opcode-addb.bin",
             "gen-opcode-addl.bin",
             "gen-opcode-addw.bin",
-            "gen-opcode-addxb.bin",
-            "gen-opcode-addxl.bin",
-            "gen-opcode-addxw.bin",
             "gen-opcode-andb.bin",
             "gen-opcode-andl.bin",
             "gen-opcode-andw.bin",
@@ -2025,8 +2057,6 @@ int main(int argc, char* argv[])
             "gen-opcode-cmpb.bin",
             "gen-opcode-cmpl.bin",
             "gen-opcode-cmpw.bin",
-            "gen-opcode-divs.bin",
-            "gen-opcode-divu.bin",
             "gen-opcode-eorb.bin",
             "gen-opcode-eorl.bin",
             "gen-opcode-eorw.bin",
@@ -2038,20 +2068,15 @@ int main(int argc, char* argv[])
             "gen-opcode-lsrb.bin",
             "gen-opcode-lsrl.bin",
             "gen-opcode-lsrw.bin",
-            "gen-opcode-nbcd.bin",
             "gen-opcode-negb.bin",
             "gen-opcode-negl.bin",
             "gen-opcode-negw.bin",
-            "gen-opcode-negxb.bin",
-            "gen-opcode-negxl.bin",
-            "gen-opcode-negxw.bin",
             "gen-opcode-notb.bin",
             "gen-opcode-notl.bin",
             "gen-opcode-notw.bin",
             "gen-opcode-orb.bin",
             "gen-opcode-orl.bin",
             "gen-opcode-orw.bin",
-            "gen-opcode-sbcd.bin",
             "gen-opcode-scc.bin",
             "gen-opcode-scs.bin",
             "gen-opcode-seq.bin",
@@ -2059,30 +2084,54 @@ int main(int argc, char* argv[])
             "gen-opcode-sgt.bin",
             "gen-opcode-shi.bin",
             "gen-opcode-sle.bin",
-            "gen-opcode-sls.bin",
             "gen-opcode-slt.bin",
+            "gen-opcode-sls.bin",
             "gen-opcode-smi.bin",
             "gen-opcode-sne.bin",
             "gen-opcode-spl.bin",
             "gen-opcode-subb.bin",
             "gen-opcode-subl.bin",
             "gen-opcode-subw.bin",
+            "gen-opcode-svc.bin",
+            "gen-opcode-svs.bin",
+#if 0
+            // Not implemented
+            "gen-opcode-abcd.bin",
+            "gen-opcode-addxb.bin",
+            "gen-opcode-addxl.bin",
+            "gen-opcode-addxw.bin",
+            "gen-opcode-divs.bin",
+            "gen-opcode-divu.bin",
+            "gen-opcode-nbcd.bin",
+            "gen-opcode-negxb.bin",
+            "gen-opcode-negxl.bin",
+            "gen-opcode-negxw.bin",
+            "gen-opcode-sbcd.bin",
             "gen-opcode-subxb.bin",
             "gen-opcode-subxl.bin",
             "gen-opcode-subxw.bin",
-            "gen-opcode-svc.bin",
-            "gen-opcode-svs.bin",
             "gen-opcode-tas.bin"
-        };
+#endif
+    };
 
-        for (const auto& t : testnames) {
-            std::cout << "Running " << t << "\n";
-            try {
-                run_test_case(test_path + t);
-            } catch (const std::exception& e) {
-                std::cerr << e.what() << "\n";
-            }
+    for (const auto& t : testnames) {
+        std::cout << "Running " << t << "\n";
+        try {
+            run_test_case(test_path + t);
+        } catch (const std::exception& e) {
+            std::cerr << e.what() << "\n\n";
+            return false;
         }
+    }
+    return true;
+}
+
+int main(int argc, char* argv[])
+{
+    try {
+        //if (!run_tests())
+        //    return 1;
+
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
         const char* const rom_file = "../../rom.bin";
@@ -2103,6 +2152,7 @@ int main(int argc, char* argv[])
         for (;;) {
             try {
                 cpu.step();
+                custom.step();
                 //if (cpu.state().pc == 0xFC00E2) // After delay loop
                 //    cpu.trace(true);
                 //if (cpu.state().pc == 0xFC046C)

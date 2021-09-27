@@ -27,10 +27,11 @@ constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
 constexpr uint8_t extra_priv_flag = 1 << 2; // Instruction is privileged (causes a trap if executed in user mode)
 
-constexpr const unsigned block_Dn  = 1U << 0;
-constexpr const unsigned block_An  = 1U << 1;
-constexpr const unsigned priv_inst = 1U << 30;
-constexpr const unsigned block_Imm = 1U << 31;
+constexpr const unsigned block_Dn   = 1U << 0;
+constexpr const unsigned block_An   = 1U << 1;
+constexpr const unsigned block_swap = 1U << 29;
+constexpr const unsigned priv_inst  = 1U << 30;
+constexpr const unsigned block_Imm  = 1U << 31;
 
 struct inst_desc {
     const char* name;
@@ -69,10 +70,10 @@ constexpr const inst_desc insts[] = {
     {"BCHG"              , "B L" , "0 0 0 0 1 0 0 0 0 1 M     Xn   " , "B N" },
     {"BCLR"              , "B L" , "0 0 0 0 1 0 0 0 1 0 M     Xn   " , "B N" },
     {"BSET"              , "B L" , "0 0 0 0 1 0 0 0 1 1 M     Xn   " , "B N" },
-    {"BTST"              , "B L" , "0 0 0 0 Dn    1 0 0 M     Xn   " , "  N" },
-    {"BCHG"              , "B L" , "0 0 0 0 Dn    1 0 1 M     Xn   " , "  N" },
-    {"BCLR"              , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" },
-    {"BSET"              , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" },
+    {"BTST"              , "B L" , "0 0 0 0 Dn    1 0 0 M     Xn   " , "  N" , block_An|block_swap },
+    {"BCHG"              , "B L" , "0 0 0 0 Dn    1 0 1 M     Xn   " , "  N" , block_An|block_swap },
+    {"BCLR"              , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" , block_An|block_swap },
+    {"BSET"              , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" , block_An|block_swap },
     //{"MOVEP"             , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" },
     {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , 0 },
     {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , 0 },
@@ -122,7 +123,7 @@ constexpr const inst_desc insts[] = {
     {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   " , 0 },
     {"SUBX"              , "BWL" , "1 0 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
     {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   " , 0 },
-    {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " },
+    {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " , block_An | block_swap },
     {"CMPM"              , "BWL" , "1 0 1 1 An    1 Sx  0 0 1 An   " , "   " },
     {"CMP"               , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " , 0 },
     {"CMPA"              , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   " , 0 },
@@ -438,7 +439,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         ai.nea = static_cast<uint8_t>(nea);
         std::copy(ea, ea + nea, ai.ea);
         ai.data = data;
-        if (swap_ea)
+        if (swap_ea && !(desc.block & block_swap))
             std::swap(ai.ea[0], ai.ea[1]);
 
         ai.extra = 0;
@@ -730,7 +731,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
     case field_type::Mr:
         assert(nea == 1 && ea[0] == ea_data3);
         recur(0);
-        ea[0] = data;
+        ea[0] = data & 7;
         recur(1);
         ea[0] = ea_data3;
         break;
