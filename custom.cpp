@@ -902,13 +902,18 @@ struct custom_state {
         //A1200 r1: 3900pF, 1.5kOhm -> 27 kHz
         //A1200 r2: 6800pF, 680 Ohm -> 34 kHz
         simple_lowpass_filter<4400.0f> filter;
-        float output;
+        int32_t output;
 
         void load_per()
         {
             percnt = per;
             if (per && per < 113)
                 per = 113;
+        }
+
+        float filtered_output(float scale)
+        {
+            return filter(static_cast<float>(output) * scale);
         }
 
     } audio_channels[4];
@@ -1718,7 +1723,7 @@ public:
                 dat = static_cast<int8_t>(ch.actdat & 0xff);
             else
                 continue;
-            ch.output += ch.filter(static_cast<float>(dat * ch.vol * 2));
+            ch.output += dat * ch.vol;
         }
         static int cnt = 0;
         ++cnt;
@@ -1727,8 +1732,8 @@ public:
         if (s_.hpos == 0 || (s_.hpos >> 1) == 1 + hpos_per_line / 4) {
             auto buf = &audio_buf_[s_.vpos * 4 + 2 * (s_.hpos ? 1 : 0)];
             const float a = 1.0f / (1 + hpos_per_line / 4);
-            buf[0] = static_cast<int16_t>(a * (s_.audio_channels[0].output + s_.audio_channels[3].output));
-            buf[1] = static_cast<int16_t>(a * (s_.audio_channels[1].output + s_.audio_channels[2].output));
+            buf[0] = static_cast<int16_t>(2 * (s_.audio_channels[0].filtered_output(a) + s_.audio_channels[3].filtered_output(a)));
+            buf[1] = static_cast<int16_t>(2 * (s_.audio_channels[1].filtered_output(a) + s_.audio_channels[2].filtered_output(a)));
             s_.audio_channels[0].output = 0;
             s_.audio_channels[1].output = 0;
             s_.audio_channels[2].output = 0;
