@@ -223,8 +223,8 @@ constexpr const inst_desc insts[] = {
     { inst_type::SUBA     , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   " , cycle_rmw  , 0 },
     { inst_type::EOR      , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC | block_swap },
     { inst_type::CMPM     , "BWL" , "1 0 1 1 An    1 Sx  0 0 1 An   " , "   " , cycle_none , },
-    { inst_type::CMP      , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " , cycle_none , 0 },
-    { inst_type::CMPA     , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   " , cycle_none , 0 },
+    { inst_type::CMP      , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " , cycle_norm , 0 },
+    { inst_type::CMPA     , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   " , cycle_norm , 0 },
     { inst_type::MULU     , " W " , "1 1 0 0 Dn    0 1 1 M     Xn   " , "   " , cycle_none , },
     { inst_type::MULS     , " W " , "1 1 0 0 Dn    1 1 1 M     Xn   " , "   " , cycle_none , },
     { inst_type::ABCD     , "B  " , "1 1 0 0 Xn    1 0 0 0 0 m Xn   " , "   " , cycle_none , },
@@ -689,6 +689,8 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                 // Nothing
             } else if (desc.type == inst_type::ADDQ || desc.type == inst_type::SUBQ) {
                 ai.base_cycles += 4;
+            } else if (desc.type == inst_type::CMP || desc.type == inst_type::CMPA) {
+                ai.base_cycles += 2;
             } else {
                 if (ai.ea[0] >> 3 != 0 && ai.ea[0] >> 3 != 1 && (ai.ea[0] != ea_imm || desc.cycle == cycle_norm))
                     ai.base_cycles += 2;
@@ -699,6 +701,8 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             ai.base_cycles += 2;
         } else if (ai.osize == opsize::w && desc.cycle == cycle_rmw && ai.ea[1] >> 3 == 1) {
             ai.base_cycles += 4; // word size operations on address registers are still long word ops
+        } else if (ai.osize == opsize::w && desc.type == inst_type::CMPA) {
+            ai.base_cycles += 2; // word size operations on address registers are still long word ops
         }
 
         if (desc.type == inst_type::NBCD && ai.ea[0] >> 3 == 0)

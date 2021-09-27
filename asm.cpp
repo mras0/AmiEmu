@@ -71,11 +71,11 @@ constexpr struct instruction_info_type {
 #undef INSTRUCTION_INFO
 };
 
-#define ASSEMBLER_ERROR(...)                                                                                                                  \
-    do {                                                                                                                                      \
-        std::ostringstream oss;                                                                                                               \
-        oss << "In functin " << __func__ << " line " << __LINE__ << ": Error in line " << line_ << " column " << col_ << ": " << __VA_ARGS__; \
-        throw std::runtime_error { oss.str() };                                                                                               \
+#define ASSEMBLER_ERROR(...)                                                                                                                   \
+    do {                                                                                                                                       \
+        std::ostringstream oss;                                                                                                                \
+        oss << "In function " << __func__ << " line " << __LINE__ << ": Error in line " << line_ << " column " << col_ << ": " << __VA_ARGS__; \
+        throw std::runtime_error { oss.str() };                                                                                                \
     } while (0)
 
 class assembler {

@@ -48,6 +48,7 @@ namespace {
 // MULU
 // MULS
 // ADDX/SUBX
+// CMPM
 
 const char* const line0000_immediate = R"(
 #<data>,<ea> :    |                
@@ -551,6 +552,77 @@ const char* const exg_table = R"(
     Dx,Ay         |  6(1/0)
 )";
 
+const char* const cmp_table = R"(
+<ea>,Dn :         |                
+  .B or .W :      |                
+    Dn            |  4(1/0)  0(0/0)
+    An            |  4(1/0)  0(0/0)
+    (An)          |  4(1/0)  4(1/0)
+    (An)+         |  4(1/0)  4(1/0)
+    -(An)         |  4(1/0)  6(1/0)
+    (d16,An)      |  4(1/0)  8(2/0)
+    (d8,An,Xn)    |  4(1/0) 10(2/0)
+    (xxx).W       |  4(1/0)  8(2/0)
+    (xxx).L       |  4(1/0) 12(3/0)
+    #<data>       |  4(1/0)  4(1/0)
+  .L :            |                
+    Dn            |  6(1/0)  0(0/0)
+    An            |  6(1/0)  0(0/0)
+    (An)          |  6(1/0)  8(2/0)
+    (An)+         |  6(1/0)  8(2/0)
+    -(An)         |  6(1/0) 10(2/0)
+    (d16,An)      |  6(1/0) 12(3/0)
+    (d8,An,Xn)    |  6(1/0) 14(3/0)
+    (xxx).W       |  6(1/0) 12(3/0)
+    (xxx).L       |  6(1/0) 16(4/0)
+    #<data>       |  6(1/0)  8(2/0)
+<ea>,An :         |                
+  .B or .W :      |                
+    Dn            |  6(1/0)  0(0/0)
+    An            |  6(1/0)  0(0/0)
+    (An)          |  6(1/0)  4(1/0)
+    (An)+         |  6(1/0)  4(1/0)
+    -(An)         |  6(1/0)  6(1/0)
+    (d16,An)      |  6(1/0)  8(2/0)
+    (d8,An,Xn)    |  6(1/0) 10(2/0)
+    (xxx).W       |  6(1/0)  8(2/0)
+    (xxx).L       |  6(1/0) 12(3/0)
+    #<data>       |  6(1/0)  4(1/0)
+  .L :            |                
+    Dn            |  6(1/0)  0(0/0)
+    An            |  6(1/0)  0(0/0)
+    (An)          |  6(1/0)  8(2/0)
+    (An)+         |  6(1/0)  8(2/0)
+    -(An)         |  6(1/0) 10(2/0)
+    (d16,An)      |  6(1/0) 12(3/0)
+    (d8,An,Xn)    |  6(1/0) 14(3/0)
+    (xxx).W       |  6(1/0) 12(3/0)
+    (xxx).L       |  6(1/0) 16(4/0)
+    #<data>       |  6(1/0)  8(2/0)
+)";
+
+const char* const eor_table = R"(
+Dn,<ea> :         |                
+  .B or .W :      |                
+    Dn            |  4(1/0)  0(0/0)
+    (An)          |  8(1/1)  4(1/0)
+    (An)+         |  8(1/1)  4(1/0)
+    -(An)         |  8(1/1)  6(1/0)
+    (d16,An)      |  8(1/1)  8(2/0)
+    (d8,An,Xn)    |  8(1/1) 10(2/0)
+    (xxx).W       |  8(1/1)  8(2/0)
+    (xxx).L       |  8(1/1) 12(3/0)
+  .L :            |                
+    Dn            |  8(1/0)  0(0/0)
+    (An)          | 12(1/2)  8(2/0)
+    (An)+         | 12(1/2)  8(2/0)
+    -(An)         | 12(1/2) 10(2/0)
+    (d16,An)      | 12(1/2) 12(3/0)
+    (d8,An,Xn)    | 12(1/2) 14(3/0)
+    (xxx).W       | 12(1/2) 12(3/0)
+    (xxx).L       | 12(1/2) 16(4/0)
+)";
+
 const struct {
     const char* table;
     std::vector<std::string> instructions;
@@ -571,7 +643,8 @@ const struct {
     { and_or_table       , { "AND", "OR" } },
     { exg_table          , { "EXG" } },
     { add_sub_table      , { "ADD", "SUB" } },
-
+    { cmp_table          , { "CMP" } },
+    { eor_table          , { "EOR" } },
 };
 
 std::pair<unsigned, unsigned> interpret_cycle_text(const std::string& s)
@@ -661,7 +734,7 @@ struct tester {
                     data = "$8";
 
                 for (const auto& s : sizes) {
-                    if (s == ".B" && replacement == "An")
+                    if (s == ".B" && (replacement == "An" || code_template.find_first_of(",An") != std::string::npos))
                         continue;
 
                     auto args = code_template.empty() ? replacement : replace(code_template, "<ea>", replacement);
@@ -677,6 +750,7 @@ struct tester {
                     args = replace(args, "Ax", "A3");
                     args = replace(args, "Ay", "A4");
                     args = replace(args, "<data>", data);
+
 
 
                     //std::cout << "\tTest " << i << s << "\t" << args << "!\n";
