@@ -273,6 +273,18 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 arg = num * mult;
                 return true;
             };
+            auto get_number_arg = [&](const std::string& name, auto& val, auto maxsize) {
+                using T = std::decay_t<decltype(val)>;
+                std::string s = args.cpu_scale ? " " : ""; // Non-empty if already specified so get_string_arg will warn
+                if (!get_string_arg(name, s))
+                    return false;
+                char* ep = nullptr;
+                const auto num = strtoul(s.c_str(), &ep, 10);
+                if (*ep || num < 1 || num > static_cast<T>(maxsize))
+                    usage("Argument invalid or out of range for " + name + " must be in range [1; " + std::to_string(maxsize) + "]");
+                val = static_cast<T>(num);
+                return true;
+            };
 
             if (get_string_arg("df0", args.df0))
                 continue;
@@ -288,21 +300,12 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_size_arg("fast", args.fast_size, max_fast_size))
                 continue;
-            else if (get_size_arg("floppyscale", args.floppy_speed, 0x4000)) // Just some limit
+            else if (get_number_arg("floppyspeed", args.floppy_speed, 0x4000)) // Just some limit
                 continue;
             else if (get_string_arg("state", args.state_filename))
                 continue;
-            else if (!strcmp(&argv[i][1], "cpuscale")) {
-                std::string s = args.cpu_scale ? " " : ""; // Non-empty if already specified so get_string_arg will warn
-                if (get_string_arg("cpuscale", s)) {
-                    char* ep = nullptr;
-                    const auto num = strtoul(s.c_str(), &ep, 10);
-                    if (*ep || num < 1 || num > 22)
-                        usage("Invalid cpu scale (must be 1..22)");
-                    args.cpu_scale = static_cast<uint8_t>(num);
-                    continue;
-                }
-            }
+            else if (get_number_arg("cpuscale", args.cpu_scale, 22))
+                continue;
             else if (!strcmp(&argv[i][1], "help"))
                 usage("");
             else if (!strcmp(&argv[i][1], "testmode")) {
