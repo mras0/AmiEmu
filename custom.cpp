@@ -998,7 +998,7 @@ public:
         , chip_ram_mask_ { static_cast<uint32_t>(mem_.ram().size()) - 2 } // -1 for normal mask, -2 for word aligned mask
         , floppy_speed_ { floppy_speed }
     {
-        mem_.register_handler(*this, 0xDFF000, 0x1000);
+        mem_.register_handler(*this, custom_base_addr, custom_mem_size);
         for (uint32_t addr = slow_end; addr < 0xDC'0000; addr += 256 << 10) {
             assert((addr & ((256 << 10) - 1)) == 0);
             // Mirror custom registers (due to partial decoding), this is necessary for e.g. KS1.2

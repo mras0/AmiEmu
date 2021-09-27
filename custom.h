@@ -14,6 +14,9 @@ constexpr unsigned audio_samples_per_frame = 313 * 2; // Two stereo sample per s
 constexpr unsigned audio_buffer_size = audio_samples_per_frame * 2;
 constexpr unsigned audio_sample_rate = audio_samples_per_frame * 50;
 
+constexpr uint32_t custom_base_addr = 0xDE0000;
+constexpr uint32_t custom_mem_size  = 0xE00000 - 0xDE0000;
+
 class cia_handler;
 
 class custom_handler {
