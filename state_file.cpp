@@ -68,7 +68,8 @@ public:
             put_u32(static_cast<uint32_t>(saved - p));
             f_.seekp(saved);
         } else {
-            expect_marker(marker_scope_end);
+            if (!std::uncaught_exceptions())
+                expect_marker(marker_scope_end);
         }
     }
 
@@ -112,7 +113,7 @@ public:
             expect_marker(marker_blob);
             const auto actual_size = get_u32();
             if (size != actual_size)
-                throw std::runtime_error { filename_ + ": Expected blob size " + std::to_string(size) + " got " + std::to_string(size) };
+                throw std::runtime_error { filename_ + ": Expected blob size " + std::to_string(size) + " got " + std::to_string(actual_size) };
             f_.read(static_cast<char*>(blob), size);
         }
     }

@@ -754,18 +754,6 @@ enum class ddfstate {
     stopped,
 };
 
-enum class sprite_dma_state {
-    fetch_ctl,
-    fetch_data,
-    stopped,
-};
-
-enum class sprite_vpos_state {
-    vpos_disabled,
-    vpos_waiting,
-    vpos_active,
-};
-
 enum class copper_state {
     halted,
     vblank,
@@ -815,8 +803,7 @@ struct custom_state {
     bool cdang;
     copper_state copstate;
 
-    sprite_dma_state spr_dma_states[8];
-    sprite_vpos_state spr_vpos_states[8];
+    bool spr_dma_active[8];
     bool spr_armed[8]; // armed by writing to SPRxDATA, disarmed by writing to SPRxCTL
     uint16_t spr_hold_a[8];
     uint16_t spr_hold_b[8];
@@ -1020,10 +1007,16 @@ public:
 
     void do_immedite_blit_line()
     {
-        assert(s_.bltdat[0] == 0x8000);
-        assert(s_.bltcon0 & (BC0F_SRCA | BC0F_SRCC | BC0F_DEST));
-        assert(!(s_.bltcon0 & BC0F_SRCB));
-        assert(s_.bltw == 2);
+        if (s_.bltdat[0] != 0x8000)
+            DBGOUT << "Warning: Blitter line unexpected BLTADAT $" << hexfmt(s_.bltdat[0]) << "\n";
+        // http://eab.abime.net/showpost.php?p=206412&postcount=6
+        // D can be disabled
+        // C MUST be enabled (otherwise nothing is drawn)
+        // If A is disabled BLTAPT isn't updated
+        if ((s_.bltcon0 & (BC0F_SRCA | BC0F_SRCB | BC0F_SRCC)) != (BC0F_SRCA | BC0F_SRCC))
+            DBGOUT << "Warning: Blitter line unexpected BLTCON0 $" << hexfmt(s_.bltcon0) << "\n";
+        if (s_.bltw != 2)
+            DBGOUT << "Warning: Blitter line unexpected width $" << hexfmt(s_.bltw) << "\n";
 
         uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
         bool sign = !!(s_.bltcon1 & BC1F_SIGNFLAG);
@@ -1448,7 +1441,7 @@ public:
                 // Move instruction: TODO: Registers managed by other chips have delay?
                 const auto reg = s_.copper_inst[0] & 0x1ff;
                 if (DEBUG_COPPER)
-                    DBGOUT << (s_.copper_skip_next ? "Skipping write" : "Writing") << " to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
+                    DBGOUT << "Copper " << (s_.copper_skip_next ? "skipping write" : "writing") << " to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
                 if (reg >= 0x80 || (s_.cdang && reg >= 0x40)) {
                     if (!s_.copper_skip_next)
                         write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
@@ -1732,25 +1725,17 @@ public:
         uint8_t spriteidx[8];
         for (uint8_t spr = 0; spr < 8; ++spr) {
             spriteidx[spr] = 0;
-            if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_waiting && s_.sprite_vpos_start(spr) == s_.vpos) {
+
+            // end check is always active (vAmigaTS spritedma10)
+            if (s_.vpos == s_.sprite_vpos_end(spr)) {
+                if (DEBUG_SPRITE && s_.spr_dma_active[spr])
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA off\n";
+                s_.spr_dma_active[spr] = false;
+            }
+
+            if (s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == s_.hpos) {
                 if (DEBUG_SPRITE)
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now active\n";
-                s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_active;
-                s_.spr_dma_states[spr] = sprite_dma_state::fetch_data;
-            } else if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_active && s_.sprite_vpos_end(spr) == s_.vpos) {
-                if (DEBUG_SPRITE)
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now done\n";
-                // Note: If sprite DMA is turned off the same line will be repeated
-                // XXX: Is this the correct way to implement it?
-                if (s_.dmacon & DMAF_SPRITE) {
-                    s_.spr_dma_states[spr] = sprite_dma_state::fetch_ctl;
-                    s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
-                } else {
-                    s_.spr_dma_states[spr] = sprite_dma_state::stopped;
-                }
-            } else if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_active && s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == s_.hpos) {
-                if (DEBUG_SPRITE)
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Armed and HPOS ($" << hexfmt(s_.sprite_hpos_start(spr)) << ") matches!\n";
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Armed and HPOS ($" << hexfmt(s_.sprite_hpos_start(spr)) << ") matches!\n";
                 s_.spr_hold_a[spr] = s_.sprdata[spr];
                 s_.spr_hold_b[spr] = s_.sprdatb[spr];
                 s_.spr_hold_cnt[spr] = 16;
@@ -2077,14 +2062,22 @@ public:
                 }
 
                 // Sprite
-                if ((s_.dmacon & DMAF_SPRITE) && s_.vpos >= sprite_dma_start_vpos && (colclock & 1) && colclock >= 0x15 && colclock < 0x15+8*4) {
+                if (s_.vpos >= sprite_dma_start_vpos && (colclock & 1) && colclock >= 0x15 && colclock < 0x15+8*4) {
                     const uint8_t spr = static_cast<uint8_t>((colclock - 0x15) / 4);
-                    if (s_.spr_dma_states[spr] != sprite_dma_state::stopped) {
+                    const bool fetch_ctl = s_.vpos == sprite_dma_start_vpos || s_.vpos == s_.sprite_vpos_end(spr);
+
+                    if (!fetch_ctl && s_.vpos == s_.sprite_vpos_start(spr)) {
+                        if (DEBUG_SPRITE)
+                            DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA on\n";
+                        s_.spr_dma_active[spr] = true;
+                    }
+
+                    if ((s_.dmacon & DMAF_SPRITE) && (fetch_ctl || s_.spr_dma_active[spr])) {
                         const bool first_word = !(colclock & 2);
-                        const uint16_t reg = SPR0POS + 8 * spr + 2 * (s_.spr_dma_states[spr] == sprite_dma_state::fetch_ctl ? 1 - first_word : 3 - first_word);
+                        const uint16_t reg = SPR0POS + 8 * spr + 2 * (fetch_ctl ? 1 - first_word : 3 - first_word);
                         const uint16_t val = do_dma(s_.sprpt[spr]);
                         if (DEBUG_SPRITE)
-                            DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " vpos_state=" << (int)s_.spr_vpos_states[spr] << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << custom_regname(reg) << "\n";
+                            DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << custom_regname(reg) << "\n";
                         write_u16(0xdff000 | reg, reg, val);
                         break;
                     }
@@ -2148,9 +2141,8 @@ public:
 
             cia_.increment_tod_counter(1);
             if (++s_.vpos == vpos_per_field) {
-                memset(s_.spr_dma_states, 0, sizeof(s_.spr_dma_states));
-                memset(s_.spr_vpos_states, 0, sizeof(s_.spr_vpos_states));
-                memset(s_.spr_armed, 0, sizeof(s_.spr_armed));
+                memset(s_.spr_dma_active, 0, sizeof(s_.spr_dma_active));
+                //Note: sprite armed flag is not reset here (vAmigaTS manual1)
                 s_.copstate = copper_state::vblank;
                 s_.vpos = 0;
                 s_.long_frame = (s_.bplcon0 & BPLCON0F_LACE ? !s_.long_frame : true);
@@ -2340,34 +2332,46 @@ public:
         }
         if (offset >= SPR0POS && offset <= SPR7DATB) {
             const auto spr = static_cast<uint8_t>((offset - SPR0POS) / 8);
+            if (DEBUG_SPRITE)
+                DBGOUT << "Write to " << custom_regname(offset) << " value $" << hexfmt(val) << " dma=" << (int)s_.spr_dma_active[spr] << " armed=" << (int)s_.spr_armed[spr] << "\n";
             switch ((offset >> 1) & 3) {
             case 0: // SPRxPOS
                 s_.sprpos[spr] = val;
-                return;
+                break;
             case 1: // SPRxCTL
+                if (DEBUG_SPRITE && !s_.spr_armed[spr])
+                    DBGOUT << "Sprite " << (int)spr << " Disarming\n";
                 s_.sprctl[spr] = val;
                 s_.spr_armed[spr] = false;
-                if (s_.sprite_vpos_start(spr) != s_.sprite_vpos_end(spr) && s_.sprite_vpos_start(spr) >= s_.vpos) {
-                    if (DEBUG_SPRITE)
-                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Setting active waiting for VPOS=$" << hexfmt(s_.sprite_vpos_start(spr)) << " end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
-                    s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_waiting;
-                    s_.spr_dma_states[spr] = sprite_dma_state::stopped;
-                } else if (s_.spr_dma_states[spr] == sprite_dma_state::fetch_ctl) {
-                    if (DEBUG_SPRITE)
-                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Disabling start=$" << hexfmt(s_.sprite_vpos_start(spr)) << " == end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
-                    s_.spr_dma_states[spr] = sprite_dma_state::stopped;
-                }
-                return;
+                break;
             case 2: // SPRxDATA (low word)
+                if (DEBUG_SPRITE && !s_.spr_armed[spr])
+                    DBGOUT << "Sprite " << (int)spr << " Arming\n";
                 s_.sprdata[spr] = val;
-                if (DEBUG_SPRITE)
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Arming\n";
                 s_.spr_armed[spr] = true;
                 return;
             case 3: // SPRxDATB (high word)
                 s_.sprdatb[spr] = val;
                 return;
             }
+
+            // CTL/POS write recheck vstart/vend
+            if (s_.vpos >= sprite_dma_start_vpos) {
+                if (s_.vpos == s_.sprite_vpos_end(spr)) {
+                    if (DEBUG_SPRITE && s_.spr_dma_active[spr])
+                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA off\n";
+                    s_.spr_dma_active[spr] = false;
+                } else if (s_.vpos == s_.sprite_vpos_start(spr)) {
+                    if (DEBUG_SPRITE && !s_.spr_dma_active[spr])
+                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA on\n";
+                    s_.spr_dma_active[spr] = true;
+                }
+            }
+
+            if (DEBUG_SPRITE)
+                DBGOUT << "Sprite " << (int)spr << " vstart=$" << hexfmt(s_.sprite_vpos_start(spr)) << " vend=$" << hexfmt(s_.sprite_vpos_end(spr)) << " hstart=$" << hexfmt(s_.sprite_hpos_start(spr)) << " dma=" << (int)s_.spr_dma_active[spr] << " armed=" << (int)s_.spr_armed[spr] << "\n";
+
+            return;
         }
 
         if (offset >= COLOR00 && offset <= COLOR31) {
