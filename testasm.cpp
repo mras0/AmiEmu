@@ -312,7 +312,10 @@ bool simple_asm_tests()
         { "TAS 2(a3,d0.w)", { 0x4af3, 0x0002 } },
         { "TAS $1234.w", { 0x4af8, 0x1234 } },
         { "TAS $12345678.l", { 0x4af9, 0x1234, 0x5678 } },
-        // MOVEP
+        { "MOVEP.W d2, $1234(a3)", { 0x058b, 0x1234 } },
+        { "MOVEP.W $1234(a7), d3", { 0x070f, 0x1234 } },
+        { "MOVEP.L d4, $1234(a7)", { 0x09cf, 0x1234 } },
+        { "MOVEP.L $1234(a2), d0", { 0x014a, 0x1234 } },
     };
 
     for (const auto& tc : test_cases) {

@@ -1029,6 +1029,18 @@ operands_done:
                 iwords[0] |= 1 << 6;
             break;
         }
+        case token_type::MOVEP: {
+            // TODO: Turn (An) into 0(An) automatically
+            const uint16_t mode = 1 << 8 | (osize == opsize::l ? 1 << 6 : 0);
+            if (ea[0].type >> ea_m_shift == ea_m_Dn && ea[1].type >> ea_m_shift == ea_m_A_ind_disp16) {
+                iwords[0] = (ea[0].type & 7) << 9 | 1 << 7 | mode | 1 << 3 | (ea[1].type & 7);
+            } else if (ea[0].type >> ea_m_shift == ea_m_A_ind_disp16 && ea[1].type >> ea_m_shift == ea_m_Dn) {
+                iwords[0] = (ea[1].type & 7) << 9 | mode | 1 << 3 | (ea[0].type & 7);
+            } else {
+                ASSEMBLER_ERROR("Invalid operands for MOVEP");
+            }
+            break;
+        }
         case token_type::MOVEQ: {
             if (ea[0].type != ea_immediate || ea[0].fixup || ea[1].type >> ea_m_shift != ea_m_Dn)
                 ASSEMBLER_ERROR("Invalid operands to MOVEQ");

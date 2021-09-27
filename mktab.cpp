@@ -173,7 +173,7 @@ constexpr const inst_desc insts[] = {
     { inst_type::BCHG    , "B L" , "0 0 0 0 Dn    1 0 1 M     Xn   " , "  N" , cycle_none , block_An|block_Imm|block_PC|block_swap },
     { inst_type::BCLR    , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" , cycle_none , block_An|block_Imm|block_PC|block_swap },
     { inst_type::BSET    , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" , cycle_none , block_An|block_Imm|block_PC|block_swap },
-    //{ inst_type::MOVEP   , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" },
+    { inst_type::MOVEP   , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" , cycle_none , 0 },
     { inst_type::MOVEA   , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , cycle_norm , 0 },
     { inst_type::MOVE    , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , cycle_norm , 0 },
     { inst_type::MOVE    , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " , cycle_none , block_An | block_Imm | block_PC, ea_sr }, // Move from SR
@@ -559,11 +559,19 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
 
         
         if (desc.imm[2] == 'D') {
-            assert(desc.type == inst_type::DBcc);
+            assert(desc.type == inst_type::DBcc || desc.type == inst_type::MOVEP);
             assert(!strcmp(desc.imm, "W D"));
-            ai.extra |= extra_disp_flag;
-            assert(nea == 1);
-            ai.ea[ai.nea++] = ea_disp;
+            if (desc.type == inst_type::DBcc) {
+                ai.extra |= extra_disp_flag;
+                assert(nea == 1);
+                ai.ea[ai.nea++] = ea_disp;
+            } else {
+                assert(ai.ea[0] >> 3 == 1 || ai.ea[1] >> 3 == 1);
+                if (ai.ea[0] >> 3 == 1)
+                    ai.ea[0] += 4 << 3;
+                else
+                    ai.ea[1] += 4 << 3;
+            }
         } else if (desc.imm[2] == 'd') {
             assert(!strcmp(desc.imm, "W d"));
             if (data == 0) {
@@ -906,6 +914,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         }
         --nea;
         break;
+    case field_type::Dx:
     case field_type::Dy:
     case field_type::Dz:
         swap_ea = true;
