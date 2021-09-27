@@ -454,6 +454,7 @@ public:
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
         switch (offset) {
+        case SERPER:
         case COP1LCH:
         case COP1LCL:
         case COP2LCH:
@@ -494,6 +495,7 @@ private:
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
+    X(SERPER  , 0x032 , 1) /* Serial port period and control                          */ \
     X(COP1LCH , 0x080 , 1) /* Coprocessor first location register (high 3 bits)       */ \
     X(COP1LCL , 0x082 , 1) /* Coprocessor first location register (low 15 bits)       */ \
     X(COP2LCH , 0x084 , 1) /* Coprocessor second location register (high 3 bits)      */ \
@@ -651,6 +653,28 @@ const char* const conditional_strings[16] = {
     "le",
 };
 
+enum class interrupt_vector : uint8_t {
+    reset_ssp = 0,
+    reset_pc = 1,
+    bus_error = 2,
+    address_error = 3,
+    illegal_instruction = 4,
+    zero_divide = 5,
+    chk_exception = 6,
+    trapv_instruction = 7,
+    privililege_violation = 8,
+    trace = 9,
+    line_1010 = 10,
+    line_1111 = 11,
+    level1 = 25,
+    level2 = 26,
+    level3 = 27,
+    level4 = 28,
+    level5 = 29,
+    level6 = 30,
+    level7 = 31,
+};
+
 struct cpu_state {
     uint32_t d[8];
     uint32_t a[7];
@@ -718,8 +742,6 @@ struct cpu_state {
         case conditional::le: // Z or (N and (not V)) or ((not N) and V)
             return Z || (N && !V) || (!N && V);
         default:
-            assert(static_cast<unsigned>(c) < 16);
-            std::cerr << "TODO: condition: " << conditional_strings[static_cast<uint8_t>(c)] << "\n";
             assert(!"Condition not implemented");
         }
         return false;
@@ -821,8 +843,14 @@ public:
             std::cout << '\n';
         }
 
-        if (inst_->type == inst_type::ILLEGAL)
+        if (inst_->type == inst_type::ILLEGAL) {
+            if (iwords_[0] == 0x4e7b) {
+                // For now only handle this specific one (from kickstart 1.3)
+                do_interrupt(interrupt_vector::illegal_instruction);
+                goto out;
+            }
             throw std::runtime_error { "ILLEGAL" };
+        }
 
         assert(inst_->nea <= 2);
 
@@ -850,14 +878,18 @@ public:
             HANDLE_INST(Bcc);
             HANDLE_INST(BRA);
             HANDLE_INST(BSR);
+            HANDLE_INST(BCLR);
+            HANDLE_INST(BSET);
             HANDLE_INST(BTST);
             HANDLE_INST(CLR);
             HANDLE_INST(CMP);
             HANDLE_INST(CMPA);
             HANDLE_INST(DBcc);
             HANDLE_INST(EOR);
+            HANDLE_INST(EXG);
             HANDLE_INST(EXT);
             HANDLE_INST(JMP);
+            HANDLE_INST(JSR);
             HANDLE_INST(LEA);
             HANDLE_INST(LSL);
             HANDLE_INST(LSR);
@@ -867,6 +899,7 @@ public:
             HANDLE_INST(MOVEQ);
             HANDLE_INST(MULU);
             HANDLE_INST(NOT);
+            HANDLE_INST(OR);
             HANDLE_INST(PEA);
             HANDLE_INST(RTS);
             HANDLE_INST(SUB);
@@ -893,6 +926,7 @@ public:
             }
         }
 
+out:
         if (trace_)
             std::cout << "\n";
     }
@@ -1197,6 +1231,45 @@ private:
         state_.update_sr(cnt ? srm_ccr : srm_ccr_no_x, ccr);
     }
 
+    void push_u16(uint16_t val)
+    {
+        auto& a7 = state_.A(7);
+        a7 -= 2;
+        mem_.write_u16(a7, val);
+    }
+
+    void push_u32(uint32_t val)
+    {
+        auto& a7 = state_.A(7);
+        a7 -= 4;
+        mem_.write_u32(a7, val);
+    }
+
+    void do_interrupt(interrupt_vector vec)
+    {
+        std::cerr << "[CPU] Interrupt $" << hexfmt(static_cast<uint8_t>(vec)) << " triggered at PC=$" << hexfmt(start_pc_) << "\n";
+
+        const uint16_t saved_sr = state_.sr;
+        const uint8_t vec_num = static_cast<uint8_t>(vec);
+        assert(vec_num < static_cast<uint8_t>(interrupt_vector::level1)); // TODO: Update IPL, get from bus cycle
+        assert(vec_num > static_cast<uint8_t>(interrupt_vector::reset_pc)); // RESET doesn't save anything
+        
+        state_.update_sr(static_cast<sr_mask>(srm_trace | srm_s), srm_s); // Clear trace, set superviser mode
+        // Now always on supervisor stack
+
+        // From MC68000UM 6.2.5
+        // "The current program
+        // counter value and the saved copy of the status register are stacked using the SSP. The
+        // stacked program counter value usually points to the next unexecuted instruction.
+        // However, for bus error and address error, the value stacked for the program counter is
+        // unpredictable and may be incremented from the address of the instruction that caused the
+        // error."
+        push_u32(state_.pc);
+        push_u16(saved_sr);
+
+        state_.pc = mem_.read_u32(static_cast<uint32_t>(vec) * 4);
+    }
+
     void handle_ADD()
     {
         assert(inst_->nea == 2);
@@ -1249,25 +1322,41 @@ private:
     void handle_BSR()
     {
         assert(inst_->nea == 1);
-        auto& a7 = state_.A(7);
-        a7 -= 4;
-        mem_.write_u32(a7, state_.pc);
+        push_u32(state_.pc);
         state_.pc = ea_data_[0];
+    }
+
+    std::pair<uint32_t, uint32_t> bit_op_helper()
+    {
+        assert(inst_->nea == 2);
+        auto bitnum = read_ea(0);
+        const auto num = read_ea(1);
+        if (inst_->size == opsize::b) {
+            bitnum &= 7;
+        } else {
+            assert(inst_->size == opsize::l);
+            bitnum &= 31;
+        }
+        const bool is_set = !!((num >> bitnum) & 1);
+        state_.update_sr(srm_z, is_set ? srm_z : 0); // Set according to the previous state of the bit
+        return { bitnum, num };
+    }
+
+    void handle_BCLR()
+    {
+        const auto [bitnum, num] = bit_op_helper();
+        write_ea(1, num & ~(1 << bitnum));
+    }
+
+    void handle_BSET()
+    {
+        const auto [bitnum, num] = bit_op_helper();
+        write_ea(1, num | (1 << bitnum));
     }
 
     void handle_BTST()
     {
-        assert(inst_->nea == 2);
-        const auto bitnum = read_ea(0);
-        const auto num = read_ea(1);
-        bool is_set;
-        if (inst_->size == opsize::b) {
-            is_set = !!((num >> (bitnum & 7)) & 1);
-        } else {
-            assert(inst_->size == opsize::l);
-            is_set = !!((num >> (bitnum & 31)) & 1);
-        }
-        state_.update_sr(srm_z, is_set ? srm_z : 0);
+        bit_op_helper(); // discard return value on purpose
     }
 
     void handle_CLR()
@@ -1323,6 +1412,15 @@ private:
         update_flags(srm_ccr_no_x, res, 0);
     }
 
+    void handle_EXG()
+    {
+        assert(inst_->size == opsize::l && inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) < 2 && (inst_->ea[1] >> ea_m_shift));
+        const auto a = read_ea(0);
+        const auto b = read_ea(1);
+        write_ea(0, b);
+        write_ea(1, a);
+    }
+
     void handle_EXT()
     {
         assert(inst_->nea == 1 && (inst_->ea[0] >> ea_m_shift) == ea_m_Dn);
@@ -1341,6 +1439,13 @@ private:
     void handle_JMP()
     {
         assert(inst_->nea == 1);
+        state_.pc = ea_data_[0];
+    }
+
+    void handle_JSR()
+    {
+        assert(inst_->nea == 1);
+        push_u32(state_.pc);
         state_.pc = ea_data_[0];
     }
 
@@ -1497,12 +1602,20 @@ private:
         write_ea(0, n);
     }
 
+    void handle_OR()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        const uint32_t res = l | r;
+        write_ea(1, res);
+        update_flags(srm_ccr_no_x, res, 0);
+    }
+
     void handle_PEA()
     {
         assert(inst_->nea == 1 && inst_->size == opsize::l);
-        auto& a7 = state_.A(7);
-        a7 -= 4;
-        mem_.write_u32(a7, ea_data_[0]);
+        push_u32(ea_data_[0]);
     }
 
     void handle_RTS()
@@ -1557,19 +1670,20 @@ int main()
 {
     try {
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
-        const char* const rom_file = "../../rom.bin";
+        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        //const char* const rom_file = "../../rom.bin";
         memory_handler mem { 1U<<20 };
         rom_area_handler rom { mem, read_file(rom_file) };
         cia_handler cias { mem, rom };
         custom_handler custom { mem };
         m68000 cpu { mem };
 
-        cpu.trace(true);
         for (;;) {
             try {
                 cpu.step();
                 //if (cpu.state().pc == 0xFC00E2) // After delay loop
+                //    cpu.trace(true);
+                //if (cpu.state().pc == 0x00fc08f6)
                 //    cpu.trace(true);
                 //if (cpu.instruction_count() == 7110-2)
                 //    cpu.trace(true);

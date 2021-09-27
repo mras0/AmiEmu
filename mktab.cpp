@@ -52,7 +52,7 @@ constexpr const inst_desc insts[] = {
 //   Name                  Sizes    5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0   Immeditate
 //
     //{"ORI.B #I, CCR"     , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" },
-    //{"ORI.W #I, SSR"     , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" },
+    {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ORI to SR
     {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     //{"ANDI.B #I, CCR"    , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
     //{"ANDI.W #I, SR"     , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" },
@@ -74,9 +74,9 @@ constexpr const inst_desc insts[] = {
     //{"MOVEP"             , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" },
     {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , 0 },
     {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , 0 },
-    //{"MOVE.W SR, #1"     , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " },
+    {"MOVE"              , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " , block_An, ea_sr }, // Move from SR
     //{"MOVE.B #1, CCR"    , "B  " , "0 1 0 0 0 1 0 0 1 1 M     Xn   " , "   " },
-    {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " , block_An, 0|ea_sr << 8 }, // Move to SR
+    {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " , block_An, ea_sr << 8 }, // Move to SR
     {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " },
     {"CLR"               , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " },
     {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " },
@@ -267,6 +267,21 @@ bool isbitop;
 bool swap_ea;
 int rot_dir;
 
+void do_fixed_ea(uint16_t fixed_ea, instruction_info& ai)
+{
+    assert(fixed_ea);
+    assert(ai.nea < 2);
+    if (fixed_ea & 0xff) {
+        assert(ai.nea == 1);
+        assert(fixed_ea < 256);
+        ai.ea[1] = ai.ea[0];
+        ai.ea[0] = static_cast<uint8_t>(fixed_ea);
+        ++ai.nea;
+    } else {
+        ai.ea[ai.nea++] = static_cast<uint8_t>(fixed_ea >> 8);
+    }
+}
+
 void output_plain(uint16_t inst, const char* name)
 {
     auto& ai = all_instructions[inst]; 
@@ -274,7 +289,7 @@ void output_plain(uint16_t inst, const char* name)
     ai.type = ai.name = name;
 }
 
-void output_plain_with_imm(uint16_t inst, const char* name, const char* imm)
+void output_plain_with_imm(uint16_t inst, const char* name, const char* imm, uint16_t fixed_ea)
 {
     auto& ai = all_instructions[inst];
     assert(ai.name.empty());
@@ -288,6 +303,8 @@ void output_plain_with_imm(uint16_t inst, const char* name, const char* imm)
 //        break;
     case 'W':
         ai.osize = opsize::w;
+        if (fixed_ea)
+            ai.name += ".W";
         ++ai.ea_words;
         break;
 //    case 'L':
@@ -296,6 +313,8 @@ void output_plain_with_imm(uint16_t inst, const char* name, const char* imm)
     default:
         assert(false);
     }
+    if (fixed_ea)
+        do_fixed_ea(fixed_ea, ai);
 }
 
 
@@ -460,12 +479,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         ai.name = name;
 
         if (desc.fixed_ea) {
-            assert(ai.nea < 2);
-            if (desc.fixed_ea & 0xff) {
-                assert(!"Not implemented");
-            } else {
-                ai.ea[ai.nea++] = static_cast<uint8_t>(desc.fixed_ea >> 8);
-            }
+            do_fixed_ea(desc.fixed_ea, ai);
         }
 
         ai.ea_words = 0;
@@ -759,7 +773,7 @@ int main(int argc, char* argv[])
             if (!strcmp(i.imm, "   "))
                 output_plain(match, i.name);
             else
-                output_plain_with_imm(match, i.name, i.imm);
+                output_plain_with_imm(match, i.name, i.imm, i.fixed_ea);
             continue;
         }
 
