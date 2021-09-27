@@ -523,6 +523,7 @@ public:
     {
         bool done = false;
         auto wnd = new palette_edit_dialog { done, pal, custom };
+        EnableWindow(parent, FALSE);
         wnd->do_create(L"Edit palette", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
 
         MSG msg = { 0 };
@@ -559,7 +560,6 @@ private:
     bool on_create(HWND hwnd, const CREATESTRUCT& cs)
     {
         parent_ = cs.hwndParent;
-        EnableWindow(parent_, FALSE);
 
         auto hInstance = GetModuleHandle(nullptr);
         const int w = 85;
@@ -1000,6 +1000,7 @@ public:
     {
         bool done = false;
         auto wnd = new config_dialog { done, disk_filenames };
+        EnableWindow(parent, FALSE);
         wnd->do_create(L"Configuration", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
 
         MSG msg = { 0 };
@@ -1033,7 +1034,6 @@ private:
     bool on_create(HWND hwnd, const CREATESTRUCT& cs)
     {
         parent_ = cs.hwndParent;
-        EnableWindow(parent_, FALSE);
 
         auto hInstance = GetModuleHandle(nullptr);
         const int h = 20;
@@ -1134,7 +1134,7 @@ public:
     static impl* create(int width, int height, const std::array<std::string, 4>& disk_filenames)
     {
         std::unique_ptr<impl> wnd { new impl { width, height, disk_filenames } };
-        const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~WS_THICKFRAME;
+        const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
         RECT r = { 0, 0, width, height + extra_height };
         AdjustWindowRect(&r, style, FALSE);
         wnd->do_create(title_, style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr);
@@ -1362,6 +1362,7 @@ private:
                         capture_mouse();
                     if (on_pause_)
                         on_pause_(false);
+                    SetForegroundWindow(hwnd);
                 }
             } else
                 enqueue_keyboard_event(false, wParam, lParam);
