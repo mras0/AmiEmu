@@ -705,6 +705,26 @@ constexpr T ror(T val, unsigned amt)
     return val >> amt | val << (sizeof(T) * CHAR_BIT - amt);
 }
 
+constexpr float pi = 3.1415926535897932385f;
+
+template <float cutoff_frequeny>
+class simple_lowpass_filter {
+public:
+    simple_lowpass_filter() { }
+
+    float operator()(const float in)
+    {
+        const float out = last_ + alpha_ * (in - last_);
+        last_ = out;
+        return out;
+    }
+
+private:
+    static constexpr float x_ = 2.0f * pi * cutoff_frequeny / audio_sample_rate;
+    static constexpr float alpha_ = x_ / (x_ + 1);
+    float last_ = 0;
+};
+
 enum class ddfstate {
     before_ddfstrt,
     active,
@@ -837,6 +857,20 @@ struct custom_state {
         uint16_t percnt;
         uint16_t actvol;
         bool dmareq;
+        //http://eab.abime.net/showthread.php?t=86880
+        //A500: 0.1 uF, 360 Ohm -> 4,4 kHz
+        //A600: 3900 pF, 1.5k Ohm -> 27 kHz
+        //A1200 r1: 3900pF, 1.5kOhm -> 27 kHz
+        //A1200 r2: 6800pF, 680 Ohm -> 34 kHz
+        simple_lowpass_filter<4400.0f> filter;
+
+        void load_per()
+        {
+            percnt = per;
+            if (per && per < 113)
+                per = 113;
+        }
+
     } audio_channels[4];
 
     uint16_t sprite_vpos_start(uint8_t spr)
@@ -1471,7 +1505,7 @@ public:
                     ch.state = custom_state::audio_channel_state::dma_starting;
                     ch.ptr = ch.lc;
                     ch.actlen = ch.len;
-                    ch.percnt = ch.per;
+                    ch.load_per();
                     ch.actvol = ch.vol;
                     ch.dmareq = true;
                     if (DEBUG_AUDIO)
@@ -1481,14 +1515,14 @@ public:
             case custom_state::audio_channel_state::dma_samp1:
                 if (ch.percnt == 1) {
                     ch.state = custom_state::audio_channel_state::dma_samp2;
-                    ch.percnt = ch.per;
-                } else if (ch.percnt) {
-                    ch.percnt--;
+                    ch.load_per();
+                } else {
+                    ch.percnt--; // period 0 => period 65536
                 }
                 break;
             case custom_state::audio_channel_state::dma_samp2:
                 if (ch.percnt == 1) {
-                    ch.percnt = ch.per;
+                    ch.load_per();
                     ch.dmareq = true;
                     if (ch.actlen == 1) {
                         if (DEBUG_AUDIO)
@@ -1499,8 +1533,8 @@ public:
                     } else {
                         ch.actlen--;
                     }
-                } else if (ch.percnt) {
-                    ch.percnt--;
+                } else {
+                    ch.percnt--; // period 0 => period 65536
                 }
                 break;
             }
@@ -1551,7 +1585,7 @@ public:
                 continue;
             // -128..127 * 128 (max) = -16384..16383 (and then two channels)
             dat *= ch.vol * 2;
-
+            dat = static_cast<int16_t>(ch.filter(static_cast<float>(dat)));
             if (idx == 0 || idx == 3)
                 l += dat;
             else
@@ -2156,9 +2190,6 @@ public:
                 ch.len = val;
                 return;
             case 3: // PER
-                if (val && val < 124) {
-                    DBGOUT << "Audio write to " << custom_regname(offset) << " val " << (int)val << " -- Warning period value is too low!\n";
-                }
                 ch.per = val;
                 return;
             case 4: // VOL
@@ -2229,10 +2260,10 @@ public:
 
         switch (offset) {
         case BLTDDAT: // $000
-            return; // Dummy address
         case DMACONR: // $002
         case VPOSR:   // $004
         case VHPOSR:  // $006
+        case INTREQR: // $01E
             // Don't spam if RMW instructions used for these registers
             return;
         case DSKPTH: // $020:
@@ -2364,8 +2395,6 @@ public:
             return;
         case INTENA:  // $09A
             setclr(s_.intena, val);
-            if (s_.intena & (INTF_AUD0 | INTF_AUD1 | INTF_AUD2 | INTF_AUD3))
-                std::cerr << "Warning: INTENA contains AUDx interrupts: $" << hexfmt(s_.intena) << "\n";
             return;
         case INTREQ:  // $09C
             val &= ~INTF_INTEN;

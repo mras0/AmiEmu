@@ -701,7 +701,7 @@ int main(int argc, char* argv[])
         };
 
         if (!cmdline_args.nosound) {
-            audio = std::make_unique<wavedev>(audio_samples_per_frame * 50, audio_buffer_size, [&](int16_t* buf, size_t sz) {
+            audio = std::make_unique<wavedev>(audio_sample_rate, audio_buffer_size, [&](int16_t* buf, size_t sz) {
                 static_assert(2 * audio_samples_per_frame == audio_buffer_size);
                 assert(sz == audio_samples_per_frame);
                 {
