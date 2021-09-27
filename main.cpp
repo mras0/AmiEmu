@@ -111,7 +111,7 @@ unsigned ea_extra_words(uint8_t ea, opsize size)
     case ea_m_A_ind_disp16:
         return 1;
     case ea_m_A_ind_index:
-        break;
+        return 1; // more if bit 8 is 1... Not supported on 68000 though?
     case ea_m_Other:
         switch (ea & 7) {
         case ea_other_abs_w:
@@ -132,7 +132,7 @@ unsigned ea_extra_words(uint8_t ea, opsize size)
             return 1;
         return 0;
     }
-    std::cout << "Unsupported EA: 0x" << hexfmt(ea) << "\n";
+    std::cout << "Unsupported EA: 0x" << hexfmt(ea) << " M=0b" << binfmt(ea>>3, 5) << " Xn=0b" << binfmt(ea&7,3) << "\n";
     assert(0);
     return 0;
 }
@@ -186,11 +186,11 @@ int main()
         std::cout << "Initial SP=" << hexfmt(initial_sp) << " PC=" << hexfmt(initial_pc) << "\n";
         uint32_t pc = initial_pc;
 
-        constexpr const unsigned max_inst_words = 4; // XXX
+        constexpr const unsigned max_inst_words = 4; // XXX Up to 11 according to manual, but might not be supported on 68k
         for (;;) {
             const auto start_pc = pc;
             const auto iword = mem.read_u16(pc);
-            uint16_t eawords[32];
+            uint16_t eawords[10];
             pc += 2;
 
             const auto& inst = instructions[iword];
@@ -201,6 +201,7 @@ int main()
             }
             if (inst.extra & extra_disp_flag)
                 ++ea_words;
+            assert(ea_words <= 10);
             std::cout << hexfmt(start_pc) << "\t" << hexfmt(iword);
             for (unsigned i = 0; i < ea_words; ++i) {
                 eawords[i] = mem.read_u16(pc);
@@ -244,6 +245,25 @@ int main()
                     std::cout << "(A" << (ea & 7) << ")";
                     break;
                 }
+                case ea_m_A_ind_index: {
+                    assert(eaw < ea_words);
+                    const auto extw = eawords[eaw++];
+                    if (extw & (7 << 8)) {
+                        std::cout << "Full extension word/scale not supported\n";
+                        assert(0);
+                    } else {
+                        auto disp = static_cast<int8_t>(extw & 255);
+                        std::cout << "$";
+                        if (disp < 0) {
+                            std::cout << "-";
+                            disp = -disp;
+                        }
+                        std::cout << hexfmt(static_cast<uint8_t>(disp)) << "(A" << (ea & 7) << ",";
+                        std::cout << ((extw & (1 << 15)) ? "A" : "D") << ((extw>>12)&7) << "." << (((extw>>11)&1)?"L":"W");
+                        std::cout << ")";
+                        break;
+                    }
+                }
                 case ea_m_Other:
                     switch (ea & 7) {
                     case ea_other_abs_w:
@@ -259,6 +279,18 @@ int main()
                         std::cout << hexfmt(eawords[eaw++]);
                         std::cout << ".L";
                         break;
+                    case ea_other_pc_disp16: {
+                        assert(eaw < ea_words);
+                        int16_t n = eawords[eaw++];
+                        std::cout << "$";
+                        if (n < 0) {
+                            std::cout << "-";
+                            n = -n;
+                        }
+                        std::cout << hexfmt(static_cast<uint16_t>(n));
+                        std::cout << "(PC)";
+                        break;
+                    }
                     case ea_other_imm:
                         std::cout << "#$";
                         if (inst.size == opsize::l) {

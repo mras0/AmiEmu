@@ -30,7 +30,7 @@ enum class inst_type {
     BTST,
     Bcc,
     CHK,
-    CLRX,
+    CLR,
     CMP,
     CMPA,
     CMPI,
