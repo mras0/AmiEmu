@@ -358,13 +358,15 @@ private:
                 return;
             case ea_other_pc_disp16:
                 assert(iword_idx_ < inst_->ilen);
-                res = start_pc_ + 2 + sext(iwords_[iword_idx_++], opsize::w);
+                res = start_pc_ + 2 * iword_idx_; // the PC used is the address of the extension word
+                res += sext(iwords_[iword_idx_++], opsize::w);
                 return;
             case ea_other_pc_index: {
                 assert(iword_idx_ < inst_->ilen);
+                res = start_pc_ + 2 * iword_idx_; // the PC used is the address of the extension word
                 const auto extw = iwords_[iword_idx_++];
                 // Scale in bits 9/10 and full extension word format (bit 8) is ignored on 68000
-                res = start_pc_ + 2 + sext(extw, opsize::b);
+                res += sext(extw, opsize::b);
                 uint32_t r = (extw >> 12) & 7;
                 if ((extw >> 15) & 1) {
                     r = state_.A(r);
