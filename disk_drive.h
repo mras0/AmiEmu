@@ -13,6 +13,8 @@ constexpr uint8_t DSKF_PROT	      = 1 << 3;
 constexpr uint8_t DSKF_CHANGE	  = 1 << 2;
 constexpr uint8_t DSKF_ALL        = 0xf << 2;
 
+constexpr uint16_t MFM_TRACK_SIZE_WORDS = 0x1900; // Number of words in a MFM track
+
 class disk_drive {
 public:
     explicit disk_drive();
@@ -26,7 +28,7 @@ public:
     void set_motor(bool enabled);
     void set_side_dir(bool side, bool dir);
     void dir_step();
-    void read_mfm_track(uint8_t* dest, uint16_t wordcount);
+    void read_mfm_track(uint8_t* dest); // Need to be able to hold MFM_TRACK_SIZE words
     void set_disk_activity_handler(const disk_activity_handler& handler);
     void show_debug_state(std::ostream& os);
 

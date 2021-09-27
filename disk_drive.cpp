@@ -17,7 +17,6 @@ constexpr uint16_t NUMSECS        = 11;                  // sectors per track
 constexpr uint16_t TD_SECTOR      = 512;                 // bytes per sector
 constexpr uint16_t TRACK_SIZE     = NUMSECS*TD_SECTOR;   // bytes per track
 constexpr uint16_t MFM_SYNC       = 0x4489;              // MFM sync value
-constexpr uint16_t MFM_TRACK_SIZE = 0x1900;              // Number of words in a MFM track
 constexpr uint16_t NUM_CYLINDERS  = 80;                  // There are 80 cylinders on a Amiga floppy disk
 constexpr uint32_t DISK_SIZE      = NUM_CYLINDERS * 2 * TRACK_SIZE; // Each cylinder has 2 MFM tracks, 1 on each side 
 
@@ -113,10 +112,8 @@ public:
 #endif
     }
 
-    void read_mfm_track(uint8_t* dest, uint16_t wordcount)
+    void read_mfm_track(uint8_t* dest)
     {
-        if (wordcount < (1088 / 2) * NUMSECS)
-            throw std::runtime_error { "Unsupported MFM read from drive (count=$" + hexstring(wordcount) + ")" };
         if (!motor_)
             throw std::runtime_error { "Reading while motor is not on" };
 
@@ -151,10 +148,7 @@ public:
             dest += 1088;
         }
         // gap
-        for (uint16_t i = (1088/2) * NUMSECS; i < wordcount; ++i) {
-            *dest++ = 0xaa;
-            *dest++ = 0xaa;
-        }
+        memset(dest, 0xaa, MFM_TRACK_SIZE_WORDS * 2 - 1088 * NUMSECS);
     }
 
     void set_disk_activity_handler(const disk_activity_handler& handler)
@@ -209,9 +203,9 @@ void disk_drive::dir_step()
     impl_->dir_step();
 }
 
-void disk_drive::read_mfm_track(uint8_t* dest, uint16_t wordcount)
+void disk_drive::read_mfm_track(uint8_t* dest)
 {
-    impl_->read_mfm_track(dest, wordcount);
+    impl_->read_mfm_track(dest);
 }
 
 void disk_drive::set_disk_activity_handler(const disk_activity_handler& handler)

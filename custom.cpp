@@ -469,6 +469,10 @@ struct custom_state {
     uint16_t dskwait; // HACK
     uint16_t dsklen_act;
     uint16_t dsksync;
+    bool dsksync_passed;
+    bool dskread;
+    uint16_t mfm_pos;
+    uint8_t mfm_track[MFM_TRACK_SIZE_WORDS * 2];
 
     uint32_t copper_pt;
     uint16_t copper_inst[2];
@@ -834,6 +838,70 @@ public:
 #endif
     }
 
+    bool do_disk_dma()
+    {
+#ifdef DISK_DMA_DEBUG
+        const uint16_t colclock = s_.hpos >> 1;
+#endif
+        TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
+        if (s_.dskwait) {
+            --s_.dskwait;
+#ifdef DISK_DMA_DEBUG
+            if (!s_.dskwait)
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Disk wait done\n";
+#endif
+            return false;
+        }
+        
+        if (!s_.dskread) {
+            assert(s_.mfm_pos == 0);
+#ifdef DISK_DMA_DEBUG
+            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading track\n";
+#endif
+            cia_.active_drive().read_mfm_track(s_.mfm_track);
+            s_.dskread = true;
+            s_.dskwait = 0;
+            return false;
+        }
+
+        if (!s_.dsksync_passed && (s_.adkcon & 0x400)) {
+            assert(s_.mfm_pos == 0);
+            for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
+                if (get_u16(&s_.mfm_track[i * 2]) == s_.dsksync) {
+#ifdef DISK_DMA_DEBUG
+                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Disk sync word ($" << hexfmt(s_.dsksync) << " matches at word pos $" << hexfmt(i) << "\n";
+#endif
+                    s_.mfm_pos = i + 1;
+                    s_.intreq |= INTF_DSKSYNC;
+                    s_.dsksync_passed = true;
+                    s_.dskwait = 10; // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
+                    return false;
+                }
+            }
+            TODO_ASSERT(!"Sync word not found?");
+        }
+
+
+        const uint16_t nwords = s_.dsklen_act & 0x3FFF;
+        TODO_ASSERT(nwords > 0);
+
+#ifdef DISK_DMA_DEBUG
+        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm offset=$" << hexfmt(s_.mfm_pos) << "\n";
+#endif
+        for (uint16_t i = 0; i < nwords; ++i) {
+            uint16_t val = 0xaaaa;
+            if (s_.mfm_pos < MFM_TRACK_SIZE_WORDS) {
+                val = get_u16(&s_.mfm_track[s_.mfm_pos*2]);
+                ++s_.mfm_pos;
+            }
+            mem_.write_u16(s_.dskpt, val);
+            s_.dskpt += 2;
+        }
+        s_.intreq |= INTF_DSKBLK;
+        s_.dsklen_act = 0;
+        return true;
+    }
+
     void step()
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
@@ -1094,37 +1162,8 @@ public:
 
                 // Disk
                 if ((colclock == 7 || colclock == 9 || colclock == 11) && (s_.dmacon & DMAF_DISK) && (s_.dsklen & 0x8000) && s_.dsklen_act) {
-                    // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
-                    ++s_.dskwait;
-                    if (s_.dskwait == 100) {
-#ifdef DISK_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Setting DSKSYNC\n";
-#endif
-                        s_.intreq |= INTF_DSKSYNC;
-                    } else if (s_.dskwait >= 200) {
-                        const uint16_t nwords = s_.dsklen_act & 0x3FFF;
-                        TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
-                        TODO_ASSERT(nwords > 0);
-                        TODO_ASSERT(!(s_.adkcon & 0x400) || s_.dsksync == 0x4489);
-#ifdef DISK_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << "\n";
-#endif
-                        // TODO: Skip to 2nd sync word if WORDSYNC ($400) enabled?
-                        std::vector<uint8_t> data(nwords * 2);
-                        cia_.active_drive().read_mfm_track(&data[0], nwords);
-
-                        for (uint16_t i = 0; i < nwords; ++i)
-                            mem_.write_u16(s_.dskpt + i * 2, get_u16(&data[i * 2]));
-
-                        #if 0
-                        hexdump(std::cout, &data[0], 1088 / 2);
-
-                        #endif
-
-                        s_.intreq |= INTF_DSKBLK;
-                        s_.dsklen_act = 0;
+                    if (do_disk_dma())
                         break;
-                    }
                 }
 
                 // TODO: Audio
@@ -1431,6 +1470,9 @@ public:
             s_.dsklen_act = s_.dsklen == val ? val : 0;
             s_.dsklen = val;
             s_.dskwait = 0;
+            s_.mfm_pos = 0;
+            s_.dsksync_passed = false;
+            s_.dskread = false;
 #ifdef DISK_DMA_DEBUG
             std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Write to DSKLEN: $" << hexfmt(val) << (s_.dsklen_act && (s_.dsklen_act & 0x8000) ? " - Active!" : "") << "\n";
 #endif
