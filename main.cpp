@@ -58,11 +58,10 @@ FC00CC  00FC00D2                    RT_INIT         (execution address)*
 int main(int argc, char* argv[])
 {
     try {
-
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
-        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 2.0 (A600).rom";
+        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 2.0 (A600).rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 3.1 (A600).rom";
         //const char* const rom_file = "../../rom.bin";
         //const char* const rom_file = "../../aros.rom";
@@ -72,9 +71,9 @@ int main(int argc, char* argv[])
         cia_handler cias { mem, rom };
         custom_handler custom { mem, cias };
 
-        const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
-        ram_handler slow_ram { slow_size }; // For KS1.2
-        mem.register_handler(slow_ram, slow_base, slow_size);
+        //const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
+        //ram_handler slow_ram { slow_size }; // For KS1.2
+        //mem.register_handler(slow_ram, slow_base, slow_size);
 
         m68000 cpu { mem };
 
