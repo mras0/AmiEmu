@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "debug.h"
 #include "state_file.h"
+#include "dms.h"
 
 namespace {
 
@@ -62,10 +63,19 @@ public:
     {
         if (DEBUG_DISK)
             *debug_stream << name_ << " Inserting disk of size $" << hexfmt(data.size(), 8) << "\n";
-        if (data.size() != 0 && data.size() != DISK_SIZE) {
+        if (data.empty()) {
+            data_.clear();
+            return;
+        }
+
+        if (dms_detect(data))
+            data_ = dms_unpack(data);
+        else
+            data_ = std::move(data);
+
+        if (data_.size() != DISK_SIZE) {
             throw std::runtime_error { name_ + " Invalid disk size $" + hexstring(data.size()) };
         }
-        data_ = std::move(data);
     }
 
     uint8_t cia_state() const

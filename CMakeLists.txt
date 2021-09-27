@@ -78,6 +78,7 @@ add_executable(amiemu
     rtc.cpp rtc.h
     autoconf.cpp autoconf.h
     harddisk.cpp harddisk.h
+    dms.cpp dms.h
     ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
     )
 set_source_files_properties(exprom.asm PROPERTIES HEADER_FILE_ONLY TRUE)
