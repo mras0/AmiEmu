@@ -10,11 +10,18 @@
 #include <memory>
 #include "ioutil.h"
 
-/*
-http://goldencrystal.free.fr/M68kOpcodes-v2.3.pdf
+constexpr uint8_t ea_imm = 0b00'111'100;
 
-XXX: EXG omitted
-*/
+// Note: Sync these with instruction.cpp/h
+constexpr uint8_t ea_data3 = 0b01'000'000;
+constexpr uint8_t ea_data4 = 0b01'000'001;
+constexpr uint8_t ea_data8 = 0b01'000'010;
+constexpr uint8_t ea_disp  = 0b01'000'011;
+constexpr uint8_t ea_sr    = 0b01'000'100;
+
+constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
+constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
+
 
 constexpr const unsigned block_Dn  = 1U << 0;
 constexpr const unsigned block_An  = 1U << 1;
@@ -25,7 +32,8 @@ struct inst_desc {
     const char* sizes;
     const char* bits;
     const char* imm;
-    unsigned block = block_An; // By default block An
+    uint32_t block = block_An; // By default block An
+    uint16_t fixed_ea;
 };
 
 enum class opsize {
@@ -36,6 +44,7 @@ enum class opsize {
 };
 
 constexpr const inst_desc insts[] = {
+// Based off http://goldencrystal.free.fr/M68kOpcodes-v2.3.pdf
 //                                  1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0
 //   Name                  Sizes    5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0   Immeditate
 //
@@ -60,11 +69,11 @@ constexpr const inst_desc insts[] = {
     {"BCLR"              , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" },
     {"BSET"              , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" },
     //{"MOVEP"             , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" },
-    {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   ", 0},
-    {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " },
+    {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   ", 0 },
+    {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   ", 0 },
     //{"MOVE.W SR, #1"     , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " },
     //{"MOVE.B #1, CCR"    , "B  " , "0 1 0 0 0 1 0 0 1 1 M     Xn   " , "   " },
-    //{"MOVE.W #1, SR"     , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " },
+    {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   ", block_An, 0|ea_sr << 8 }, // Move to SR
     {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " },
     {"CLRX"              , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " },
     {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " },
@@ -114,6 +123,7 @@ constexpr const inst_desc insts[] = {
     {"MULU"              , " W " , "1 1 0 0 Dn    0 1 1 M     Xn   " , "   " },
     {"MULS"              , " W " , "1 1 0 0 Dn    1 1 1 M     Xn   " , "   " },
     {"ABCD"              , "B  " , "1 1 0 0 Xn    1 0 0 0 0 m Xn   " , "   " },
+    {"EXG"               , "  L" , "1 1 0 0 Xn    1 ME  0 0 MeXn   " , "   ", 0 },
     {"AND"               , "BWL" , "1 1 0 0 Dn    DzSx  M     Xn   " , "   " },
     {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   ", 0 },
     {"ADDX"              , "BWL" , "1 1 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
@@ -133,6 +143,8 @@ constexpr const inst_desc insts[] = {
     X(Sy, 2)           \
     X(Sz, 1)           \
     X(Mr, 1)           \
+    X(ME, 2)           \
+    X(Me, 1)           \
     X(M, 3)            \
     X(m, 1)            \
     X(Xn, 3)           \
@@ -240,19 +252,9 @@ struct instruction_info {
 };
 instruction_info all_instructions[65536];
 
-constexpr uint8_t ea_imm = 0b00'111'100;
-
-// Note: Sync these with instruction.cpp/h
-constexpr uint8_t ea_data3 = 0b01'000'000;
-constexpr uint8_t ea_data4 = 0b01'000'001;
-constexpr uint8_t ea_data8 = 0b01'000'010;
-constexpr uint8_t ea_disp  = 0b01'000'011;
-
-constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
-constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
-
 opsize osize;
 int M; // M is always before Xn (except for MOVE)
+int ME; // For EXG
 int nea;
 int cond;
 uint8_t ea[2];
@@ -445,6 +447,24 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         }
         ai.name = name;
 
+        if (desc.fixed_ea) {
+            assert(ai.nea < 2);
+            if (desc.fixed_ea & 0xff) {
+                assert(!"Not implemented");
+            } else {
+                ai.ea[ai.nea++] = static_cast<uint8_t>(desc.fixed_ea >> 8);
+            }
+        }
+
+        #if 0
+        if (!strcmp(desc.name, "EXG")) {
+            std::cout << hexfmt(match) << ": EXG";
+            for (int i = 0; i < nea; ++i)
+                std::cout << (i ? ", " : "\t") << fmtea(ea[i]);
+            std::cout << "\n";
+        }
+        #endif
+
         return;
     }
     assert(mask != 0xffff);
@@ -527,19 +547,19 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
 
         assert(M >= 0 && M < 8);
         assert(nea < 2);
-        for (unsigned i = 0; i < 8; ++i) {
-            if (M == 0b111) {
+        for (unsigned i = 0, Mact = (ME == -1 || nea == 0 ? M : ME); i < 8; ++i) {
+            if (Mact == 0b111) {
                 if (i > 4)
                     break;
                 if (i == 4 && (desc.block & block_Imm))
                     break;
             }
-            if (!swap_ea && nea == 1 && ea[0] < 8) {
+            if (!swap_ea && nea == 1 && ea[0] < 8 && strcmp(desc.name, "EXG")) {
                 // HACK: Block An/Dn and imm for e.g. OR
-                if (M == 0 || M == 1 || (M == 7 && i == 4))
+                if (Mact == 0 || Mact == 1 || (Mact == 7 && i == 4))
                     continue;
             }
-            ea[nea++] = static_cast<uint8_t>(M << 3 | i);
+            ea[nea++] = static_cast<uint8_t>(Mact << 3 | i);
             recur(i);
             --nea;
         }
@@ -695,6 +715,7 @@ int main(int argc, char* argv[])
         }
 
         M = -1;
+        ME = -1;
         osize = opsize::none;
         nea = 0;
         cond = -1;
@@ -725,7 +746,19 @@ int main(int argc, char* argv[])
             M = 0b000;
             gen_insts(i, fields, 0, mask, match);
             M = 0b100;
-            gen_insts(i, fields, 0, mask, match|(1<<p));
+            gen_insts(i, fields, 0, mask, match | (1 << p));
+        } else if (int MEp = extract_field(field_type::ME, fields); MEp >= 0) {
+            // Hack hack
+            const int Mep = extract_field(field_type::Me, fields);
+            assert(Mep >= 0);
+            mask |= 3 << MEp | 1 << Mep;
+            M = 0b000;
+            gen_insts(i, fields, 0, mask, match | 0b01 << MEp | 0b0 << Mep);
+            M = 0b001;
+            gen_insts(i, fields, 0, mask, match | 0b01 << MEp | 0b1 << Mep);
+            M = 0b000;
+            ME = 0b001;
+            gen_insts(i, fields, 0, mask, match | 0b10 << MEp | 0b1 << Mep);
         } else {
             gen_insts(i, fields, 0, mask, match);
         }

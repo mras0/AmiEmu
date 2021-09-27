@@ -237,6 +237,11 @@ int main()
                     }
                     break;
                 case ea_m_inst_data:
+                    if (ea == ea_sr) {
+                        std::cout << "SR";
+                        break;
+                    }
+
                     if (inst.extra & extra_disp_flag) {
                         assert(ea == ea_disp);
                         assert(eaw < ea_words);
