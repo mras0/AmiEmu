@@ -208,16 +208,6 @@
 
 namespace {
 
-static std::string regname(uint32_t offset)
-{
-    switch (offset) {
-#define CHECK_NAME(name, offset, _) case offset: return #name;
-        CUSTOM_REGS(CHECK_NAME)
-#undef CHECK_NAME
-    }
-    return "$" + hexstring(offset, 3);
-}
-
 enum regnum {
 #define REG_NUM(name, offset, _) name = offset,
     CUSTOM_REGS(REG_NUM)
@@ -602,6 +592,21 @@ public:
         os << "COP1LC: " << hexfmt(s_.coplc[0]) << " COP2LC: " << hexfmt(s_.coplc[1]) << " COPPTR: " << hexfmt(s_.copper_pt) << "\n";
         os << "DIWSTRT: " << hexfmt(s_.diwstrt) << " DIWSTOP: " << hexfmt(s_.diwstop) << " DDFSTRT: " << hexfmt(s_.ddfstrt) << " DDFSTOP: " << hexfmt(s_.ddfstop) << "\n";
         os << "BPLCON 0: " << hexfmt(s_.bplcon0) << " 1: " << hexfmt(s_.bplcon1) << " 2: " << hexfmt(s_.bplcon2) << "\n";
+    }
+
+    uint32_t copper_ptr(uint8_t idx) // 0=current
+    {
+        switch (idx) {
+        case 0:
+            return s_.copper_pt & chip_ram_mask_;
+        case 1:
+            return s_.coplc[0] & chip_ram_mask_;
+        case 2:
+            return s_.coplc[1] & chip_ram_mask_;
+        default:
+            TODO_ASSERT(!"Invalid index");
+            return 0;
+        }
     }
 
     void log_blitter_state()
@@ -1371,7 +1376,7 @@ public:
             return 0;
         }
 
-        std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
+        std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << custom_regname(offset) << ")\n";
         return 0xffff;
     }
 
@@ -1646,7 +1651,7 @@ public:
         case 0x1fe:   // NO-OP
             return;
         }
-        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
+        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << custom_regname(offset) << ")"
                   << " val $" << hexfmt(val) << "\n";
     }
 
@@ -1738,4 +1743,22 @@ void custom_handler::mouse_move(int dx, int dy)
 void custom_handler::show_debug_state(std::ostream& os)
 {
     impl_->show_debug_state(os);
+}
+
+uint32_t custom_handler::copper_ptr(uint8_t idx)
+{
+    return impl_->copper_ptr(idx);
+}
+
+std::string custom_regname(uint32_t offset)
+{
+    offset &= 0x1ff;
+    switch (offset) {
+#define CHECK_NAME(name, offset, _) \
+    case offset:                    \
+        return #name;
+        CUSTOM_REGS(CHECK_NAME)
+#undef CHECK_NAME
+    }
+    return "$" + hexstring(offset, 3);
 }

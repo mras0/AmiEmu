@@ -4,6 +4,7 @@
 #include <memory>
 #include <functional>
 #include <iosfwd>
+#include <string>
 #include "memory.h"
 
 constexpr unsigned graphics_width  = 768; // 24*16*2
@@ -28,10 +29,13 @@ public:
     void mouse_move(int dx, int dy);
 
     void show_debug_state(std::ostream& os);
+    uint32_t copper_ptr(uint8_t idx); // 0=current
 
 private:
     class impl;
     std::unique_ptr<impl> impl_;
 };
+
+std::string custom_regname(uint32_t offset);
 
 #endif

@@ -123,6 +123,42 @@ uint32_t disasm_stmts(memory_handler& mem, uint32_t start, uint32_t count)
     return addr - start;
 }
 
+uint32_t copper_disasm(memory_handler& mem, uint32_t start, uint32_t count)
+{
+    if (start & 1) {
+        std::cout << "Odd address $" << hexfmt(start) << "\n";
+        return 0;
+    }
+
+    const auto indent = std::string(24, ' ');
+    uint32_t addr = start;
+    while (count--) {
+        const uint16_t i1 = mem.read_u16(addr);
+        const uint16_t i2 = mem.read_u16(addr+2);
+        std::cout << hexfmt(addr) << ": " << hexfmt(i1) << " " << hexfmt(i2) << "\t;  ";
+        if (i1 & 1) { // wait or skip
+            const auto vp = (i1 >> 8) & 0xff;
+            const auto hp = i1 & 0xfe;
+            const auto ve = 0x80 | ((i2 >> 8) & 0x7f);
+            const auto he = i2 & 0xfe;
+            //} else if ((s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he))) {
+            std::cout << (i2 & 1 ? "Skip if" : "Wait for") << " vpos >= $" << hexfmt(vp & ve, 2) << " and hpos >= $" << hexfmt(hp & he, 2) << "\n";
+            std::cout << indent << ";  VP " << hexfmt(vp, 2) << ", VE " << hexfmt(ve & 0x7f, 2) << "; HP " << hexfmt(hp, 2) << ", HE " << hexfmt(he, 2) << "; BFD " << !!(i2 & 0x8000) << "\n";
+        } else {
+            std::cout << custom_regname(i1) << " := $" << hexfmt(i2) << "\n";
+        }
+
+        addr += 4;
+
+        if (i1 == 0xffff && i2 == 0xfffe) {
+            std::cout << indent << ";  End of copper list\n";
+            break;
+        }
+
+    }
+    return addr - start;
+}
+
 } // unnamed namespace
 
 
@@ -375,7 +411,7 @@ int main(int argc, char* argv[])
                     };
 
                     show_state();
-                    uint32_t disasm_pc = s.pc, hexdump_addr = 0;
+                    uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
                         std::cout << "> " << std::flush;
                         std::string line;
@@ -410,6 +446,22 @@ int main(int argc, char* argv[])
                                 hexdump16(std::cout, addr, data.data(), data.size());
                                 hexdump_addr = addr + lines * 16;
                             }
+                        } else if (args[0][0] == 'o') {
+                            if (args[0] == "o") {
+                                auto [valid, addr, lines] = get_addr_and_lines(args, cop_addr, 20);
+                                if (valid) {
+                                    cop_addr = addr & ~1;
+                                    cop_addr += copper_disasm(mem, cop_addr, lines);
+                                }
+                            } else if (args[0] == "o1") {
+                                cop_addr = custom.copper_ptr(1);
+                                cop_addr += copper_disasm(mem, cop_addr, 20);
+                            } else if (args[0] == "o2") {
+                                cop_addr = custom.copper_ptr(2);
+                                cop_addr += copper_disasm(mem, cop_addr, 20);
+                            } else {
+                                goto unknown_command;
+                            }
                         } else if (args[0] == "q") {
                             quit = true;
                             break;
@@ -423,6 +475,7 @@ int main(int argc, char* argv[])
                             g.set_active(true);
                             break;
                         } else {
+unknown_command:
                             std::cout << "Unknown command \"" << args[0] << "\"\n";
                         }
                     }
