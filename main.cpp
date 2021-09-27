@@ -635,7 +635,7 @@ int main(int argc, char* argv[])
         m68000::step_result cpu_step {};
         std::unique_ptr<std::ofstream> trace_file;
         bool new_frame = false;
-        bool cpu_active = true;
+        bool cpu_active = false;
         uint32_t cycles_todo = 0;
         uint32_t idle_count = 0;
         std::mutex audio_mutex_;
@@ -664,8 +664,10 @@ int main(int argc, char* argv[])
         #endif
 
         auto cstep = [&](bool cpu_waiting) {
+            const bool cpu_was_active = cpu_active;
             cpu_active = false;
             custom_step = custom.step(cpu_waiting);
+            cpu_active = cpu_was_active;
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
                 active_debugger();
                 wait_mode = wait_none;
@@ -700,7 +702,6 @@ int main(int argc, char* argv[])
                 }
                 #endif
             }
-            cpu_active = true;
         };
 
         auto do_all_custom_cylces = [&]() {
@@ -1049,7 +1050,9 @@ unknown_command:
                     g.set_active(true);
                 }
 
+                cpu_active = true;
                 cpu_step = cpu.step(custom_step.ipl);
+                cpu_active = false;
                    
                 if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr)) {
                     active_debugger();

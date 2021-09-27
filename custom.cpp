@@ -222,7 +222,7 @@ enum regnum {
 };
 
 constexpr uint16_t DMAB_SETCLR   = 15; // Set/clear control bit. Determines if bits written with a 1 get set or cleared.Bits written with a zero are unchanged.
-constexpr uint16_t DMAB_BLTDONE  = 14; // Blitter busy status bit (read only) 
+constexpr uint16_t DMAB_BLTBUSY  = 14; // Blitter busy status bit (read only)
 constexpr uint16_t DMAB_BLTNZERO = 13; // Blitter logic zero status bit  (read only).
 constexpr uint16_t DMAB_BLITHOG  = 10; // Blitter DMA priority (over CPU micro) 
 constexpr uint16_t DMAB_MASTER   =  9; // Enable all DMA below
@@ -237,7 +237,7 @@ constexpr uint16_t DMAB_AUD1     =  1; // Audio channel 1 DMA enable
 constexpr uint16_t DMAB_AUD0     =  0; // Audio channel 0 DMA enable
 
 constexpr uint16_t DMAF_SETCLR   = 1 << DMAB_SETCLR;
-constexpr uint16_t DMAF_BLTDONE  = 1 << DMAB_BLTDONE;
+constexpr uint16_t DMAF_BLTBUSY  = 1 << DMAB_BLTBUSY;
 constexpr uint16_t DMAF_BLTNZERO = 1 << DMAB_BLTNZERO;
 constexpr uint16_t DMAF_BLITHOG  = 1 << DMAB_BLITHOG;
 constexpr uint16_t DMAF_MASTER   = 1 << DMAB_MASTER;
@@ -744,6 +744,16 @@ enum class sprite_vpos_state {
     vpos_active,
 };
 
+enum class copper_state {
+    halted,
+    read_inst,
+    need_free_cycle,
+    wait,
+    skip,
+    jmp_delay1,
+    jmp_delay2,
+};
+
 struct custom_state {
     // Internal state
     uint16_t hpos; // Resolution is in low-res pixels
@@ -778,6 +788,7 @@ struct custom_state {
     uint8_t copper_inst_ofs;
     bool copper_skip_next;
     bool cdang;
+    copper_state copstate;
 
     sprite_dma_state spr_dma_states[8];
     sprite_vpos_state spr_vpos_states[8];
@@ -917,15 +928,7 @@ public:
         memset(audio_buf_, 0, sizeof(audio_buf_));
         memset(&s_, 0, sizeof(s_));
         s_.long_frame = true;
-        pause_copper();
-    }
-
-    void pause_copper()
-    {
-        // Indefinte wait
-        s_.copper_inst[0] = 0xffff;
-        s_.copper_inst[1] = 0xfffe;
-        s_.copper_inst_ofs = 2; // Don't fetch new instructions until vblank
+        s_.copstate = copper_state::halted;
     }
 
     void set_serial_data_handler(const serial_data_handler& handler)
@@ -1166,7 +1169,7 @@ public:
         if (s_.blitstate == custom_state::blit_stopped)
             return false;
 
-        assert((s_.dmacon & DMAF_BLTDONE));
+        assert((s_.dmacon & DMAF_BLTBUSY));
 
         if (s_.bltcon1 & BC1F_LINEMODE) {
             // Temp: Immediate blit for lines
@@ -1317,13 +1320,13 @@ public:
 
     void blitstart(uint16_t val)
     {
-        assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTDONE) && s_.blitstate == custom_state::blit_stopped);
+        assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTBUSY) && s_.blitstate == custom_state::blit_stopped);
         s_.bltsize = val;
         s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
         s_.blth = val >> 6 ? val >> 6 : 0x400;
         s_.bltaold = 0;
         s_.bltbold = 0;
-        s_.dmacon |= DMAF_BLTDONE | DMAF_BLTNZERO;
+        s_.dmacon |= DMAF_BLTBUSY | DMAF_BLTNZERO;
         s_.bltx = 0;
         s_.bltcycle = 0;
         s_.bltdwrite = false;
@@ -1361,58 +1364,103 @@ public:
         assert(s_.blitstate == custom_state::blit_final);
         assert(s_.blth == 0);
         s_.intreq |= INTF_BLIT;
-        s_.dmacon &= ~DMAF_BLTDONE;
+        s_.dmacon &= ~DMAF_BLTBUSY;
         s_.bltw = s_.blth = 0;
         s_.blitstate = custom_state::blit_stopped;
     }
 
-    void do_copper()
+    bool do_copper()
     {
-        // TODO: Comparisons are different for copper $ffdf wait should work for asm as well...
-        // Each copper command takes 8 cycles (4 raster pos increments) to execute
-        // TODO: Wait actually uses an extra cycle (?)
-
-        if (s_.copper_inst[0] == 0xFFFF && s_.copper_inst[1] == 0xFFFE) {
-            return;
-        }
-
-        if (s_.copper_inst[0] & 1) {
-            // Wait/skip
-            const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
-            const auto hp = s_.copper_inst[0] & 0xfe;
-            const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
-            const auto he = s_.copper_inst[1] & 0xfe;
-            const bool reached = (s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he));
-
-            if (s_.copper_inst[1] & 1) { // SKIP
-                // TODO: Does BFD matter?
-                s_.copper_inst_ofs = 0; // Fetch next instruction
-                s_.copper_skip_next = reached;
-            } else  if (!(s_.copper_inst[1] & 0x8000) && (s_.dmacon & DMAF_BLTDONE)) {
-                // Blitter wait
-            } else if (reached) {
-                if (DEBUG_COPPER)
-                    DBGOUT << "Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
-                s_.copper_inst_ofs = 0; // Fetch next instruction
-                s_.copper_skip_next = false;
-            }
-
-        } else {
-            const auto reg = s_.copper_inst[0] & 0x1ff;
+        switch (s_.copstate) {
+        case copper_state::halted:
+            return false;
+        case copper_state::read_inst:
+            assert(s_.copper_inst_ofs < 2);
+            s_.copper_inst[s_.copper_inst_ofs++] = chip_read(s_.copper_pt);
+            s_.copper_pt += 2;
             if (DEBUG_COPPER)
-                DBGOUT << (s_.copper_skip_next ? "Skipping write" : "Writing") << " to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
-            if (reg >= 0x80 || (s_.cdang && reg >= 0x40)) {
-                if (!s_.copper_skip_next)
-                    write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
-                s_.copper_inst_ofs = 0; // Fetch next instruction
-                s_.copper_skip_next = false;
+                DBGOUT << "Read copper instruction word $" << hexfmt(s_.copper_inst[s_.copper_inst_ofs - 1]) << " from $" << hexfmt(s_.copper_pt - 2) << "\n";
+            if (s_.copper_inst_ofs != 2)
+                return true;
+            if (s_.copper_inst[0] & 1) {
+                // Wait or skip instruction
+                if (s_.copper_inst[0] == 0xFFFF && s_.copper_inst[1] == 0xFFFE) {
+                    if (DEBUG_COPPER)
+                        DBGOUT << "End of copper list.\n";
+                    s_.copstate = copper_state::halted;
+                } else {
+                    s_.copstate = copper_state::need_free_cycle;
+                }
             } else {
-                // Copper stops on write to dangerous/invalid register (even if supposed to be skipped)
+                // Move instruction: TODO: Registers managed by other chips have delay?
+                const auto reg = s_.copper_inst[0] & 0x1ff;
                 if (DEBUG_COPPER)
-                    DBGOUT << "Illegal register access to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << " - Illegal. Pausing copper.\n";
-                pause_copper();
+                    DBGOUT << (s_.copper_skip_next ? "Skipping write" : "Writing") << " to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
+                if (reg >= 0x80 || (s_.cdang && reg >= 0x40)) {
+                    if (!s_.copper_skip_next)
+                        write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+                    s_.copper_inst_ofs = 0; // Fetch next instruction
+                    s_.copper_skip_next = false;
+                } else {
+                    // Copper stops on write to dangerous/invalid register (even if supposed to be skipped)
+                    if (DEBUG_COPPER)
+                        DBGOUT << "Illegal register access to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << " - Illegal. Pausing copper.\n";
+                    s_.copstate = copper_state::halted;
+                }
             }
+            return true;
+        case copper_state::need_free_cycle:
+            if (DEBUG_COPPER)
+                DBGOUT << "Free cycle -> wait for blitter/y\n";
+            s_.copstate = s_.copper_inst[1] & 1 ? copper_state::skip : copper_state::wait;
+            return false;
+        case copper_state::jmp_delay1:
+            if (DEBUG_COPPER)
+                DBGOUT << "jmp_delay1 done: Allocating cycle\n";
+            s_.copstate = copper_state::jmp_delay2;
+            return true;
+        case copper_state::jmp_delay2:
+            if (DEBUG_COPPER)
+                DBGOUT << "jmp_delay2 done: Allocating cycle\n";
+            s_.copstate = copper_state::read_inst;
+            return true;
+        default:
+            break;
         }
+
+        // Wait or skip
+
+        // Copper compare is ahead to compensate for wake-up delay
+        auto chp = s_.hpos >> 1;
+        auto cvp = s_.vpos;
+        chp += 2;
+        if (chp >= hpos_per_line / 2) {
+            chp -= hpos_per_line / 2;
+            ++cvp;
+        }
+
+        const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
+        const auto hp = s_.copper_inst[0] & 0xfe;
+        const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
+        const auto he = s_.copper_inst[1] & 0xfe;
+        const bool reached = (cvp & ve) > (vp & ve) || ((cvp & ve) == (vp & ve) && (chp & he) >= (hp & he)) && ((s_.copper_inst[1] & 0x8000) || !(s_.dmacon & DMAF_BLTBUSY));
+
+        if (s_.copstate == copper_state::skip) {
+            s_.copper_inst_ofs = 0; // Fetch next instruction
+            s_.copper_skip_next = reached;
+            s_.copstate = copper_state::read_inst;
+            if (DEBUG_COPPER)
+                DBGOUT << "Skip processed, reached = " << reached << "\n";
+        } else if (reached) {
+            assert(s_.copstate == copper_state::wait);
+            s_.copper_inst_ofs = 0; // Fetch next instruction
+            s_.copper_skip_next = false;
+            s_.copstate = copper_state::read_inst;
+            if (DEBUG_COPPER)
+                DBGOUT << "Wait done\n";
+        }
+
+        return false;
     }
 
     void copjmp(int idx)
@@ -1420,6 +1468,7 @@ public:
         assert(idx == 0 || idx == 1);
         s_.copper_inst_ofs = 0;
         s_.copper_pt = s_.coplc[idx];
+        s_.copstate = copper_state::jmp_delay1;
         if (DEBUG_COPPER)
             DBGOUT << "Copper jump to COP" << (idx + 1) << "LC: $" << hexfmt(s_.coplc[idx]) << "\n";
     }
@@ -1863,9 +1912,7 @@ public:
         if (!(s_.hpos & 1))
             do_audio();
 
-        if (s_.copper_inst_ofs == 2)
-            do_copper();
-
+        bool copper_dma = false;
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
             auto do_dma = [this](uint32_t& pt) {
                 const auto val = chip_read(pt);
@@ -1981,21 +2028,16 @@ public:
                 }
 
                 // Copper (uses only odd-numbered cycles)
-                if ((s_.dmacon & (DMAF_MASTER | DMAF_COPPER)) == (DMAF_MASTER | DMAF_COPPER) && s_.copper_inst_ofs < 2 && !(colclock & 1)) {
-                    if (colclock == 0xe0) {
-                        if (DEBUG_COPPER)
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Wasting cycle (HACK)\n";
-                        break; // $E0 not usable by copper?
-                    }
-
-                    s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
-                    if (DEBUG_COPPER) {
-                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Read copper instruction word $" << hexfmt(s_.copper_inst[s_.copper_inst_ofs - 1]) << " from $" << hexfmt(s_.copper_pt - 2) << "\n";
-                        if (s_.copper_inst_ofs == 2 && s_.copper_inst[0] == 0xFFFF && s_.copper_inst[1] == 0xFFFE) {
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " End of copper list.\n";
+                if (s_.dmacon & DMAF_COPPER) {
+                    // $E0 not usable by copper, but $E1 is???
+                    // http://eab.abime.net/showpost.php?p=600609&postcount=47
+                    // But seems like it gets allocated anyway?
+                    if ((!(colclock & 1) && colclock != 0xe0) || colclock == 0xe1) {
+                        if (do_copper()) {
+                            copper_dma = true;
+                            break;
                         }
                     }
-                    break;
                 }
                 
                 // Blitter
@@ -2011,6 +2053,14 @@ public:
             ++s_.bltblockingcpu;
         else
             s_.bltblockingcpu = 0;
+
+        if (s_.copstate == copper_state::jmp_delay1 && !copper_dma && !(s_.hpos & 3)) {
+            // vAmigaTS jump1b test
+            // http://eab.abime.net/showpost.php?p=832397&postcount=118
+            if (DEBUG_COPPER)
+                DBGOUT << "jmp_delay1 done: Advancing even though cycles isn't available\n";
+            s_.copstate = copper_state::jmp_delay2;
+        }
 
         // CIA tick rate is 1/10th of (base) CPU speed
         if (s_.hpos % 10 == 0) {
@@ -2043,12 +2093,11 @@ public:
                 s_.copper_pt = s_.coplc[0];
                 s_.copper_inst_ofs = 0;
                 s_.copper_skip_next = false;
+                s_.copstate = copper_state::read_inst;
                 s_.vpos = 0;
                 s_.long_frame = (s_.bplcon0 & BPLCON0F_LACE ? !s_.long_frame : true);
                 s_.intreq |= INTF_VERTB;
                 cia_.increment_tod_counter(0);
-                if (!(s_.dmacon & DMAF_COPPER))
-                    pause_copper();
             }
         }
 
