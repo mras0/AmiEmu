@@ -786,6 +786,7 @@ struct custom_state {
     uint16_t ddfcycle;
     uint16_t ddfend;
     bool long_frame;
+    bool last_long_frame;
     uint16_t bplmod1_pending;
     uint16_t bplmod2_pending;
     uint8_t bplmod1_countdown;
@@ -1922,11 +1923,30 @@ public:
                 rem_pixels_even_--;
             }
         }
+    }
 
-        if (!(s_.bplcon0 & BPLCON0F_LACE) && s_.long_frame) {
-            assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
-            row[0 + graphics_width] = row[0];
-            row[1 + graphics_width] = row[1];
+    void scandouble()
+    {
+        const uint32_t* src = &gfx_buf_[(!s_.long_frame) * graphics_width];
+        uint32_t* dst = &gfx_buf_[s_.long_frame * graphics_width];
+        for (uint32_t y = 0; y < graphics_height; y += 2) {
+            #if 0
+            // Normal scan doubling
+            memcpy(dst, src, graphics_width * sizeof(uint32_t));
+            #elif 1
+            // Blend/bleed (shift > 1 = bleed)
+            const uint32_t* src2 = s_.long_frame ? &src[y + 2 < graphics_height ? 2 * graphics_width : 0] : &src[y > 2 ? static_cast<int>(graphics_width)*-2 : 0];
+            constexpr uint8_t shift = 1;
+            constexpr uint8_t mask8 = 0xff - ((1 << shift) - 1);
+            constexpr uint32_t mask24 = mask8 << 16 | mask8 << 8 | mask8;
+            for (uint32_t x = 0; x < graphics_width; ++x) {
+                dst[x] = ((src[x] & mask24) + (src2[x] & mask24)) >> shift;
+            }
+            #else
+            // No scandoubling
+            #endif
+            src += 2 * graphics_width;
+            dst += 2 * graphics_width;
         }
     }
 
@@ -2249,6 +2269,9 @@ public:
                 s_.vpos = 0;
                 if (s_.bplcon0 & BPLCON0F_LACE)
                     s_.long_frame = !s_.long_frame;
+                else if (s_.last_long_frame == s_.long_frame)
+                    scandouble();
+                s_.last_long_frame = s_.long_frame;
                 s_.intreq |= INTF_VERTB;
                 cia_.increment_tod_counter(0);
             }
