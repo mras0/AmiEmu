@@ -234,6 +234,20 @@ bool simple_asm_tests()
         { "SLT d3", { 0x5dc3 } },
         { "SGT d3", { 0x5ec3 } },
         { "SLE d3", { 0x5fc3 } },
+        { "ADDX.B d0, d1", { 0xd300 } },
+        { "ADDX.w d2, d3", { 0xd742 } },
+        { "ADDX.l -(a2), -(a3)", { 0xd78a } },
+        { "SUBX.B -(a6), -(a7)", { 0x9f0e } },
+        { "SUBX.w d2, d3", { 0x9742 } },
+        { "SUBX.l -(a2), -(a3)", { 0x978a } },
+        { "DIVU (a0), d0" , { 0x80d0 } },
+        { "DIVU d2, d7" , { 0x8ec2 } },
+        { "DIVS 12(a3), d3" , { 0x87eb, 0x000c } },
+        { "DIVS #40, d4" , { 0x89fc, 0x0028 } },
+        { "MULU (a0), d0" , { 0xc0d0 } },
+        { "MULU d5, d4" , { 0xc8c5 } },
+        { "MULS -(a7), d3" , { 0xc7e7 } },
+        { "MULS #40, d4" , { 0xc9fc, 0x0028 } },
         // MOVEP
         // MOVEM
         // TAS
@@ -244,11 +258,6 @@ bool simple_asm_tests()
         // LINK
         // UNLNK
         // ABCD/SBCD
-        // DIVU
-        // DIVS
-        // MULU
-        // MULS
-        // ADDX/SUBX
         // CMPM
     };  
 

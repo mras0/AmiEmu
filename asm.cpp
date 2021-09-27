@@ -51,6 +51,7 @@ constexpr bool range16(uint32_t val)
 #define INSTRUCTIONS(X)                   \
     X(ADD       , bwl  , w    , 2)        \
     X(ADDQ      , bwl  , w    , 2)        \
+    X(ADDX      , bwl  , w    , 2)        \
     X(AND       , bwl  , w    , 2)        \
     X(BCHG      , bl   , none , 2)        \
     X(BCLR      , bl   , none , 2)        \
@@ -60,6 +61,8 @@ constexpr bool range16(uint32_t val)
     X(CLR       , bwl  , w    , 1)        \
     X(CMP       , bwl  , w    , 2)        \
     WITH_CC(X, DB, DBT, DBF, w, w, 2)     \
+    X(DIVS      , w    , w    , 2)        \
+    X(DIVU      , w    , w    , 2)        \
     X(EOR       , bwl  , w    , 2)        \
     X(EXT       , wl   , w    , 1)        \
     X(EXG       , l    , none , 2)        \
@@ -69,6 +72,8 @@ constexpr bool range16(uint32_t val)
     X(LEA       , l    , l    , 2)        \
     X(MOVE      , bwl  , w    , 2)        \
     X(MOVEQ     , l    , l    , 2)        \
+    X(MULS      , w    , w    , 2)        \
+    X(MULU      , w    , w    , 2)        \
     X(NBCD      , b    , b    , 1)        \
     X(NEG       , bwl  , w    , 1)        \
     X(NEGX      , bwl  , w    , 1)        \
@@ -82,6 +87,7 @@ constexpr bool range16(uint32_t val)
     WITH_CC(X, S, ST, SF, b, b, 1)        \
     X(STOP      , none , none , 1)        \
     X(SUB       , bwl  , w    , 2)        \
+    X(SUBX      , bwl  , w    , 2)        \
     X(SUBQ      , bwl  , w    , 2)        \
     X(SWAP      , w    , w    , 1)        \
     X(TST       , bwl  , w    , 1)        \
@@ -701,6 +707,9 @@ operands_done:
         case token_type::ADDQ:
             iwords[0] = encode_addsub_q(info, ea, osize, false);
             break;
+        case token_type::ADDX:
+            iwords[0] = encode_addsub_x(info, ea, osize, false);
+            goto done;
         case token_type::AND:
             if (check_special_reg_size(ea[1], explicit_size, osize)) {
                 // ANDI to SR/CCR
@@ -783,6 +792,12 @@ operands_done:
             iwords[iword_cnt++] = disp & 0xffff;
             goto done;
         }
+        case token_type::DIVS:
+            iwords[0] = encode_muldiv(info, ea, true, false);
+            break;
+        case token_type::DIVU:
+            iwords[0] = encode_muldiv(info, ea, false, false);
+            break;
         case token_type::EOR:
             if (check_special_reg_size(ea[1], explicit_size, osize)) {
                 // EORI to SR/CCR
@@ -858,6 +873,12 @@ operands_done:
             iwords[0] = 0x7000 | (ea[1].type & 7) << 9 | (ea[0].val & 0xff);
             goto done;
         }
+        case token_type::MULS:
+            iwords[0] = encode_muldiv(info, ea, true, true);
+            break;
+        case token_type::MULU:
+            iwords[0] = encode_muldiv(info, ea, false, true);
+            break;
         case token_type::NBCD:
             assert(osize == opsize::b);
             iwords[0] = encode_unary(info, ea[0], opsize::b, 0x4800);
@@ -944,6 +965,9 @@ operands_done:
         case token_type::SUBQ:
             iwords[0] = encode_addsub_q(info, ea, osize, true);
             break;
+        case token_type::SUBX:
+            iwords[0] = encode_addsub_x(info, ea, osize, true);
+            goto done;
         case token_type::SWAP:
             assert(osize == opsize::w && info.num_operands == 1);
             if (ea[0].type >> ea_m_shift != ea_m_Dn)
@@ -1196,6 +1220,34 @@ done:
                 osize = opsize::b;
         }
         return disp;
+    }
+
+    uint16_t encode_addsub_x(const instruction_info_type& info, const ea_result* ea, opsize osize, bool is_sub)
+    {
+        bool memop = false;
+        if (ea[0].type >> ea_m_shift == ea_m_Dn && ea[1].type >> ea_m_shift == ea_m_Dn) {
+            // OK
+        } else if (ea[0].type >> ea_m_shift == ea_m_A_ind_pre && ea[1].type >> ea_m_shift == ea_m_A_ind_pre) {
+            memop = true;
+        } else {
+            ASSEMBLER_ERROR("Invalid operands to " << info.name);
+        }
+        constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
+        return 0x9100 | (!is_sub) << 14 | (ea[1].type & 7) << 9 | size_encoding[static_cast<uint8_t>(osize)] << 6 | memop << 3 | (ea[0].type & 7);
+    }
+
+    uint16_t encode_muldiv(const instruction_info_type& info, const ea_result* ea, bool is_signed, bool is_mul)
+    {
+        if (ea[0].type > ea_immediate || ea[1].type > ea_immediate || ea[0].type >> ea_m_shift == ea_m_An)
+            ASSEMBLER_ERROR("Invalid source operand for " << info.name);
+        if (ea[1].type >> ea_m_shift != ea_m_Dn)
+            ASSEMBLER_ERROR("Destination must be data register for " << info.name);
+
+        // MULS: 1<<15|1<<14|1<<8|1<<7|1<<6 = 0xc1c0
+        // MULU: 1<<15|1<<14|     1<<7|1<<6 = 0xc0c0
+        // DIVS: 1<<15|      1<<8|1<<7|1<<6 = 0x81c0
+
+        return 0x80c0 | is_mul << 14 | (ea[1].type & 7) << 9 | is_signed << 8 | (ea[0].type & 0x3f);
     }
 };
 

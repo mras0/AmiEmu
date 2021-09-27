@@ -95,11 +95,14 @@ std::string reg_list_string(uint16_t list, bool reverse)
     return res;
 }
 
-uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, [[maybe_unused]] size_t num_iwords)
+uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iwords)
 {
-    assert(iwords && num_iwords);
+    uint16_t iwords_copy[max_instruction_words] = { 0 };
+    if (iwords && num_iwords)
+        memcpy(iwords_copy, iwords, std::min<size_t>(max_instruction_words, num_iwords) * 2);
+    iwords = iwords_copy;
+
     const auto& inst = instructions[iwords[0]];
-    assert(inst.ilen > 0 && inst.ilen <= num_iwords);
 
     os << hexfmt(pc) << ' ';
     for (unsigned i = 0; i < max_instruction_words; ++i) {
