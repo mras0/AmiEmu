@@ -267,7 +267,6 @@ public:
             assert(inst_->nea == 0 || (ea_calced_[0] && (inst_->nea == 1 || ea_calced_[1])));
         } catch (const address_error_exception&) {
             trace_active = false;
-            state_.pc = start_pc_; // ??
             if (state_.sr & srm_s)
                 invalid_access_info_ |= 4;
             do_trap(interrupt_vector::address_error);
@@ -343,7 +342,7 @@ private:
     {
         if (addr & 1) {
             invalid_access_address_ = addr;
-            invalid_access_info_ = 16 | 8 | 1; // 16=Read 8=Not instruction 1=Data
+            invalid_access_info_ = 16 | 1; // 16=Read 1=Data
             throw address_error_exception {};
         }
         add_mem_access();
@@ -956,7 +955,7 @@ private:
             }
             push_u16(iwords_[0]);
             push_u32(invalid_access_address_);
-            push_u16(invalid_access_info_);
+            push_u16(invalid_access_info_ | (iwords_[0] & ~0x1f)); // Opcode in undefined bits?
         }
         useless_prefetch();
     }
