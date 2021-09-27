@@ -574,7 +574,7 @@ private:
                 wsprintfW(temp, L"COLOR%02d", n);
                 CreateWindow(L"STATIC", temp, WS_CHILD | WS_VISIBLE, xpos, ypos, w, h, hwnd, nullptr, hInstance, nullptr);
                 xpos += w + xmargin;
-                wsprintfW(temp, L"$%03X", pal_[n]);
+                wsprintfW(temp, L"$%03X", pal_[n] & 0xfff);
                 color_edit_[n] = CreateWindow(L"EDIT", temp, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, xpos, ypos, w - 34, h, hwnd, reinterpret_cast<HMENU>(intptr_t(100) + n), hInstance, nullptr);
                 color_preview_[n] = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_BORDER, xpos + w - 32, ypos, 32, h, hwnd, reinterpret_cast<HMENU>(intptr_t(1000) + n), hInstance, nullptr);
                 xpos += w + xmargin;
@@ -649,7 +649,7 @@ private:
             } else if (id == 300 && code == BN_CLICKED) {
                 for (int i = 0; i < maxpalette; ++i) {
                     char temp[256];
-                    sprintf(temp, "$%03X", custom_[0x180/2 + i]);
+                    sprintf(temp, "$%03X", custom_[0x180/2 + i] & 0xfff);
                     SetWindowTextA(color_edit_[i], temp);
                 }
                 InvalidateRect(hwnd, nullptr, FALSE);
