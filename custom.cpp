@@ -855,7 +855,7 @@ public:
         // First readble hpos that's interpreted as being on a new line is $005 (since it's resolution is half that of lowres pixels -> 20) 
         const unsigned virt_pixel = s_.hpos * 2 + 20;
         const unsigned disp_pixel = virt_pixel - hires_min_pixel;
-        const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < (0x100 | s_.diwstop >> 8);
+        const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < ((~s_.diwstop & 0x8000) >> 7 | s_.diwstop >> 8); // VSTOP MSB is complemented and used as the 9th bit
         const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
         const uint16_t colclock = s_.hpos >> 1;
 
