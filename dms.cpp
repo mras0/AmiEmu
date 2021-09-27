@@ -16,6 +16,7 @@
 // PHENOMENA-Enigma.DMS         medium (3)
 // SANITY-woc92.dms             banner track (0xffff)
 // THEUNTO1.dms                 banner track (0 with size 1024)
+// Megablast-a.dms              only 40 tracks
 
 namespace {
 
@@ -612,7 +613,7 @@ std::vector<uint8_t> dms_unpack(const std::vector<uint8_t>& data)
     constexpr uint16_t track_size = 11 * 512 * 2;
 
     std::vector<uint8_t> res;
-    res.resize(track_size * (hdr.hightrack + 1));
+    res.resize(track_size * std::max(80, hdr.hightrack + 1)); // Create full 80 track disk even if fewer tracks are available (Megablast-a.dms)
 
     std::vector<uint8_t> track_data;
     for (uint32_t offset = dms_archive_header_size + dms_archive_header_offset; offset < data.size();) {
