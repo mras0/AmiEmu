@@ -130,6 +130,11 @@ public:
         if (!motor_)
             throw std::runtime_error { name_ + " Reading while motor is not on" };
 
+        if (data_.empty()) {
+            *debug_stream << name_ << " Trying to read from non-present disk?!\n";
+            return;
+        }
+
         // Lower side=first
         const uint8_t tracknum = !side_ + cyl_ * 2;
 

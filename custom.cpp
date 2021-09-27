@@ -103,6 +103,7 @@
     X(AUD3LEN  , 0x0D4 , 1) /* Audio channel 3 length                                  */ \
     X(AUD3PER  , 0x0D6 , 1) /* Audio channel 3 period                                  */ \
     X(AUD3VOL  , 0x0D8 , 1) /* Audio channel 3 volume                                  */ \
+    X(AUD3DAT  , 0x0DA , 1) /* Audio channel 3 data                                    */ \
     X(BPL1PTH  , 0x0E0 , 1) /* Bitplane 1 pointer (high 3 bits)                        */ \
     X(BPL1PTL  , 0x0E2 , 1) /* Bitplane 1 pointer (low 15 bits)                        */ \
     X(BPL2PTH  , 0x0E4 , 1) /* Bitplane 2 pointer (high 3 bits)                        */ \
@@ -2249,7 +2250,7 @@ public:
             write_partial(s_.coplc[(offset - COP1LCH) / 4]);
             return;
         }
-        if (offset >= AUD0LCH && offset <= AUD3VOL) {
+        if (offset >= AUD0LCH && offset <= AUD3DAT) {
             const int idx = (offset - AUD0LCH) / 16;
             auto& ch = s_.audio_channels[idx];
             if (DEBUG_AUDIO)
