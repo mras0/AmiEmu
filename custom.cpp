@@ -1094,6 +1094,16 @@ public:
                 }
             } else {
                 row[0] = row[1] = rgb4_to_8(s_.color[0]);
+
+                if (s_.bpl1dat_written_this_line) {
+                    // Shift out pixels to make delay work
+                    if (DEBUG_BPL) {
+                        rem_pixelsO--;
+                        rem_pixelsE--;
+                    }
+                    for (int i = 0; i < 6; ++i)
+                        s_.bpldat_shift[i] <<= 1;
+                }
             }
 
             if (!(s_.bplcon0 & BPLCON0F_LACE) && s_.long_frame) {
@@ -1120,17 +1130,6 @@ public:
                     *debug_stream << "\n";
                     rem_pixelsO = 16;
                 }
-                // Mask out left most pixels when delay is enabled
-                if (delay1 && s_.hpos < (s_.diwstrt & 0xff)) {
-                    const uint8_t amt = 16 - (mask == 7 ? 2 * delay1 : delay1);
-                    for (int i = 0; i < 6; i += 2)
-                        s_.bpldat_shift[i] <<= amt;
-                    if (DEBUG_BPL) {
-                        rem_pixelsE -= amt;
-                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Shifted out " << (int)amt << " pixels\n";
-                    }
-                }
-
             }
             if ((s_.bpldata_avail & 2) && delay2 == (s_.hpos & mask)) {
                 for (int i = 1; i < 6; i += 2)
@@ -1143,17 +1142,6 @@ public:
                         *debug_stream << " Warning discarded " << rem_pixelsE;
                     *debug_stream << "\n";
                     rem_pixelsE = 16;
-                }
-
-                // Mask out left most pixels when delay is enabled
-                if (s_.hpos < (s_.diwstrt & 0xff) && ((s_.bplcon1 >> 4) & mask)) {
-                    const uint8_t amt = 16 - (mask == 7 ? 2 * delay2 : delay2);
-                    for (int i = 1; i < 6; i += 2)
-                        s_.bpldat_shift[i] <<= amt;
-                    if (DEBUG_BPL) {
-                        rem_pixelsE -= amt;
-                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Shifted out " << (int)amt << " pixels\n";
-                    }
                 }
             }
         }
