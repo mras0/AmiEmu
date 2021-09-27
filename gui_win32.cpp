@@ -189,6 +189,11 @@ protected:
         assert(hwnd_);
     }
 
+    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
+
 private:
     static ATOM class_atom_;
     HWND hwnd_ = nullptr;
@@ -223,25 +228,10 @@ private:
     MAKE_DETECTOR(on_create);
     MAKE_DETECTOR(on_destroy);
     MAKE_DETECTOR(on_paint);
+    MAKE_DETECTOR(on_erase_background);
     MAKE_DETECTOR(on_size);
 
     #undef MAKE_DETECTOR
-
-    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-    {
-        return DefWindowProc(hwnd, uMsg, wParam, lParam);
-    }
-
-#if 0
-    template<typename T, typename = void>
-    struct has_on_create_t : std::false_type { };
-
-    template<typename T>
-    struct has_on_create_t<T, std::void_t<decltype( std::declval<T&>().on_create(std::declval<HWND>(), std::declval<const CREATESTRUCT&>()) )>> : std::true_type {};
-
-    template<typename T = Derived>
-    static constexpr bool has_on_create = has_on_create_t<T>::value;
-#endif
 
     static LRESULT CALLBACK s_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
@@ -268,6 +258,12 @@ private:
                 if constexpr (has_on_paint<>) {
                     self->on_paint(hwnd);
                     return 0;
+                }
+                break;
+            case WM_ERASEBKGND:
+                if constexpr (has_on_erase_background<>) {
+                    self->on_erase_background(hwnd, reinterpret_cast<HDC>(wParam));
+                    return 1;
                 }
                 break;
             case WM_SIZE:
@@ -356,6 +352,88 @@ private:
     }
 };
 
+class bitmap_window : public window_base<bitmap_window> {
+public:
+    static bitmap_window* create(int x, int y, int width, int height, HWND parent)
+    {
+        assert(parent);
+        std::unique_ptr<bitmap_window> wnd { new bitmap_window { width, height } };
+        wnd->do_create(L"", WS_CHILD|WS_VISIBLE, x, y, width, height, parent);
+        return wnd.release();
+    }
+
+    void update_image(const uint32_t* data)
+    {
+        union {
+            BITMAPINFO bmi;
+            char buffer[sizeof(BITMAPINFOHEADER) + sizeof(RGBQUAD) * 3];
+        } u;
+        ZeroMemory(&u, sizeof(u));
+        u.bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        u.bmi.bmiHeader.biWidth = width_;
+        u.bmi.bmiHeader.biHeight = -height_;
+        u.bmi.bmiHeader.biPlanes = 1;
+        u.bmi.bmiHeader.biBitCount = 32;
+        u.bmi.bmiHeader.biCompression = BI_RGB;
+        SetDIBits(hdc_, hbm_, 0, height_, data, &u.bmi, DIB_RGB_COLORS);
+        RedrawWindow(handle(), nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+
+private:
+    friend window_base;
+    static constexpr const wchar_t* const class_name_ = L"bitmap_window";
+    const int width_;
+    const int height_;
+    HDC hdc_ = nullptr;
+    HBITMAP hbm_ = nullptr;
+
+    explicit bitmap_window(int width, int height)
+        : width_ { width }
+        , height_ { height }
+    {
+    }
+
+    bool on_create(HWND hwnd, const CREATESTRUCT&)
+    {
+        if (HDC hdc = GetWindowDC(hwnd)) {
+            if ((hdc_ = CreateCompatibleDC(hdc)) != nullptr) {
+                if ((hbm_ = CreateCompatibleBitmap(hdc, width_, height_)) != nullptr) {
+                    if (SelectObject(hdc_, hbm_)) {
+                        ReleaseDC(hwnd, hdc);
+                        EnableWindow(hwnd, FALSE); // Let input messages through to parent
+                        return true;
+                    }
+                }
+                DeleteDC(hdc_);
+            }
+            ReleaseDC(hwnd, hdc);
+        }
+        return false;
+    }
+
+    void on_destroy(HWND)
+    {
+        DeleteObject(hbm_);
+        DeleteDC(hdc_);
+    }
+
+    void on_erase_background(HWND, HDC)
+    {
+    }
+
+    void on_paint(HWND hwnd)
+    {
+        PAINTSTRUCT ps;
+        if (BeginPaint(hwnd, &ps) && !IsRectEmpty(&ps.rcPaint)) {
+            RECT r;
+            GetClientRect(hwnd, &r);
+            assert(r.left == 0 && r.top == 0);
+            BitBlt(ps.hdc, 0, 0, width_, height_, hdc_, 0, 0, SRCCOPY);
+            EndPaint(hwnd, &ps);
+        }
+    }
+};
+
 
 constexpr int border_height = 8;
 constexpr int led_width = 64;
@@ -398,19 +476,7 @@ public:
 
     void update_image(const uint32_t* data)
     {
-        union {
-            BITMAPINFO bmi;
-            char buffer[sizeof(BITMAPINFOHEADER) + sizeof(RGBQUAD) * 3];
-        } u;
-        ZeroMemory(&u, sizeof(u));
-        u.bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        u.bmi.bmiHeader.biWidth = width_;
-        u.bmi.bmiHeader.biHeight = -height_;
-        u.bmi.bmiHeader.biPlanes = 1;
-        u.bmi.bmiHeader.biBitCount = 32;
-        u.bmi.bmiHeader.biCompression = BI_RGB;
-        SetDIBits(hdc_, hbm_, 0, height_, data, &u.bmi, DIB_RGB_COLORS);
-        redraw();
+        bitmap_window_->update_image(data);
     }
 
     void led_state(uint8_t s)
@@ -418,7 +484,8 @@ public:
         assert(s < 2);
         if (s != led_state_) {
             led_state_ = s;
-            redraw();
+            RECT r = { 0, height_, width_, height_ + extra_height};
+            InvalidateRect(handle(), &r, FALSE);
         }
     }
 
@@ -449,10 +516,9 @@ private:
     static constexpr const wchar_t* const title_ = L"Amiemu";
     int width_;
     int height_;
-    HDC hdc_ = nullptr;
-    HBITMAP hbm_ = nullptr;
     std::vector<event> events_;
     uint8_t led_state_ = 0;
+    bitmap_window* bitmap_window_ = nullptr;
     serial_data_window* ser_data_ = nullptr;
     POINT last_mouse_pos_ { 0, 0 };
     bool mouse_captured_ = false;
@@ -462,16 +528,6 @@ private:
         : width_ { width }
         , height_ { height }
     {
-    }
-
-    static void modify_window_class(WNDCLASS& wc)
-    {
-        wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    }
-
-    void redraw()
-    {
-        RedrawWindow(handle(), nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     }
 
     void do_enqueue_keyboard_event(bool pressed, WPARAM vk)
@@ -611,49 +667,39 @@ private:
                 release_mouse();
             break;
         }
-        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+        return window_base::wndproc(hwnd, uMsg, wParam, lParam);
     }
 
     bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
-        if (HDC hdc = GetWindowDC(hwnd)) {
-            if ((hdc_ = CreateCompatibleDC(hdc)) != nullptr) {
-                if ((hbm_ = CreateCompatibleBitmap(hdc, width_, height_)) != nullptr) {
-                    if (SelectObject(hdc_, hbm_)) {
-                        ReleaseDC(hwnd, hdc);
-                        return true;
-                    }
-                }
-                DeleteDC(hdc_);
-            }
-            ReleaseDC(hwnd, hdc);
-        }
-        return false;
+        bitmap_window_ = bitmap_window::create(0, 0, width_, height_, hwnd);
+        return bitmap_window_ != nullptr;
     }
 
     void on_destroy(HWND)
     {
         if (mouse_captured_)
             release_mouse();
-        DeleteObject(hbm_);
-        DeleteDC(hdc_);
         PostQuitMessage(0);
+    }
+
+    void on_erase_background(HWND, HDC)
+    {
     }
 
     void on_paint(HWND hwnd)
     {
         PAINTSTRUCT ps;
         if (BeginPaint(hwnd, &ps) && !IsRectEmpty(&ps.rcPaint)) {
-            RECT r;
-            GetClientRect(hwnd, &r);
-            assert(r.left == 0 && r.top == 0);
-            BitBlt(ps.hdc, 0, 0, width_, height_, hdc_, 0, 0, SRCCOPY);
+            std::cout << ps.rcPaint.left << ", " << ps.rcPaint.top << " -> " << ps.rcPaint.right << ", " << ps.rcPaint.bottom << "\n";
+
+            RECT bck { 0, height_, width_, height_ + extra_height };
+            FillRect(ps.hdc, &bck, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
 
             RECT power_led_rect = { width_ - led_width - 16, (height_ + extra_height) - led_height - border_height, width_ - 16, (height_ + extra_height) - border_height };
             HBRUSH power_led_brush = CreateSolidBrush(led_state_ & 1 ? RGB(0, 255, 0) : RGB(0, 0, 0));
             FillRect(ps.hdc, &power_led_rect, power_led_brush);
             DeleteObject(power_led_brush);
-
             EndPaint(hwnd, &ps);
         }
     }
