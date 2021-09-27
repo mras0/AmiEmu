@@ -196,6 +196,7 @@ public:
             HANDLE_INST(BCLR);
             HANDLE_INST(BSET);
             HANDLE_INST(BTST);
+            HANDLE_INST(CHK);
             HANDLE_INST(CLR);
             HANDLE_INST(CMP);
             HANDLE_INST(CMPA);
@@ -215,6 +216,7 @@ public:
             HANDLE_INST(MOVE);
             HANDLE_INST(MOVEA);
             HANDLE_INST(MOVEM);
+            HANDLE_INST(MOVEP);
             HANDLE_INST(MOVEQ);
             HANDLE_INST(MULS);
             HANDLE_INST(MULU);
@@ -230,6 +232,7 @@ public:
             HANDLE_INST(ROXL);
             HANDLE_INST(ROXR);
             HANDLE_INST(RTE);
+            HANDLE_INST(RTR);
             HANDLE_INST(RTS);
             HANDLE_INST(SBCD);
             HANDLE_INST(Scc);
@@ -239,6 +242,7 @@ public:
             HANDLE_INST(SUBQ);
             HANDLE_INST(SUBX);
             HANDLE_INST(SWAP);
+            HANDLE_INST(TAS);
             HANDLE_INST(TRAP);
             HANDLE_INST(TRAPV);
             HANDLE_INST(TST);
@@ -887,6 +891,16 @@ private:
         bit_op_helper(); // discard return value on purpose
     }
 
+    void handle_CHK()
+    {
+        const auto bound = static_cast<int16_t>(read_ea(0));
+        const auto val   = static_cast<int16_t>(read_ea(1));
+        state_.update_sr(srm_ccr_no_x, (val == 0 ? srm_z : 0) | (val < 0 ? srm_n : 0));
+        if (val < 0 || val > bound) {
+            do_trap(interrupt_vector::chk_exception);
+        }
+    }
+
     void handle_CLR()
     {
         assert(inst_->nea == 1);
@@ -1155,6 +1169,38 @@ private:
         }
     }
 
+    void handle_MOVEP()
+    {
+        auto shift = inst_->size == opsize::l ? 32 : 16;
+        if (inst_->ea[0] >> ea_m_shift == ea_m_Dn) {
+            // Reg-to-mem
+            auto val = read_ea(0);
+            auto addr = ea_data_[1];
+            do {
+                shift -= 8;
+                mem_.write_u8(addr, static_cast<uint8_t>(val >> shift));
+                addr += 2;
+#ifndef NDEBUG
+        mem_accesses_++;
+#endif
+            } while (shift);
+
+        } else {
+            // Mem-to-reg
+            uint32_t val = 0;
+            auto addr = ea_data_[0];
+            do {
+                shift -= 8;
+                val |= mem_.read_u8(addr) << shift;
+                addr += 2;
+#ifndef NDEBUG
+                mem_accesses_++;
+#endif
+            } while (shift);
+            write_ea(1, val);
+        }
+    }
+
     void handle_MOVEQ()
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp && (inst_->ea[1] >> ea_m_shift == ea_m_Dn));
@@ -1380,6 +1426,13 @@ private:
         state_.sr = sr; // Only after popping PC (otherwise we switch stacks too early)
     }
 
+    void handle_RTR()
+    {
+        const auto ccr = pop_u16();
+        state_.pc = pop_u32();
+        state_.sr = (state_.sr & ~srm_ccr) | (ccr & srm_ccr);
+    }
+
     void handle_RTS()
     {
         assert(inst_->nea == 0);
@@ -1468,6 +1521,18 @@ private:
             ccr |= srm_z;
 
         state_.update_sr(srm_ccr_no_x, ccr);
+    }
+
+    void handle_TAS()
+    {
+        auto v = read_ea(0);
+        uint8_t ccr = 0;
+        if (v & 0x80)
+            ccr |= srm_n;
+        else if (!v)
+            ccr |= srm_z;
+        state_.update_sr(srm_ccr_no_x, ccr);
+        write_ea(0, v | 0x80);
     }
 
     void handle_TRAP()

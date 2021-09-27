@@ -938,14 +938,14 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "TRAP");
+    //run_winuae_mnemonic_test(basedir / "CHK.W");
     //assert(0);
 
     const std::vector<const char*> skip = {
         // Not checked
         "RTE",
         // Not implemented
-        "RESET", "CHK", "MVPMR", "MVPRM", "RTR", "TAS",
+        "RESET",
         // TODO (Undefinde flags?)
         "ABCD", "SBCD", "NBCD",
     };
