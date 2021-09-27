@@ -179,9 +179,11 @@ public:
     case inst_type::t: \
         handle_##t();  \
         break;
+            HANDLE_INST(ABCD);
             HANDLE_INST(ADD);
             HANDLE_INST(ADDA);
             HANDLE_INST(ADDQ);
+            HANDLE_INST(ADDX);
             HANDLE_INST(AND);
             HANDLE_INST(ASL);
             HANDLE_INST(ASR);
@@ -197,6 +199,8 @@ public:
             HANDLE_INST(CMPA);
             HANDLE_INST(CMPM);
             HANDLE_INST(DBcc);
+            HANDLE_INST(DIVU);
+            HANDLE_INST(DIVS);
             HANDLE_INST(EOR);
             HANDLE_INST(EXG);
             HANDLE_INST(EXT);
@@ -211,17 +215,21 @@ public:
             HANDLE_INST(MOVEM);
             HANDLE_INST(MOVEQ);
             HANDLE_INST(MULU);
+            HANDLE_INST(NBCD);
             HANDLE_INST(NEG);
+            HANDLE_INST(NEGX);
             HANDLE_INST(NOT);
             HANDLE_INST(NOP);
             HANDLE_INST(OR);
             HANDLE_INST(PEA);
             HANDLE_INST(RTE);
             HANDLE_INST(RTS);
+            HANDLE_INST(SBCD);
             HANDLE_INST(Scc);
             HANDLE_INST(SUB);
             HANDLE_INST(SUBA);
             HANDLE_INST(SUBQ);
+            HANDLE_INST(SUBX);
             HANDLE_INST(SWAP);
             HANDLE_INST(TST);
             HANDLE_INST(UNLK);
@@ -532,7 +540,7 @@ private:
         }
         if (((carry << 1) ^ carry) & mask)
             ccr |= srm_v;
-        if (!(res & ((mask << 1) - 1)))
+        if (!(res & opsize_all_mask(inst_->size)))
             ccr |= srm_z;
         if (res & mask)
             ccr |= srm_n;
@@ -664,6 +672,21 @@ private:
         do_interrupt_impl(static_cast<interrupt_vector>(vec), ipl);
     }
 
+    void handle_ABCD()
+    {
+        assert(inst_->nea == 2 && inst_->size == opsize::b);
+        const auto r = read_ea(0);
+        const auto l = read_ea(1);
+        auto res = l + r + !!(state_.sr & srm_x);
+        const auto carry = ((l & r) | ((l | r) & ~res)) & 0x88;
+        const auto carry10 = (((res + 0x66) ^ res) & 0x110) >> 1;
+        res += (carry | carry10) - ((carry | carry10) >> 2);
+        write_ea(1, res);
+        state_.update_sr(static_cast<sr_mask>(srm_c | srm_x), res & 0xf00 ? srm_c | srm_x : 0);
+        if (res & 0xff)
+            state_.update_sr(srm_z, 0);
+    }
+
     void handle_ADD()
     {
         assert(inst_->nea == 2);
@@ -687,6 +710,19 @@ private:
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         handle_ADD();
+    }
+
+    void handle_ADDX()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        const uint32_t res = l + r + !!(state_.sr & srm_x);
+        write_ea(1, res);
+        update_flags(static_cast<sr_mask>(srm_ccr & ~srm_z), res, (l & r) | ((l | r) & ~res));
+        // Z is only cleared if the result is non-zero
+        if (res & opsize_all_mask(inst_->size))
+            state_.update_sr(srm_z, 0);
     }
 
     void handle_AND()
@@ -839,6 +875,32 @@ private:
         if (val != 0xffff) {
             state_.pc = ea_data_[1];
         }
+    }
+
+    void handle_DIVU()
+    {
+        assert(inst_->nea == 2 && inst_->size == opsize::w && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
+        auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
+        const auto d = read_ea(0);
+        if (!d)
+            throw std::runtime_error { "TODO: Handle division by zero" };
+
+        const auto q = reg / d;
+        const auto r = reg % d;
+        reg = (q & 0xffff) | (r & 0xffff) << 16;
+        uint16_t ccr = 0;
+        if (q & 0x8000)
+            ccr |= srm_n;
+        if (!q)
+            ccr |= srm_z;
+        if (q > 0x8000)
+            ccr |= srm_v;
+        state_.update_sr(srm_ccr_no_x, ccr);
+    }
+
+    void handle_DIVS()
+    {
+        handle_DIVU();
     }
 
     void handle_EOR()
@@ -1025,6 +1087,22 @@ private:
         write_ea(1, res);
     }
 
+    void handle_NBCD()
+    {
+        assert(inst_->nea == 1);
+
+        // SBCD with l = 0
+        const uint32_t r = read_ea(0);
+        const uint32_t l = 0;
+        auto res = l - r - !!(state_.sr & srm_x);
+        const auto carry10 = ((~l & r) | (~(l ^ r) & res)) & 0x88;
+        res -= carry10 - (carry10 >> 2);
+        write_ea(0, res);
+        state_.update_sr(static_cast<sr_mask>(srm_c | srm_x), res & 0xf00 ? srm_c | srm_x : 0);
+        if (res & 0xff)
+            state_.update_sr(srm_z, 0);
+    }
+
     void handle_NEG()
     {
         assert(inst_->nea == 1);
@@ -1045,6 +1123,21 @@ private:
         }
         write_ea(0, n);
         state_.update_sr(srm_ccr, ccr);
+    }
+
+    void handle_NEGX()
+    {
+        // Like SUBX with LHS = 0
+        assert(inst_->nea == 1);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = 0;
+        const uint32_t res = l - r - !!(state_.sr & srm_x);
+        write_ea(0, res);
+        update_flags(static_cast<sr_mask>(srm_ccr & ~srm_z), res, (~l & r) | (~(l ^ r) & res));
+        // Z is only cleared if the result is non-zero
+        if (res & opsize_all_mask(inst_->size))
+            state_.update_sr(srm_z, 0);
+
     }
 
     void handle_NOT()
@@ -1090,6 +1183,19 @@ private:
         state_.pc = pop_u32();
     }
 
+    void handle_SBCD()
+    {
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        auto res = l - r - !!(state_.sr & srm_x);
+        const auto carry10 = ((~l & r) | (~(l ^ r) & res)) & 0x88;
+        res -= carry10 - (carry10 >> 2);
+        write_ea(1, res);
+        state_.update_sr(static_cast<sr_mask>(srm_c | srm_x), res & 0xf00 ? srm_c | srm_x : 0);
+        if (res & 0xff)
+            state_.update_sr(srm_z, 0);
+    }
+
     void handle_Scc()
     {
         assert(inst_->nea == 1 && inst_->size == opsize::b && (inst_->extra & extra_cond_flag));
@@ -1120,6 +1226,19 @@ private:
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         handle_SUB();
+    }
+
+    void handle_SUBX()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        const uint32_t res = l - r - !!(state_.sr & srm_x);
+        write_ea(1, res);
+        update_flags(static_cast<sr_mask>(srm_ccr & ~srm_z), res, (~l & r) | (~(l ^ r) & res));
+        // Z is only cleared if the result is non-zero
+        if (res & opsize_all_mask(inst_->size))
+            state_.update_sr(srm_z, 0);
     }
 
     void handle_SWAP()

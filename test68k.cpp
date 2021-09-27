@@ -71,13 +71,19 @@ void run_test_case(const std::string& filename)
 
                 memset(&ram[0], 0, ram.size());
                 for (unsigned i = 0; i < inst_words.size(); ++i)
-                    put_u16(&ram[static_cast<size_t>(code_pos) + i * 2], inst_words[i]);
+                    put_u16(&ram[code_pos + i * 2], inst_words[i]);
 
                 m68000 cpu { mem, input_state };
-                cpu.step();
-
                 const auto& outst = cpu.state();
+                try {
+                    cpu.step();
+                } catch (const std::exception& e) {
+                    std::cerr << e.what() << "\n";
+                    goto report_error;
+                }
+
                 if (memcmp(&outst, &expected_state, sizeof(cpu_state))) {
+                report_error:
                     std::cerr << "Test " << test_count << " failed for " << name;
                     for (const auto iw : inst_words)
                         std::cerr << " " << hexfmt(iw);
@@ -162,82 +168,82 @@ bool run_tests()
 {
     const std::string test_path = "../../Misc/m68k-tester-work/m68k-tests/";
     const char* const testnames[] = {
-            // OK
-            "gen-opcode-addb.bin",
-            "gen-opcode-addl.bin",
-            "gen-opcode-addw.bin",
-            "gen-opcode-andb.bin",
-            "gen-opcode-andl.bin",
-            "gen-opcode-andw.bin",
-            "gen-opcode-aslb.bin",
-            "gen-opcode-asll.bin",
-            "gen-opcode-aslw.bin",
-            "gen-opcode-asrb.bin",
-            "gen-opcode-asrl.bin",
-            "gen-opcode-asrw.bin",
-            "gen-opcode-bchg.bin",
-            "gen-opcode-bclr.bin",
-            "gen-opcode-bset.bin",
-            "gen-opcode-clrb.bin",
-            "gen-opcode-clrl.bin",
-            "gen-opcode-clrw.bin",
-            "gen-opcode-cmpb.bin",
-            "gen-opcode-cmpl.bin",
-            "gen-opcode-cmpw.bin",
-            "gen-opcode-eorb.bin",
-            "gen-opcode-eorl.bin",
-            "gen-opcode-eorw.bin",
-            "gen-opcode-extl.bin",
-            "gen-opcode-extw.bin",
-            "gen-opcode-lslb.bin",
-            "gen-opcode-lsll.bin",
-            "gen-opcode-lslw.bin",
-            "gen-opcode-lsrb.bin",
-            "gen-opcode-lsrl.bin",
-            "gen-opcode-lsrw.bin",
-            "gen-opcode-negb.bin",
-            "gen-opcode-negl.bin",
-            "gen-opcode-negw.bin",
-            "gen-opcode-notb.bin",
-            "gen-opcode-notl.bin",
-            "gen-opcode-notw.bin",
-            "gen-opcode-orb.bin",
-            "gen-opcode-orl.bin",
-            "gen-opcode-orw.bin",
-            "gen-opcode-scc.bin",
-            "gen-opcode-scs.bin",
-            "gen-opcode-seq.bin",
-            "gen-opcode-sge.bin",
-            "gen-opcode-sgt.bin",
-            "gen-opcode-shi.bin",
-            "gen-opcode-sle.bin",
-            "gen-opcode-slt.bin",
-            "gen-opcode-sls.bin",
-            "gen-opcode-smi.bin",
-            "gen-opcode-sne.bin",
-            "gen-opcode-spl.bin",
-            "gen-opcode-subb.bin",
-            "gen-opcode-subl.bin",
-            "gen-opcode-subw.bin",
-            "gen-opcode-svc.bin",
-            "gen-opcode-svs.bin",
+        // OK
+        "gen-opcode-abcd.bin",
+        "gen-opcode-addb.bin",
+        "gen-opcode-addl.bin",
+        "gen-opcode-addw.bin",
+        "gen-opcode-addxb.bin",
+        "gen-opcode-addxl.bin",
+        "gen-opcode-addxw.bin",
+        "gen-opcode-andb.bin",
+        "gen-opcode-andl.bin",
+        "gen-opcode-andw.bin",
+        "gen-opcode-aslb.bin",
+        "gen-opcode-asll.bin",
+        "gen-opcode-aslw.bin",
+        "gen-opcode-asrb.bin",
+        "gen-opcode-asrl.bin",
+        "gen-opcode-asrw.bin",
+        "gen-opcode-bchg.bin",
+        "gen-opcode-bclr.bin",
+        "gen-opcode-bset.bin",
+        "gen-opcode-clrb.bin",
+        "gen-opcode-clrl.bin",
+        "gen-opcode-clrw.bin",
+        "gen-opcode-cmpb.bin",
+        "gen-opcode-cmpl.bin",
+        "gen-opcode-cmpw.bin",
+        "gen-opcode-divu.bin",
+        "gen-opcode-divs.bin",
+        "gen-opcode-eorb.bin",
+        "gen-opcode-eorl.bin",
+        "gen-opcode-eorw.bin",
+        "gen-opcode-extl.bin",
+        "gen-opcode-extw.bin",
+        "gen-opcode-lslb.bin",
+        "gen-opcode-lsll.bin",
+        "gen-opcode-lslw.bin",
+        "gen-opcode-lsrb.bin",
+        "gen-opcode-lsrl.bin",
+        "gen-opcode-lsrw.bin",
+        "gen-opcode-nbcd.bin",
+        "gen-opcode-negb.bin",
+        "gen-opcode-negl.bin",
+        "gen-opcode-negw.bin",
+        "gen-opcode-negxb.bin",
+        "gen-opcode-negxl.bin",
+        "gen-opcode-negxw.bin",
+        "gen-opcode-notb.bin",
+        "gen-opcode-notl.bin",
+        "gen-opcode-notw.bin",
+        "gen-opcode-orb.bin",
+        "gen-opcode-orl.bin",
+        "gen-opcode-orw.bin",
+        "gen-opcode-sbcd.bin",
+        "gen-opcode-scc.bin",
+        "gen-opcode-scs.bin",
+        "gen-opcode-seq.bin",
+        "gen-opcode-sge.bin",
+        "gen-opcode-sgt.bin",
+        "gen-opcode-shi.bin",
+        "gen-opcode-sle.bin",
+        "gen-opcode-slt.bin",
+        "gen-opcode-sls.bin",
+        "gen-opcode-smi.bin",
+        "gen-opcode-sne.bin",
+        "gen-opcode-spl.bin",
+        "gen-opcode-subb.bin",
+        "gen-opcode-subl.bin",
+        "gen-opcode-subw.bin",
+        "gen-opcode-subxb.bin",
+        "gen-opcode-subxl.bin",
+        "gen-opcode-subxw.bin",
+        "gen-opcode-svc.bin",
+        "gen-opcode-svs.bin",
 #if 0
-            // Not implemented
-            "gen-opcode-abcd.bin",
-            "gen-opcode-addxb.bin",
-            "gen-opcode-addxl.bin",
-            "gen-opcode-addxw.bin",
-            "gen-opcode-divs.bin",
-            "gen-opcode-divu.bin",
-            "gen-opcode-nbcd.bin",
-            "gen-opcode-negxb.bin",
-            "gen-opcode-negxl.bin",
-            "gen-opcode-negxw.bin",
-            "gen-opcode-sbcd.bin",
-            "gen-opcode-subxb.bin",
-            "gen-opcode-subxl.bin",
-            "gen-opcode-subxw.bin",
-            "gen-opcode-tas.bin"
+        // Not implemented
+        "gen-opcode-tas.bin"
 #endif
     };
 

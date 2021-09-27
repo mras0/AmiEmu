@@ -20,6 +20,11 @@ constexpr uint32_t opsize_msb_mask(opsize size)
     return size == opsize::b ? 0x80 : size == opsize::w ? 0x8000 : 0x80000000;
 }
 
+constexpr uint32_t opsize_all_mask(opsize size)
+{
+    return size == opsize::b ? 0xff : size == opsize::w ? 0xffff : 0xffffffff;
+}
+
 constexpr int32_t sext(uint32_t val, opsize size)
 {
     switch (size) {
