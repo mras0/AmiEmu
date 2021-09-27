@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <cassert>
 
@@ -283,6 +284,9 @@ public:
 
     uint8_t read_u8(uint32_t addr, uint32_t) override
     {
+        if (valid_address(addr)) {
+            return handle_read(!(addr & 1), (addr >> 8) & 0xf);
+        }
         std::cerr << "To handle 8-bit read from CIA: addr=$" << hexfmt(addr) << "\n";
         assert(0);
         return 0xFF;
@@ -297,10 +301,8 @@ public:
 
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override
     {
-        if ((addr & 1) && !(addr & 0xF0) && addr >= 0xBFE001 && addr <= 0xBFEF01) {
-            handle_write(0, (addr >> 8) & 0xf, val);
-        } else if (!(addr & 1) && !(addr & 0xF0) && addr >= 0xBFD000 && addr <= 0xBFDF00) {
-            handle_write(1, (addr >> 8) & 0xf, val);
+        if (valid_address(addr)) {
+            handle_write(!(addr & 1), (addr >> 8) & 0xf, val);
         } else {
             std::cerr << "TODO: Invalid CIA byte write : " << hexfmt(addr) << " val = $" << hexfmt(val) << "\n";
             assert(0);
@@ -318,6 +320,34 @@ private:
     rom_area_handler& rom_handler_;
     uint8_t regs_[2][16];
 
+    static constexpr bool valid_address(uint32_t addr)
+    {
+        if ((addr & 1) && !(addr & 0xF0) && addr >= 0xBFE001 && addr <= 0xBFEF01) {
+            return true;
+        } else if (!(addr & 1) && !(addr & 0xF0) && addr >= 0xBFD000 && addr <= 0xBFDF00) {
+            return true;
+        }
+        return false;
+    }
+
+    uint8_t handle_read(uint8_t idx, uint8_t reg)
+    {
+        assert(idx < 2 && reg < 16);
+        switch (reg) {
+        case pra:
+        case prb:
+            std::cout << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
+            return regs_[idx][reg];
+        case ddra:
+        case ddrb:
+            return regs_[idx][reg];
+        default:
+            std::cerr << "TODO: Handle read from CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
+            assert(0);
+        }
+        return 0xFF;
+    }
+
     void handle_write(uint8_t idx, uint8_t reg, uint8_t val)
     {
         assert(idx < 2 && reg < 16);
@@ -331,14 +361,19 @@ private:
             regs_[idx][reg] = val;
             break;
         default:
-            std::cerr << "TODO: CIA" << static_cast<char>('A' + idx) << "  " << regnames[reg] << " val $" << hexfmt(val) << "\n";
+            std::cerr << "TODO: Handle write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
             assert(0);
         }
 
-        const uint8_t port_a_after = get_port_output(idx, 0);
-        if (idx == 0 && ((port_a_before ^ port_a_after) & 1)) {
+        if (idx == 0) {
+            const uint8_t port_a_after = get_port_output(idx, 0);
+            const uint8_t port_a_diff = port_a_before ^ port_a_after;
             // OVL changed
-            rom_handler_.set_overlay(!!(port_a_after & 1));
+            if (port_a_diff & 1)
+                rom_handler_.set_overlay(!!(port_a_after & 1));
+            if (port_a_diff & 2)
+                std::cout << "[CIA] Turn LED " << (port_a_after & 2 ? "off" : "on") << '\n';
+
         }
     }
 
@@ -423,14 +458,34 @@ public:
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
         switch (offset) {
+        case COP1LCH:
+        case COP1LCL:
+        case COP2LCH:
+        case COP2LCL:
+        case COPJMP1:
+        case COPJMP2:
+        case DIWSTRT:
+        case DIWSTOP:
+        case DDFSTRT:
+        case DDFSTOP:
         case INTENA:
         case INTREQ:
         case DMACON:
-            if (val != 0x7fff)
-                break;
+        case BPL1PTH:
+        case BPL1PTL:
+        case BPLCON0:
+        case BPLCON1:
+        case BPLCON2:
+        case BPLCON3:
+        case BPLMOD1:
+        case BPLMOD2:
+        ignore:
             std::cout << "[CUSTOM] Ignoring write to " << regname(offset) << " val $" << hexfmt(val) << "\n";
             return;
         }
+
+        if (offset >= COLOR00 && offset <= COLOR31)
+            goto ignore;
 
         std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
         assert(false);
@@ -441,9 +496,71 @@ private:
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
-    X(DMACON, 0x096, 1) /* DMA control write (clear or set)           */ \
-    X(INTENA, 0x09A, 1) /* Interrupt enable bits (clear or set bits)  */ \
-    X(INTREQ, 0x09C, 1) /* Interrupt request bits (clear or set bits) */ \
+    X(COP1LCH , 0x080 , 1) /* Coprocessor first location register (high 3 bits)       */ \
+    X(COP1LCL , 0x082 , 1) /* Coprocessor first location register (low 15 bits)       */ \
+    X(COP2LCH , 0x084 , 1) /* Coprocessor second location register (high 3 bits)      */ \
+    X(COP2LCL , 0x086 , 1) /* Coprocessor second location register (low 15 bits)      */ \
+    X(COPJMP1 , 0x088 , 1) /* Coprocessor restart at first location                   */ \
+    X(COPJMP2 , 0x08A , 1) /* Coprocessor restart at second location                  */ \
+    X(DIWSTRT , 0x08E , 1) /* Display window start (upper left vert-horiz position)   */ \
+    X(DIWSTOP , 0x090 , 1) /* Display window stop (lower right vert.-horiz. position) */ \
+    X(DDFSTRT , 0x092 , 1) /* Display bitplane data fetch start (horiz. position)     */ \
+    X(DDFSTOP , 0x094 , 1) /* Display bitplane data fetch stop (horiz. position)      */ \
+    X(DMACON  , 0x096 , 1) /* DMA control write (clear or set)                        */ \
+    X(INTENA  , 0x09A , 1) /* Interrupt enable bits (clear or set bits)               */ \
+    X(INTREQ  , 0x09C , 1) /* Interrupt request bits (clear or set bits)              */ \
+    X(BPL1PTH , 0x0E0 , 1) /* Bitplane 1 pointer (high 3 bits)                        */ \
+    X(BPL1PTL , 0x0E2 , 1) /* Bitplane 1 pointer (low 15 bits)                        */ \
+    X(BPL2PTH , 0x0E4 , 1) /* Bitplane 2 pointer (high 3 bits)                        */ \
+    X(BPL2PTL , 0x0E6 , 1) /* Bitplane 2 pointer (low 15 bits)                        */ \
+    X(BPL3PTH , 0x0E8 , 1) /* Bitplane 3 pointer (high 3 bits)                        */ \
+    X(BPL3PTL , 0x0EA , 1) /* Bitplane 3 pointer (low 15 bits)                        */ \
+    X(BPL4PTH , 0x0EC , 1) /* Bitplane 4 pointer (high 3 bits)                        */ \
+    X(BPL4PTL , 0x0EE , 1) /* Bitplane 4 pointer (low 15 bits)                        */ \
+    X(BPL5PTH , 0x0F0 , 1) /* Bitplane 5 pointer (high 3 bits)                        */ \
+    X(BPL5PTL , 0x0F2 , 1) /* Bitplane 5 pointer (low 15 bits)                        */ \
+    X(BPL6PTH , 0x0F4 , 1) /* Bitplane 6 pointer (high 3 bits)                        */ \
+    X(BPL6PTL , 0x0F6 , 1) /* Bitplane 6 pointer (low 15 bits)                        */ \
+    X(BPLCON0 , 0x100 , 1) /* Bitplane control register                               */ \
+    X(BPLCON1 , 0x102 , 1) /* Bitplane control register                               */ \
+    X(BPLCON2 , 0x104 , 1) /* Bitplane control register                               */ \
+    X(BPLCON3 , 0x106 , 1) /* Bitplane control register  (ECS only)                   */ \
+    X(BPLMOD1 , 0x108 , 1) /* Bitplane modulo (odd planes)                            */ \
+    X(BPLMOD2 , 0x10A , 1) /* Bitplane modulo (even planes)                           */ \
+    X(COLOR00 , 0x180 , 1) /* Color table 00                                          */ \
+    X(COLOR01 , 0x182 , 1) /* Color table 01                                          */ \
+    X(COLOR02 , 0x184 , 1) /* Color table 02                                          */ \
+    X(COLOR03 , 0x186 , 1) /* Color table 03                                          */ \
+    X(COLOR04 , 0x188 , 1) /* Color table 04                                          */ \
+    X(COLOR05 , 0x18A , 1) /* Color table 05                                          */ \
+    X(COLOR06 , 0x18C , 1) /* Color table 06                                          */ \
+    X(COLOR07 , 0x18E , 1) /* Color table 07                                          */ \
+    X(COLOR08 , 0x190 , 1) /* Color table 08                                          */ \
+    X(COLOR09 , 0x192 , 1) /* Color table 09                                          */ \
+    X(COLOR10 , 0x194 , 1) /* Color table 10                                          */ \
+    X(COLOR11 , 0x196 , 1) /* Color table 11                                          */ \
+    X(COLOR12 , 0x198 , 1) /* Color table 12                                          */ \
+    X(COLOR13 , 0x19A , 1) /* Color table 13                                          */ \
+    X(COLOR14 , 0x19C , 1) /* Color table 14                                          */ \
+    X(COLOR15 , 0x19E , 1) /* Color table 15                                          */ \
+    X(COLOR16 , 0x1A0 , 1) /* Color table 16                                          */ \
+    X(COLOR17 , 0x1A2 , 1) /* Color table 17                                          */ \
+    X(COLOR18 , 0x1A4 , 1) /* Color table 18                                          */ \
+    X(COLOR19 , 0x1A6 , 1) /* Color table 19                                          */ \
+    X(COLOR20 , 0x1A8 , 1) /* Color table 20                                          */ \
+    X(COLOR21 , 0x1AA , 1) /* Color table 21                                          */ \
+    X(COLOR22 , 0x1AC , 1) /* Color table 22                                          */ \
+    X(COLOR23 , 0x1AE , 1) /* Color table 23                                          */ \
+    X(COLOR24 , 0x1B0 , 1) /* Color table 24                                          */ \
+    X(COLOR25 , 0x1B2 , 1) /* Color table 25                                          */ \
+    X(COLOR26 , 0x1B4 , 1) /* Color table 26                                          */ \
+    X(COLOR27 , 0x1B6 , 1) /* Color table 27                                          */ \
+    X(COLOR28 , 0x1B8 , 1) /* Color table 28                                          */ \
+    X(COLOR29 , 0x1BA , 1) /* Color table 29                                          */ \
+    X(COLOR30 , 0x1BC , 1) /* Color table 30                                          */ \
+    X(COLOR31 , 0x1BE , 1) /* Color table 31                                          */ \
+
+// keep this line clear (for macro continuation)
 
     static std::string regname(uint32_t offset)
     {
@@ -488,7 +605,7 @@ enum sr_mask : uint16_t {
     srm_trace = 3 << sri_trace,
 
     srm_illegal  = 1 << 5 | 1 << 6 | 1 << 7 | 1 << 11,
-    srm_ccr_no_x = srm_c | srm_v | srm_z | srm_z,
+    srm_ccr_no_x = srm_c | srm_v | srm_z | srm_n,
     srm_ccr      = srm_ccr_no_x | srm_x,
 };
 
@@ -558,11 +675,44 @@ struct cpu_state {
 
     bool eval_cond(conditional c) const
     {
+        const bool C = !!(sr & srm_c);
+        const bool V = !!(sr & srm_v);
+        const bool Z = !!(sr & srm_z);
+        const bool N = !!(sr & srm_n);
+
         switch (c) {
         case conditional::t:
             return true;
         case conditional::f:
             return false;
+        case conditional::hi: // (not C) and (not Z)
+            return !C && !Z;
+        case conditional::ls: // C or V
+            return C || V;
+        case conditional::cc: // not C
+            return !C;
+        case conditional::cs: // C
+            return C;
+        case conditional::ne: // not Z
+            return !Z;
+        case conditional::eq: // Z
+            return Z;
+        case conditional::vc: // not V
+            return !V;
+        case conditional::vs: // V
+            return V;
+        case conditional::pl: // not N
+            return !N;
+        case conditional::mi: // N
+            return N;
+        case conditional::ge: // (N and V) or ((not N) and (not V))
+            return (N && V) || (!N && !V);
+        case conditional::lt: // (N and (not V)) or ((not N) and V))
+            return (N && !V) || (!N && V);
+        case conditional::gt: // (N and V and (not Z)) or ((not N) and (not V) and (not Z))
+            return (N && V && !Z) || (!N && !V && !Z);
+        case conditional::le: // Z or (N and (not V)) or ((not N) and V)
+            return Z || (N && !V) || (!N && V);
         default:
             assert(static_cast<unsigned>(c) < 16);
             std::cerr << "TODO: condition: " << conditional_strings[static_cast<uint8_t>(c)] << "\n";
@@ -586,7 +736,15 @@ void print_cpu_state(std::ostream& os, const cpu_state& s)
         os << "A" << i << "=" << hexfmt(s.A(i));
     }
     os << "\n";
-    os << "PC=" << hexfmt(s.pc) << " SR=" << hexfmt(s.sr) << " SSP=" << hexfmt(s.ssp) << " USP=" << hexfmt(s.usp) << "\n";
+    os << "PC=" << hexfmt(s.pc) << " SR=" << hexfmt(s.sr) << " SSP=" << hexfmt(s.ssp) << " USP=" << hexfmt(s.usp) << " CCR: ";
+    
+    for (unsigned i = 5; i--;) {
+        if ((s.sr & (1 << i)))
+            std::cout << "CVZNX"[i];
+        else
+            std::cout << '-';
+    }
+    std::cout << '\n';
 }
 
 constexpr int32_t sext(uint32_t val, opsize size)
@@ -610,11 +768,35 @@ public:
         state_.sr = srm_s | srm_ipl; // 0x2700
         state_.ssp = mem.read_u32(0);
         state_.pc = mem.read_u32(4);
+
+        std::fill(std::begin(iwords_), std::end(iwords_), illegal_instruction_num);
+        inst_ = &instructions[illegal_instruction_num];
+    }
+
+    uint64_t instruction_count() const
+    {
+        return instruction_count_;
+    }
+
+    void trace(bool enabled)
+    {
+        trace_ = enabled;
+    }
+
+    void show_state(std::ostream& os)
+    {
+        os << "After " << instruction_count_ << " instructions:\n";
+        print_cpu_state(os, state_);
+        disasm(os, start_pc_, iwords_, inst_->ilen);
+        os << '\n';
     }
 
     void step()
     {
-        print_cpu_state(std::cout, state_);
+        ++instruction_count_;
+
+        if (trace_)
+            print_cpu_state(std::cout, state_);
 
         start_pc_ = state_.pc;
         iwords_[0] = mem_.read_u16(state_.pc);
@@ -625,8 +807,10 @@ public:
             state_.pc += 2;
         }
 
-        disasm(std::cout, start_pc_, iwords_, inst_->ilen);
-        std::cout << "\n";
+        if (trace_) {
+            disasm(std::cout, start_pc_, iwords_, inst_->ilen);
+            std::cout << '\n';
+        }
 
         if (inst_->type == inst_type::ILLEGAL)
             throw std::runtime_error { "ILLEGAL" };
@@ -638,35 +822,67 @@ public:
         // Pre-increment & handle ea
         for (uint8_t i = 0; i < inst_->nea; ++i) {
             const auto ea = inst_->ea[i];
-            if ((ea >> ea_m_shift) == ea_m_A_ind_pre) {
+            // Don't predecrement here for MOVEM
+            if (inst_->type != inst_type::MOVEM && (ea >> ea_m_shift) == ea_m_A_ind_pre) {
                 state_.A(ea & ea_xn_mask) -= opsize_bytes(inst_->size);
             }
             handle_ea(i);
         }
 
         switch (inst_->type) {
-        #define HANDLE_INST(t) case inst_type::t: handle_##t(); break;
+#define HANDLE_INST(t) \
+    case inst_type::t: \
+        handle_##t();  \
+        break;
+            HANDLE_INST(ADD);
+            HANDLE_INST(ADDA);
+            HANDLE_INST(ADDQ);
+            HANDLE_INST(AND);
+            HANDLE_INST(Bcc);
             HANDLE_INST(BRA);
+            HANDLE_INST(BSR);
+            HANDLE_INST(CLR);
+            HANDLE_INST(CMP);
+            HANDLE_INST(CMPA);
             HANDLE_INST(DBcc);
+            HANDLE_INST(EXT);
+            HANDLE_INST(JMP);
             HANDLE_INST(LEA);
+            HANDLE_INST(LSL);
             HANDLE_INST(LSR);
             HANDLE_INST(MOVE);
+            HANDLE_INST(MOVEA);
+            HANDLE_INST(MOVEM);
             HANDLE_INST(MOVEQ);
+            HANDLE_INST(MULU);
+            HANDLE_INST(PEA);
+            HANDLE_INST(RTS);
             HANDLE_INST(SUB);
-        #undef HANDLE_INST
-        default:
-            throw std::runtime_error { "Unhandled instruction" };
+            HANDLE_INST(SUBA);
+            HANDLE_INST(SUBQ);
+            HANDLE_INST(SWAP);
+            HANDLE_INST(TST);
+#undef HANDLE_INST
+        default: {
+            std::ostringstream oss;
+            disasm(oss, start_pc_, iwords_, inst_->ilen);
+            throw std::runtime_error { "Unhandled instruction: " + oss.str() };
         }
-        
+        }
+
         assert(iword_idx_ == inst_->ilen);
 
         // Post-increment
         for (uint8_t i = 0; i < inst_->nea; ++i) {
             const auto ea = inst_->ea[i];
-            if ((ea >> ea_m_shift) == ea_m_A_ind_post) {
+            // MOVEM handles any increments
+            if (inst_->type != inst_type::MOVEM && (ea >> ea_m_shift) == ea_m_A_ind_post) {
                 state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
             }
         }
+
+        if (trace_)
+            std::cout << "\n";
     }
 
 private:
@@ -679,6 +895,8 @@ private:
     uint8_t iword_idx_;
     const instruction* inst_;
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
+    uint64_t instruction_count_ = 0;
+    bool trace_ = false;
 
     uint32_t read_reg(uint32_t val)
     {
@@ -729,20 +947,37 @@ private:
             assert(iword_idx_ < inst_->ilen);
             res = state_.A(ea & ea_xn_mask) + sext(iwords_[iword_idx_++], opsize::w);
             return;
-        case ea_m_A_ind_index:
-            break;
+        case ea_m_A_ind_index: {
+            assert(iword_idx_ < inst_->ilen);
+            const auto extw = iwords_[iword_idx_++];
+            assert(!(extw & (7 << 8)));
+            res = state_.A(ea & ea_xn_mask) + sext(extw, opsize::b);
+            uint32_t r = (extw >> 12) & 7;
+            if ((extw >> 15) & 1) {
+                r = state_.A(r);
+            } else {
+                r = state_.d[r];
+            }
+            if (!((extw >> 11) & 1))
+                r = sext(r, opsize::w);
+            res += r;
+            return;
+        }
         case ea_m_Other:
             switch (ea & ea_xn_mask) {
             case ea_other_abs_w:
-                // Remember sign!
-                break;
+                assert(iword_idx_ < inst_->ilen);
+                res = static_cast<int32_t>(static_cast<int16_t>(iwords_[iword_idx_++]));
+                return;
             case ea_other_abs_l:
                 assert(iword_idx_ + 1 < inst_->ilen);
                 res = iwords_[iword_idx_++] << 16;
                 res |= iwords_[iword_idx_++];
                 return;
             case ea_other_pc_disp16:
-                break;
+                assert(iword_idx_ < inst_->ilen);
+                res = start_pc_ + 2 + sext(iwords_[iword_idx_++], opsize::w);
+                return;
             case ea_other_pc_index:
                 break;
             case ea_other_imm:
@@ -765,11 +1000,22 @@ private:
             }
             break;
         case ea_m_inst_data:
-            assert(ea <= ea_disp); // TODO: CCR/SR/REGLIST
+            if (ea == ea_sr) {
+                res = state_.sr;
+                return;
+            } else if (ea == ea_ccr) {
+                res = state_.sr & srm_ccr;
+                return;
+            } else if (ea == ea_reglist) {
+                assert(iword_idx_ < inst_->ilen);
+                res = iwords_[iword_idx_++];
+                return;
+            }
+            assert(ea <= ea_disp);
             if (inst_->extra & extra_disp_flag) {
                 assert(ea == ea_disp);
                 assert(iword_idx_ < inst_->ilen);
-                res = start_pc_ + 2 + static_cast < int16_t > (iwords_[iword_idx_++]);
+                res = start_pc_ + 2 + static_cast<int16_t>(iwords_[iword_idx_++]);
                 return;
             } else if (ea == ea_disp) {
                 res = start_pc_ + 2 + static_cast<int8_t>(inst_->data);
@@ -781,7 +1027,6 @@ private:
             break;
         }
         throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea) };
-
     }
 
     uint32_t read_ea(uint8_t idx)
@@ -813,7 +1058,7 @@ private:
         case ea_m_inst_data:
             return val;
         }
-        throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea)};
+        throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea) };
     }
 
     void write_mem(uint32_t addr, uint32_t val)
@@ -858,7 +1103,7 @@ private:
             auto& reg = state_.A(ea & ea_xn_mask);
             switch (inst_->size) {
             case opsize::w:
-                reg = sext(val, opsize::w);
+                reg = (reg & 0xffff0000) | (val & 0xffff);
                 return;
             case opsize::l:
                 reg = val;
@@ -889,6 +1134,11 @@ private:
             }
             break;
         case ea_m_inst_data:
+            if (ea == ea_sr) {
+                assert(!(val & srm_illegal));
+                state_.sr = static_cast<uint16_t>(val);
+                return;
+            }
             break;
         }
         throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea) + " val = $" + hexstring(val) };
@@ -897,8 +1147,7 @@ private:
     void update_flags(sr_mask srmask, uint32_t res, uint32_t carry)
     {
         assert(inst_->size != opsize::none);
-        const uint32_t mask = inst_->size == opsize::b ? 0x80 : inst_->size == opsize::w ? 0x8000
-                                                                                         : 0x80000000;
+        const uint32_t mask = opsize_msb_mask(inst_->size);
         uint16_t ccr = 0;
         if (carry & mask) {
             ccr |= srm_c;
@@ -917,8 +1166,7 @@ private:
     void update_flags_rot(uint32_t res, uint32_t cnt, bool carry)
     {
         assert(inst_->size != opsize::none);
-        const uint32_t mask = inst_->size == opsize::b ? 0x80 : inst_->size == opsize::w ? 0x8000
-                                                                                         : 0x80000000;
+        const uint32_t mask = opsize_msb_mask(inst_->size);
         uint16_t ccr = 0;
         if (carry) {
             ccr |= srm_c;
@@ -933,16 +1181,95 @@ private:
         state_.update_sr(cnt ? srm_ccr : srm_ccr_no_x, ccr);
     }
 
+    void handle_ADD()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        const uint32_t res = l + r;
+        write_ea(1, res);
+        // All flags updated
+        update_flags(srm_ccr, res, (l & r) | ((l | r) & ~res));
+    }
+
+    void handle_ADDA()
+    {
+        assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
+        const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        state_.A(inst_->ea[1] & ea_xn_mask) += s; // And the operation performed on the full 32-bit value
+        // No flags
+    }
+
+    void handle_ADDQ()
+    {
+        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_inst_data) && inst_->ea[0] <= ea_disp);
+        handle_ADD();
+    }
+
+    void handle_AND()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        const uint32_t res = l & r;
+        write_ea(1, res);
+        update_flags(srm_ccr_no_x, res, 0);
+    }
+
+    void handle_Bcc()
+    {
+        assert(inst_->nea == 1 && inst_->ea[0] == ea_disp && (inst_->extra & extra_cond_flag));
+        if (!state_.eval_cond(static_cast<conditional>(inst_->extra >> 4)))
+            return;
+        state_.pc = ea_data_[0];
+    }
+
     void handle_BRA()
     {
         assert(inst_->nea == 1);
         state_.pc = ea_data_[0];
     }
 
+    void handle_BSR()
+    {
+        assert(inst_->nea == 1);
+        auto& a7 = state_.A(7);
+        a7 -= 4;
+        mem_.write_u32(a7, state_.pc);
+        state_.pc = ea_data_[0];
+    }
+
+    void handle_CLR()
+    {
+        assert(inst_->nea == 1);
+        // TODO: read cycle?
+        write_ea(0, 0);
+    }
+
+    void handle_CMP()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        const uint32_t res = l - r;
+        update_flags(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res));
+    }
+
+    void handle_CMPA()
+    {
+        assert(inst_->nea == 2);
+        assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
+        const uint32_t r = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        const uint32_t l = state_.A(inst_->ea[1] & ea_xn_mask);
+        // And the performed on the full 32-bit value
+        const auto res = l - r;
+        update_flags(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res));
+    }
+
     void handle_DBcc()
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) == ea_m_Dn && inst_->extra & extra_cond_flag);
-        assert(inst_->size == opsize::w);
+        assert(inst_->size == opsize::w && inst_->ea[1] == ea_disp);
 
         if (state_.eval_cond(static_cast<conditional>(inst_->extra >> 4)))
             return;
@@ -955,11 +1282,57 @@ private:
         }
     }
 
+    void handle_EXT()
+    {
+        assert(inst_->nea == 1 && (inst_->ea[0] >> ea_m_shift) == ea_m_Dn);
+        auto r = state_.d[inst_->ea[0] & ea_xn_mask];
+        uint32_t res;
+        if (inst_->size == opsize::w) {
+            res = sext(r, opsize::b);
+        } else {
+            assert(inst_->size == opsize::l);
+            res = sext(r, opsize::w);
+        }
+        write_ea(0, res);
+        update_flags(srm_ccr_no_x, res, 0);
+    }
+
+    void handle_JMP()
+    {
+        assert(inst_->nea == 1);
+        state_.pc = ea_data_[0];
+    }
+
     void handle_LEA()
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift == ea_m_An) && inst_->size == opsize::l);
         write_ea(1, ea_data_[0]);
         // No flags affected
+    }
+
+    void handle_LSL()
+    {
+        uint32_t val, cnt;
+        if (inst_->nea == 1) {
+            val = read_ea(0);
+            cnt = 1;
+        } else {
+            cnt = read_ea(0) & 63;
+            val = read_ea(1);
+        }
+        bool carry;
+        if (!cnt) {
+            carry = false;
+        } else if (cnt <= 32) {            
+            carry = !!((val << (cnt - 1)) & opsize_msb_mask(inst_->size));
+            val <<= cnt;
+        } else {
+            val = 0;
+            carry = false;
+        }
+
+        write_ea(inst_->nea - 1, val);
+        update_flags_rot(val, cnt, carry);
     }
 
     void handle_LSR()
@@ -976,15 +1349,15 @@ private:
         if (!cnt) {
             carry = false;
         } else if (cnt <= 32) {
-            val >>= cnt;
             carry = !!((val >> (cnt - 1)) & 1);
+            val >>= cnt;
         } else {
             val = 0;
             carry = false;
         }
 
         write_ea(inst_->nea - 1, val);
-        update_flags_rot(val, cnt, carry); 
+        update_flags_rot(val, cnt, carry);
     }
 
     void handle_MOVE()
@@ -995,12 +1368,97 @@ private:
         update_flags(srm_ccr_no_x, src, 0);
     }
 
+    void handle_MOVEA()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t src = read_ea(0);
+        write_ea(1, src);
+        // No flags
+    }
+
+    void handle_MOVEM()
+    {
+        assert(inst_->nea == 2);
+        assert(inst_->size == opsize::l); // TODO: Support word sized transfer
+
+        // Latch values
+        uint32_t values[16];
+        for (unsigned i = 0; i < 16; ++i) {
+            if (i < 8)
+                values[i] = state_.d[i];
+            else
+                values[i] = state_.A(i & 7);
+        }
+
+        if (inst_->ea[0] == ea_reglist) {
+            uint16_t rl = static_cast<uint16_t>(ea_data_[0]);
+
+            for (unsigned bit = 16; bit--;) {
+                if (!((rl >> bit) & 1))
+                    continue;
+                const auto val = values[15 - bit];
+
+                if (inst_->ea[1] >> ea_m_shift == ea_m_A_ind_pre) {
+                    auto& a = state_.A(inst_->ea[1] & ea_xn_mask);
+                    a -= opsize_bytes(inst_->size);
+                    write_mem(a, val);
+                } else {
+                    // Not checked...
+                    write_ea(1, val);
+                }
+            }
+        } else {
+            assert(inst_->ea[1] == ea_reglist);
+            uint16_t rl = static_cast<uint16_t>(ea_data_[1]);
+
+            for (unsigned bit = 0; bit < 16; ++bit) {
+                if (!((rl >> bit) & 1))
+                    continue;
+                const auto val = values[bit];
+                if (inst_->ea[0] >> ea_m_shift == ea_m_A_ind_post) {
+                    auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
+                    write_mem(a, val);
+                    a += opsize_bytes(inst_->size);
+                } else {
+                    // Not checked...
+                    write_ea(0, val);
+                }
+            }
+        }
+    }
+
     void handle_MOVEQ()
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_inst_data) && inst_->ea[0] <= ea_disp && (inst_->ea[1] >> ea_m_shift == ea_m_Dn));
         const uint32_t src = static_cast<int32_t>(static_cast<int8_t>(read_ea(0)));
         write_ea(1, src);
         update_flags(srm_ccr_no_x, src, 0);
+    }
+
+    void handle_MULU()
+    {
+        assert(inst_->size == opsize::w && inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
+        const auto a = static_cast<uint16_t>(read_ea(0) & 0xffff);
+        const auto b = static_cast<uint16_t>(read_ea(1) & 0xffff);
+        const uint32_t res = static_cast<uint32_t>(a) * b;
+        update_flags(srm_ccr_no_x, res, 0);
+        write_ea(1, res);
+    }
+
+    void handle_PEA()
+    {
+        assert(inst_->nea == 1 && inst_->size == opsize::l);
+        auto& a7 = state_.A(7);
+        a7 -= 4;
+        mem_.write_u32(a7, ea_data_[0]);
+    }
+
+    void handle_RTS()
+    {
+        assert(inst_->nea == 0);
+        auto& a7 = state_.A(7);
+        state_.pc = mem_.read_u32(a7);
+        a7 += 4;
     }
 
     void handle_SUB()
@@ -1012,6 +1470,34 @@ private:
         write_ea(1, res);
         // All flags updated
         update_flags(srm_ccr, res, (~l & r) | (~(l ^ r) & res));
+    }
+
+    void handle_SUBA()
+    {
+        assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
+        const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        state_.A(inst_->ea[1] & ea_xn_mask) -= s; // And the operation performed on the full 32-bit value
+        // No flags
+    }
+
+    void handle_SUBQ()
+    {
+        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_inst_data) && inst_->ea[0] <= ea_disp);
+        handle_SUB();
+    }
+
+    void handle_SWAP()
+    {
+        assert(inst_->nea == 1 && (inst_->ea[0] >> ea_m_shift == ea_m_Dn));
+        auto& r = state_.d[inst_->ea[0] & ea_xn_mask];
+        r = (r & 0xffff) << 16 | ((r >> 16) & 0xffff);
+        update_flags(srm_ccr_no_x, r, 0);
+    }
+
+    void handle_TST()
+    {
+        assert(inst_->nea == 1);
+        update_flags(srm_ccr_no_x, read_ea(0), 0);
     }
 };
 
@@ -1026,8 +1512,16 @@ int main()
         m68000 cpu { mem };
 
         for (;;) {
-            cpu.step();
-            std::cout << "\n";
+            try {
+                cpu.step();
+                //if (cpu.instruction_count() == 7110-2)
+                //    cpu.trace(true);
+                //else if (cpu.instruction_count() == 7110+2)
+                //    break;
+            } catch (...) {
+                cpu.show_state(std::cerr);
+                throw;
+            }
         }        
 
 

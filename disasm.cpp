@@ -109,7 +109,7 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
     }
     os << "  ";
     // Only print "ILLEGAL" for the explicitly defined illegal instruction
-    if (inst.type == inst_type::ILLEGAL && iwords[0] != 0x4afc)
+    if (inst.type == inst_type::ILLEGAL && iwords[0] != illegal_instruction_num)
         os << "DC.W\t$" << hexfmt(iwords[0]);
     else
         os << inst.name;

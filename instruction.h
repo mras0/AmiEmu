@@ -15,6 +15,11 @@ constexpr uint8_t opsize_bytes(opsize size)
     return size == opsize::l ? 4 : size == opsize::b ? 1 : 2;
 }
 
+constexpr uint32_t opsize_msb_mask(opsize size)
+{
+    return size == opsize::b ? 0x80 : size == opsize::w ? 0x8000 : 0x80000000;
+}
+
 enum class inst_type {
     ILLEGAL,
     ABCD,
@@ -135,6 +140,8 @@ constexpr uint8_t ea_ccr     = 0b01'000'101;
 constexpr uint8_t ea_reglist = 0b01'000'110;
 
 constexpr unsigned max_instruction_words = 5; // 68020+ can be 11 words
+
+constexpr uint16_t illegal_instruction_num = 0x4afc; // Designated illegal instruction
 
 extern const instruction instructions[65536];
 

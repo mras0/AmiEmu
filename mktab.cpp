@@ -639,7 +639,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         assert(nea < 2);
         ea[nea++] = ea_data3;
         for (unsigned i = 0; i < 8; ++i) {
-            data = static_cast<uint8_t>(i);
+            data = static_cast<uint8_t>(i ? i : 8);
             recur(i);
         }
         --nea;
@@ -699,14 +699,10 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         break;
     case field_type::Mr:
         assert(nea == 1 && ea[0] == ea_data3);
-        if (data == 0)
-            data = 8;
         recur(0);
         ea[0] = data;
         recur(1);
         ea[0] = ea_data3;
-        if (data == 8)
-            data = 0;
         break;
     default:
         std::cerr << "TODO: " << t << "\n";
