@@ -693,13 +693,18 @@ static constexpr uint16_t lores_max_pixel  = 0x1d1;
 static constexpr uint16_t hires_min_pixel  = 2 * lores_min_pixel;
 static constexpr uint16_t hires_max_pixel  = 2 * lores_max_pixel;
 
+// Extra pixels are shown on the same line even after "real" HPOS has rolled around
+// This is needed for max overscan support
+static constexpr uint16_t disp_extra_hpos = 11;
+static_assert(hpos_per_line + disp_extra_hpos >= lores_max_pixel);
+
 static constexpr uint16_t vpos_per_field  = 313;
 //static constexpr uint16_t vpos_per_frame  = 625;
-static constexpr uint16_t vblank_end_vpos = 28;
+static constexpr uint16_t vblank_end_vpos = 0x1a;
 static constexpr uint16_t sprite_dma_start_vpos = 25; // http://eab.abime.net/showpost.php?p=1048395&postcount=200
 
 static_assert(graphics_width == hires_max_pixel - hires_min_pixel);
-static_assert(graphics_height == (vpos_per_field - vblank_end_vpos) * 2);
+static_assert(graphics_height == (/*vpos_per_field*/312 - vblank_end_vpos) * 2);
 
 constexpr uint16_t blitter_func(uint8_t minterm, uint16_t a, uint16_t b, uint16_t c)
 {
@@ -1778,23 +1783,21 @@ public:
         return true;
     }
 
-    void do_pixels(bool vert_disp, unsigned virt_pixel, uint8_t* pixel_temp, const uint8_t* spriteidx)
+    void do_pixels(bool vert_disp, uint16_t display_vpos, uint16_t display_hpos, uint8_t* pixel_temp, const uint8_t* spriteidx)
     {
-        const unsigned disp_pixel = virt_pixel - hires_min_pixel;
-        if (s_.vpos < vblank_end_vpos || disp_pixel >= graphics_width)
+        const unsigned disp_pixel = display_hpos * 2 - hires_min_pixel;
+        if (disp_pixel >= graphics_width)
             return;
+        const bool horiz_disp = display_hpos >= (s_.diwstrt & 0xff) && display_hpos < (0x100 | (s_.diwstop & 0xff));
 
-
-        const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
-
-        uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? 0 : graphics_width)];
+        uint32_t* row = &gfx_buf_[(display_vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? 0 : graphics_width)];
         assert(&row[1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
 
         if (vert_disp && horiz_disp) {
             const uint8_t nbpls = std::min<uint8_t>(6, (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
 
             if (DEBUG_BPL && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
-                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
+                DBGOUT << "Display starting\n";
 
             uint8_t active_sprite = 0;
             uint8_t active_sprite_group = 8;
@@ -1840,7 +1843,7 @@ public:
                     rem_pixels_odd_--;
                     rem_pixels_even_--;
                     if ((rem_pixels_odd_ | rem_pixels_even_) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixels_odd_ << " E=" << rem_pixels_even_ << "\n";
+                        DBGOUT << "Warning: out of pixels O=" << rem_pixels_odd_ << " E=" << rem_pixels_even_ << "\n";
                     }
                 }
 
@@ -1936,9 +1939,14 @@ public:
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
 
-        // First readble hpos that's interpreted as being on a new line is $005 (since it's resolution is half that of lowres pixels -> 20) 
-        const unsigned virt_pixel = s_.hpos * 2 + 20 + 2; // +2 to compensate for change of hpos_per_line from 455 to 454
-        const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < ((~s_.diwstop & 0x8000) >> 7 | s_.diwstop >> 8); // VSTOP MSB is complemented and used as the 9th bit
+        uint16_t display_hpos = s_.hpos;
+        uint16_t display_vpos = s_.vpos;
+        if (display_vpos > vblank_end_vpos && display_hpos < disp_extra_hpos) {
+            --display_vpos;
+            display_hpos += hpos_per_line;
+        }
+
+        const bool vert_disp = display_vpos >= s_.diwstrt >> 8 && display_vpos < ((~s_.diwstop & 0x8000) >> 7 | s_.diwstop >> 8); // VSTOP MSB is complemented and used as the 9th bit
         const uint16_t colclock = s_.hpos >> 1;
 
         step_result res {
@@ -1967,7 +1975,7 @@ public:
             }
 
             // Check against hstart+1 to allow shifting out pixels immediately (avoids gap in clouds in Brian the Lion)
-            if (s_.spr_armed[spr] && s_.sprite_hpos_start(spr)+1 == s_.hpos) {
+            if (s_.spr_armed[spr] && s_.sprite_hpos_start(spr)+1 == display_hpos) {
                 if (DEBUG_SPRITE)
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Armed and HPOS ($" << hexfmt(s_.sprite_hpos_start(spr)) << ") matches!\n";
                 s_.spr_hold_a[spr] = s_.sprdata[spr];
@@ -1990,7 +1998,7 @@ public:
 
         if (!(s_.hpos & 1) && s_.bpl1dat_written) {
             if (DEBUG_BPL) {
-                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Making BPL data available";
+                DBGOUT << "Making BPL data available";
                 if (s_.bpldata_avail) {
                     *debug_stream << " Warning: data not used flags=" << hexfmt(s_.bpldata_avail);
                 }
@@ -2021,7 +2029,7 @@ public:
                 s_.bpldata_avail &= ~1;
 
                 if (DEBUG_BPL) {
-                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (delay=$" << hexfmt(delay1, 1) << ")";
+                    DBGOUT << "Loaded odd pixels (delay=$" << hexfmt(delay1, 1) << ")";
                     if (rem_pixels_odd_ > 0)
                         *debug_stream << " Warning discarded " << rem_pixels_odd_;
                     *debug_stream << "\n";
@@ -2034,7 +2042,7 @@ public:
                 s_.bpldata_avail &= ~2;
 
                 if (DEBUG_BPL) {
-                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (delay=$" << hexfmt(delay2, 1) << ")";
+                    DBGOUT << "Loaded even pixels (delay=$" << hexfmt(delay2, 1) << ")";
                     if (rem_pixels_even_ > 0)
                         *debug_stream << " Warning discarded " << rem_pixels_even_;
                     *debug_stream << "\n";
@@ -2045,7 +2053,7 @@ public:
         // Seems like there's a slight delay before updates to BPL1CON relating to bitplane delays take effect
         // Ex. desert dream rotating logo cube, Brian The Lion start menu and vAmigaTS DENISE/BPLCON1/Timing4
         if (DEBUG_BPL && s_.bplcon1_denise != s_.bplcon1)
-            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " DDFSTRT=$" << hexfmt(s_.ddfstrt) << " BPLCON1 update to " << hexfmt(s_.bplcon1) << " taking effect (previous: $" << hexfmt(s_.bplcon1_denise) << ")\n";
+            DBGOUT << "DDFSTRT=$" << hexfmt(s_.ddfstrt) << " BPLCON1 update to " << hexfmt(s_.bplcon1) << " taking effect (previous: $" << hexfmt(s_.bplcon1_denise) << ")\n";
         s_.bplcon1_denise = s_.bplcon1;
 
         if (!(s_.hpos & 1)) {
@@ -2097,7 +2105,7 @@ public:
                 if (bpl_dma_active) {
                     if (s_.ddfst == ddfstate::before_ddfstrt && colclock == std::max<uint16_t>(0x18, s_.ddfstrt)) {
                         if (DEBUG_BPL) {
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " DDFSTRT=$" << hexfmt(s_.ddfstrt) << " passed\n";
+                            DBGOUT << "DDFSTRT=$" << hexfmt(s_.ddfstrt) << " passed\n";
                             num_bpl1_writes = 0;
                         }
                         s_.ddfst = ddfstate::active;
@@ -2105,12 +2113,12 @@ public:
                         s_.ddfend = 0;
                     } else if (s_.ddfst == ddfstate::active && colclock == std::min<uint16_t>(0xD8, s_.ddfstop)) {
                         if (DEBUG_BPL)
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " DDFSTOP=$" << hexfmt(s_.ddfstop) << " passed\n";
+                            DBGOUT << "DDFSTOP=$" << hexfmt(s_.ddfstop) << " passed\n";
                         // Need to do one final 8-cycles DMA fetch
                         s_.ddfst = ddfstate::ddfstop_passed;
                     } else if (s_.ddfst == ddfstate::ddfstop_passed && s_.ddfcycle == s_.ddfend) {
                         if (DEBUG_BPL)
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPL DMA done (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
+                            DBGOUT << "BPL DMA done (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
                         s_.ddfst = ddfstate::stopped;
                     }
                 }
@@ -2121,7 +2129,7 @@ public:
                     const int bpl = (s_.bplcon0 & BPLCON0F_HIRES ? hires_bpl_sched : lores_bpl_sched)[s_.ddfcycle & 7] - 1;
                     if (s_.ddfst == ddfstate::ddfstop_passed && !s_.ddfend && (s_.ddfcycle & 7) == 0) {
                         if (DEBUG_BPL)
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Doing final DMA cycles (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
+                            DBGOUT << "Doing final DMA cycles (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
                         s_.ddfend = s_.ddfcycle + 8;
                     }
                     ++s_.ddfcycle;
@@ -2133,11 +2141,11 @@ public:
 
                     if (bpl >= 0 && bpl < nbpls) {
                         if (DEBUG_BPL)
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPL " << bpl << " DMA (fetch cycle $" << hexfmt(s_.ddfcycle) << ")\n";
+                            DBGOUT << "BPL " << bpl << " DMA (fetch cycle $" << hexfmt(s_.ddfcycle) << ")\n";
                         s_.bpldat[bpl] = do_dma(s_.bplpt[bpl]);
                         if (bpl == 0) {
                             if (DEBUG_BPL) {
-                                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Data available -- bpldat1_written = " << s_.bpl1dat_written << " bpldata_avail = " << hexfmt(s_.bpldata_avail) << (s_.bpl1dat_written ? " Warning!" : "") << "\n";
+                                DBGOUT << "Data available -- bpldat1_written = " << s_.bpl1dat_written << " bpldata_avail = " << hexfmt(s_.bpldata_avail) << (s_.bpl1dat_written ? " Warning!" : "") << "\n";
                                 ++num_bpl1_writes;
                             }
 
@@ -2148,7 +2156,7 @@ public:
                         if (s_.ddfend && (!(s_.bplcon0 & BPLCON0F_HIRES) || ((s_.ddfcycle-1) & 7) > 3)) {
                             // Final DMA cycle adds bitplane modulo
                             if (DEBUG_BPL)
-                                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Data available -- Adding modulo for bpl=" << (int)bpl << ": " << (bpl & 1 ? s_.bplmod2 : s_.bplmod1) << "\n";
+                                DBGOUT << "Data available -- Adding modulo for bpl=" << (int)bpl << ": " << (bpl & 1 ? s_.bplmod2 : s_.bplmod1) << "\n";
                             s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;
                         }
 
@@ -2198,17 +2206,18 @@ public:
         }
 
         // Output pixels after copper had a chance to update color registers
-        do_pixels(vert_disp, virt_pixel, pixel_temp, spriteidx);
+        if (display_vpos >= vblank_end_vpos && display_vpos != vpos_per_field-1)
+            do_pixels(vert_disp, display_vpos, display_hpos, pixel_temp, spriteidx);
 
         if (!(s_.hpos & 1) && (s_.bplmod1_countdown|s_.bplmod2_countdown)) {
             if (s_.bplmod1_countdown && --s_.bplmod1_countdown == 0) {
                 if (DEBUG_BPL)
-                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPLMOD1 change taking effect new=$" << hexfmt(s_.bplmod1_pending) << " old=$" << hexfmt(s_.bplmod1) << "\n";
+                    DBGOUT << "BPLMOD1 change taking effect new=$" << hexfmt(s_.bplmod1_pending) << " old=$" << hexfmt(s_.bplmod1) << "\n";
                 s_.bplmod1 = s_.bplmod1_pending;
             }
             if (s_.bplmod2_countdown && --s_.bplmod2_countdown == 0) {
                 if (DEBUG_BPL)
-                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPLMOD2 change taking effect new=$" << hexfmt(s_.bplmod2_pending) << " old=$" << hexfmt(s_.bplmod2) << "\n";
+                    DBGOUT << "BPLMOD2 change taking effect new=$" << hexfmt(s_.bplmod2_pending) << " old=$" << hexfmt(s_.bplmod2) << "\n";
                 s_.bplmod2 = s_.bplmod2_pending;
             }
         }
@@ -2235,16 +2244,7 @@ public:
 
         if (++s_.hpos == hpos_per_line) {
             s_.hpos = 0;
-            // XXX
-            memset(s_.bpldat_shift, 0, sizeof(s_.bpldat_shift));
-            memset(s_.bpldat_temp, 0, sizeof(s_.bpldat_temp));
-            s_.bpl1dat_written = false;
-            s_.bpl1dat_written_this_line = false;
-            s_.bpldata_avail = 0;
-            rem_pixels_odd_ = rem_pixels_even_ = 0;
-            s_.ham_color = rgb4_to_8(s_.color[0]);
             s_.ddfst = ddfstate::before_ddfstrt;
-            memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
 
             cia_.increment_tod_counter(1);
             if (++s_.vpos == vpos_per_field) {
@@ -2257,6 +2257,17 @@ public:
                 s_.intreq |= INTF_VERTB;
                 cia_.increment_tod_counter(0);
             }
+        }
+        if (s_.hpos == disp_extra_hpos) {
+            // Don't clear display state until after "display end of line" passed
+            //memset(s_.bpldat_shift, 0, sizeof(s_.bpldat_shift));
+            //memset(s_.bpldat_temp, 0, sizeof(s_.bpldat_temp));
+            //s_.bpldata_avail = 0;
+            s_.bpl1dat_written = false;
+            s_.bpl1dat_written_this_line = false;
+            rem_pixels_odd_ = rem_pixels_even_ = 0;
+            s_.ham_color = rgb4_to_8(s_.color[0]);
+            //memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
         }
 
         res.vpos = s_.vpos;

@@ -8,7 +8,7 @@
 #include "memory.h"
 
 constexpr unsigned graphics_width  = 768; // 24*16*2
-constexpr unsigned graphics_height = 570; // 285*2 (285 is only for every other field)
+constexpr unsigned graphics_height = 572; // 286*2
 
 constexpr unsigned audio_samples_per_frame = 313 * 2; // Two stereo sample per scanline
 constexpr unsigned audio_buffer_size = audio_samples_per_frame * 2;
