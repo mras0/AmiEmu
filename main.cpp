@@ -940,7 +940,10 @@ unknown_command:
                     do {
                         cstep(false);
                     } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
+                } else {
+                    do_all_custom_cylces();
                 }
+
     
 #ifdef TRACE_LOG
                 if (cpu.instruction_count() == trace_start_inst) {

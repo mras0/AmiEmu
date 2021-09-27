@@ -129,13 +129,13 @@ uint16_t rom_area_handler::read_u16(uint32_t, uint32_t offset)
 void rom_area_handler::write_u8(uint32_t addr, uint32_t offset, uint8_t val)
 {
     std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
-    throw std::runtime_error { "Write to ROM" };
+    //throw std::runtime_error { "Write to ROM" };
 }
 
 void rom_area_handler::write_u16(uint32_t addr, uint32_t offset, uint16_t val)
 {
     std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
-    throw std::runtime_error { "Write to ROM" };
+    //throw std::runtime_error { "Write to ROM" };
 }
 
 void memory_handler::register_handler(memory_area_handler& h, uint32_t base, uint32_t len)
