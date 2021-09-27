@@ -1041,7 +1041,7 @@ public:
         os << "INT: " << hexfmt(s_.intena & s_.intreq, 4) << " IPL: " << hexfmt(current_ipl()) << "\n";
         os << "COP1LC: " << hexfmt(s_.coplc[0]) << " COP2LC: " << hexfmt(s_.coplc[1]) << " COPPTR: " << hexfmt(s_.copper_pt) << "\n";
         os << "DIWSTRT: " << hexfmt(s_.diwstrt) << " DIWSTOP: " << hexfmt(s_.diwstop) << " DDFSTRT: " << hexfmt(s_.ddfstrt) << " DDFSTOP: " << hexfmt(s_.ddfstop) << "\n";
-        os << "BPLCON 0: " << hexfmt(s_.bplcon0) << " 1: " << hexfmt(s_.bplcon1) << " 2: " << hexfmt(s_.bplcon2) << "\n";
+        os << "BPLCON 0: " << hexfmt(s_.bplcon0) << " 1: " << hexfmt(s_.bplcon1) << " 2: " << hexfmt(s_.bplcon2) << " LOF=" << s_.long_frame << "\n";
     }
 
     void show_registers(std::ostream& os)
@@ -2252,7 +2252,8 @@ public:
                 //Note: sprite armed flag is not reset here (vAmigaTS manual1)
                 s_.copstate = copper_state::vblank;
                 s_.vpos = 0;
-                s_.long_frame = (s_.bplcon0 & BPLCON0F_LACE ? !s_.long_frame : true);
+                if (s_.bplcon0 & BPLCON0F_LACE)
+                    s_.long_frame = !s_.long_frame;
                 s_.intreq |= INTF_VERTB;
                 cia_.increment_tod_counter(0);
             }
@@ -2510,7 +2511,11 @@ public:
                 DBGOUT << "Write to DSKLEN: $" << hexfmt(val) << (s_.dsklen_act && (s_.dsklen_act & 0x8000) ? " - Active!" : "") << "\n";
             return;
         case VPOSW:  // $02A
-            return;  // Ignore for now
+            // Only support clearing/setting LOF (3d demo II)
+            if (DEBUG_BPL || !!(val & 0x8000) != s_.long_frame)
+                DBGOUT << "Write to VPOSW $" << hexfmt(val) << "\n";
+            s_.long_frame = !!(val & 0x8000);
+            return;
         case COPCON: // $02E
             s_.cdang = !!(val & 2);
             if (DEBUG_COPPER)
