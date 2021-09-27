@@ -821,6 +821,9 @@ struct custom_state {
     bool bltdwrite;
     bool bltinpoly;
     uint32_t bltdpt;
+    uint8_t blitline_ashift;
+    bool blitline_sign;
+    bool blitline_dot_this_line;
     uint8_t bltblockingcpu;
 
     uint32_t coplc[2];
@@ -916,6 +919,55 @@ struct custom_state {
         assert(spr < 8);
         return ((sprpos[spr] & 0xff) << 1) | (sprctl[spr] & 1);
     }
+
+    void update_blitter_line()
+    {
+        auto incx = [&]() {
+            if (++blitline_ashift == 16) {
+                blitline_ashift = 0;
+                bltpt[2] += 2;
+            }
+        };
+        auto decx = [&]() {
+            if (blitline_ashift-- == 0) {
+                blitline_ashift = 15;
+                bltpt[2] -= 2;
+            }
+        };
+        auto incy = [&]() {
+            bltpt[2] += bltmod[2];
+            blitline_dot_this_line = false;
+        };
+        auto decy = [&]() {
+            bltpt[2] -= bltmod[2];
+            blitline_dot_this_line = false;
+        };
+
+        if (!blitline_sign) {
+            if (bltcon1 & BC1F_SUD) {
+                if (bltcon1 & BC1F_SUL)
+                    decy();
+                else
+                    incy();
+            } else {
+                if (bltcon1 & BC1F_SUL)
+                    decx();
+                else
+                    incx();
+            }
+        }
+        if (bltcon1 & BC1F_SUD) {
+            if (bltcon1 & BC1F_AUL)
+                decx();
+            else
+                incx();
+        } else {
+            if (bltcon1 & BC1F_AUL)
+                decy();
+            else
+                incy();
+        } 
+    }
 };
 
 }
@@ -1010,83 +1062,23 @@ public:
 
     void do_immedite_blit_line()
     {
-        if (s_.bltdat[0] != 0x8000)
-            DBGOUT << "Warning: Blitter line unexpected BLTADAT $" << hexfmt(s_.bltdat[0]) << "\n";
-        // http://eab.abime.net/showpost.php?p=206412&postcount=6
-        // D can be disabled
-        // C MUST be enabled (otherwise nothing is drawn)
-        // If A is disabled BLTAPT isn't updated
-        if ((s_.bltcon0 & (BC0F_SRCA | BC0F_SRCB | BC0F_SRCC)) != (BC0F_SRCA | BC0F_SRCC))
-            DBGOUT << "Warning: Blitter line unexpected BLTCON0 $" << hexfmt(s_.bltcon0) << "\n";
-        if (s_.bltw != 2)
-            DBGOUT << "Warning: Blitter line unexpected width $" << hexfmt(s_.bltw) << "\n";
-
-        uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
-        bool sign = !!(s_.bltcon1 & BC1F_SIGNFLAG);
-        bool dot_this_line = false;
-
-        auto incx = [&]() {
-            if (++ashift == 16) {
-                ashift = 0;
-                s_.bltpt[2] += 2;
-            }
-        };
-        auto decx = [&]() {
-            if (ashift-- == 0) {
-                ashift = 15;
-                s_.bltpt[2] -= 2;
-            }
-        };
-        auto incy = [&]() {
-            s_.bltpt[2] += s_.bltmod[2];
-            dot_this_line = false;
-        };
-        auto decy = [&]() {
-            s_.bltpt[2] -= s_.bltmod[2];
-            dot_this_line = false;
-        };
-
         for (uint16_t cnt = 0; cnt < s_.blth; ++cnt) {
-            const uint32_t addr = s_.bltpt[2];
-            const bool draw = !(s_.bltcon1 & BC1F_ONEDOT) || !dot_this_line;
-            s_.bltdat[2] = chip_read(addr);
-            s_.bltbhold = s_.bltdat[1] & 1 ? 0xFFFF : 0;
-            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> ashift, s_.bltbhold, s_.bltdat[2]);
-            s_.bltpt[0] += sign ? s_.bltmod[1] : s_.bltmod[0];
-            dot_this_line = true;
-
-            if (!sign) {
-                if (s_.bltcon1 & BC1F_SUD) {
-                    if (s_.bltcon1 & BC1F_SUL)
-                        decy();
-                    else
-                        incy();
-                } else {
-                    if (s_.bltcon1 & BC1F_SUL)
-                        decx();
-                    else
-                        incx();
-                }
-            }
-            if (s_.bltcon1 & BC1F_SUD) {
-                if (s_.bltcon1 & BC1F_AUL)
-                    decx();
-                else
-                    incx();
-            } else {
-                if (s_.bltcon1 & BC1F_AUL)
-                    decy();
-                else
-                    incy();
-            } 
-
-            sign = static_cast<int16_t>(s_.bltpt[0]) < 0;
-            s_.bltdat[1] = rol(s_.bltdat[1], 1);
             // First pixel is written to D
-            if (draw)
-                chip_write(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
+            s_.bltdpt = cnt ? s_.bltpt[2] : s_.bltpt[3];
+            s_.bltdwrite = !(s_.bltcon1 & BC1F_ONEDOT) || !s_.blitline_dot_this_line;
+            s_.bltdat[2] = chip_read(s_.bltpt[2]);
+            s_.bltbhold = s_.bltdat[1] & 1 ? 0xFFFF : 0;
+            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> s_.blitline_ashift, s_.bltbhold, s_.bltdat[2]);
+            s_.bltpt[0] += s_.blitline_sign ? s_.bltmod[1] : s_.bltmod[0];
+            s_.blitline_dot_this_line = true;
+
+            s_.update_blitter_line();
+
+            s_.blitline_sign = static_cast<int16_t>(s_.bltpt[0]) < 0;
+            s_.bltdat[1] = rol(s_.bltdat[1], 1);
+            if (s_.bltdwrite)
+                chip_write(s_.bltdpt, s_.bltdat[3]);
         }
-        s_.bltpt[3] = s_.bltpt[2];
     }
 
     bool do_immedite_blit()
@@ -1203,7 +1195,7 @@ public:
         if (s_.blitstate == custom_state::blit_stopped)
             return false;
 
-        assert((s_.dmacon & DMAF_BLTBUSY));
+        assert(s_.dmacon & DMAF_BLTBUSY);
 
         if (s_.bltcon1 & BC1F_LINEMODE) {
             // Temp: Immediate blit for lines
@@ -1356,9 +1348,6 @@ public:
 
     void blitstart(uint16_t val)
     {
-        if (s_.blitstate != custom_state::blit_stopped) {
-            DBGOUT << "Warning: Blitter started while busy. bltx=$" << hexfmt(s_.bltx) << " blth=$" << hexfmt(s_.blth) << " busy=" << !!(s_.dmacon & DMAF_BLTBUSY) << " state=" << (int)s_.blitstate << "\n";
-        }
         s_.bltsize = val;
         s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
         s_.blth = val >> 6 ? val >> 6 : 0x400;
@@ -1372,6 +1361,24 @@ public:
         s_.bltdpt = 0;
         s_.blitstate = custom_state::blit_running;
         s_.bltblockingcpu = 0;
+
+        if (s_.bltcon1 & BC1F_LINEMODE) {
+            if (s_.bltdat[0] != 0x8000)
+                DBGOUT << "Warning: Blitter line unexpected BLTADAT $" << hexfmt(s_.bltdat[0]) << "\n";
+            // http://eab.abime.net/showpost.php?p=206412&postcount=6
+            // D can be disabled
+            // C MUST be enabled (otherwise nothing is drawn)
+            // If A is disabled BLTAPT isn't updated
+            if ((s_.bltcon0 & (BC0F_SRCA | BC0F_SRCB | BC0F_SRCC)) != (BC0F_SRCA | BC0F_SRCC))
+                DBGOUT << "Warning: Blitter line unexpected BLTCON0 $" << hexfmt(s_.bltcon0) << "\n";
+            if (s_.bltw != 2)
+                DBGOUT << "Warning: Blitter line unexpected width $" << hexfmt(s_.bltw) << "\n";
+
+            s_.blitline_ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
+            s_.blitline_sign = !!(s_.bltcon1 & BC1F_SIGNFLAG);
+            s_.blitline_dot_this_line = false;
+        }
+
         if (DEBUG_BLITTER) {
             DBGOUT << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
             for (int i = 0; i < 4; ++i) {
@@ -1407,6 +1414,8 @@ public:
         s_.dmacon &= ~DMAF_BLTBUSY;
         s_.bltw = s_.blth = 0;
         s_.blitstate = custom_state::blit_stopped;
+        if (s_.bltcon1 & BC1F_LINEMODE)
+            s_.bltpt[3] = s_.bltpt[2];
     }
 
     bool do_copper()
@@ -2378,6 +2387,11 @@ public:
             return;
         }
 
+        // Warn if blitter registers are accessed when not idle
+        if (offset >= BLTCON0 && offset <= BLTADAT && s_.blitstate != custom_state::blit_stopped) {
+            DBGOUT << "Warning: Blitter register access (" << custom_regname(offset) << " val $" << hexfmt(val) << ") while busy. bltx=$" << hexfmt(s_.bltx) << " blth=$" << hexfmt(s_.blth) << " busy=" << !!(s_.dmacon & DMAF_BLTBUSY) << " state=" << (int)s_.blitstate << "\n";
+        }
+
         switch (offset) {
         case BLTDDAT: // $000
         case DMACONR: // $002
@@ -2458,7 +2472,7 @@ public:
             write_partial(s_.bltpt[3]);
             s_.bltpt[3] &= ~1U;
             return;
-        case BLTSIZE:        
+        case BLTSIZE:
             blitstart(val);
             return;
         case BLTCMOD:
