@@ -676,7 +676,7 @@ private:
     void do_trap(interrupt_vector vec)
     {
         assert(vec < interrupt_vector::level1 || vec > interrupt_vector::level7); // Should use do_interrupt
-        do_interrupt_impl(vec, 7); // XXX: IPL 7?
+        do_interrupt_impl(vec, (state_.sr & srm_ipl) >> sri_ipl); // IPL not updated
     }
 
     void do_interrupt(uint8_t ipl)

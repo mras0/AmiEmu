@@ -54,6 +54,8 @@ void run_test_case(const std::string& filename)
                 break;
             }
         }
+        if (pc_add)
+            st.instruction_count = 1;
         return st;
     };
 
@@ -1090,11 +1092,12 @@ bool run_simple_tests()
         },
     };
 
-    auto make_state = [](const uint32_t d[8], uint16_t ccr, uint32_t pc) {
+    auto make_state = [](const uint32_t d[8], uint16_t ccr, uint32_t pc, uint64_t icount) {
         cpu_state st {};
         memcpy(st.d, d, sizeof(st.d));
         st.sr = ccr;
         st.pc = pc;
+        st.instruction_count = icount;
         return st;
     };
 
@@ -1103,8 +1106,8 @@ bool run_simple_tests()
         for (unsigned i = 0; i < std::size(t.insts); ++i)
             put_u16(&ram[code_pos + i * 2], t.insts[i]);
 
-        const auto input_state = make_state(t.in_d, t.in_sr, code_pos);
-        const auto expected_state = make_state(t.out_d, t.out_sr, code_pos + static_cast<uint32_t>(2*t.insts.size()));
+        const auto input_state = make_state(t.in_d, t.in_sr, code_pos, 0);
+        const auto expected_state = make_state(t.out_d, t.out_sr, code_pos + static_cast<uint32_t>(2*t.insts.size()), 1);
         m68000 cpu { mem, input_state };
         const auto& outst = cpu.state();
         try {

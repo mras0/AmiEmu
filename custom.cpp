@@ -1587,6 +1587,8 @@ public:
             return;
         case INTENA:  // $09A
             setclr(s_.intena, val);
+            if (s_.intena & (INTF_AUD0 | INTF_AUD1 | INTF_AUD2 | INTF_AUD3))
+                std::cout << "Warning: INTENA contains AUDx interrupts: $" << hexfmt(s_.intena) << "\n";
             return;
         case INTREQ:  // $09C
             val &= ~INTF_INTEN;
