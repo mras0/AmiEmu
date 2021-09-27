@@ -459,9 +459,7 @@ private:
         case ';':
             while (*input_ && *input_ != '\n')
                 ++input_;
-            token_type_ = token_type::newline;
-            ++line_;
-            col_ = 1;
+            token_type_ = token_type::whitespace;
             return;
         case '#':
         case '\'':

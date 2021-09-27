@@ -542,9 +542,12 @@ private:
 
 class test_board : public memory_area_handler, public autoconf_device {
 public:
-    explicit test_board(memory_handler& mem)
+    explicit test_board(memory_handler& mem, bool& cpu_active)
         : autoconf_device { mem, *this, config }
+        , mem_ { mem }
+        , cpu_active_ { cpu_active }
     {
+        disk_.resize(512 * 10 * 1000); // SECTORSIZE * SECTORS_PER_TRACK * NUM_CYLINDERS
     }
 
 private:
@@ -556,6 +559,10 @@ private:
         .serial_no = 1,
         .rom_vector_offset = EXPROM_BASE,
     };
+    memory_handler& mem_;
+    bool& cpu_active_;
+    uint32_t ptr_hold_ = 0;
+    std::vector<uint8_t> disk_;
 
     uint8_t read_u8(uint32_t, uint32_t offset) override
     {
@@ -584,7 +591,67 @@ private:
 
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
-        std::cerr << "Test board: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
+        const uint32_t special_offset = static_cast<uint32_t>(config.rom_vector_offset + sizeof(exprom));
+        if (offset == special_offset) {
+            ptr_hold_ = val << 16 | (ptr_hold_ & 0xffff);
+            return;
+        } else if (offset == special_offset + 2) {
+            ptr_hold_ = (ptr_hold_ & 0xffff0000) | val;
+        } else if (offset == special_offset + 4) {
+            if (val != 0xfede || !ptr_hold_ || (ptr_hold_ & 1) || !cpu_active_) {
+                std::cerr << "Test board: Invalid conditions! written val = $" << hexfmt(val) << " ptr_hold = $" << hexfmt(ptr_hold_) << " cpu_active_ = " << cpu_active_ << "\n";
+                return;
+            }
+            cpu_active_ = false;
+
+            static constexpr int8_t IOERR_NOCMD      = -3;
+            static constexpr int8_t IOERR_BADLENGTH  = -4;
+            static constexpr int8_t IOERR_BADADDRESS = -5;
+
+            constexpr uint16_t CMD_READ   = 0x02;
+            constexpr uint16_t CMD_WRITE  = 0x03;
+            constexpr uint16_t CMD_FORMAT = 0x0b;
+
+            constexpr uint32_t IO_COMMAND = 0x1C;
+            constexpr uint32_t IO_ERROR   = 0x1F;
+            constexpr uint32_t IO_ACTUAL  = 0x20;
+            constexpr uint32_t IO_LENGTH  = 0x24;
+            constexpr uint32_t IO_DATA    = 0x28;
+            constexpr uint32_t IO_OFFSET  = 0x2C;
+            std::cerr << "Test board: Triggered with ptr_hold = $" << hexfmt(ptr_hold_) << "\n";
+            const auto cmd  = mem_.read_u16(ptr_hold_ + IO_COMMAND);
+            const auto len  = mem_.read_u32(ptr_hold_ + IO_LENGTH);
+            const auto data = mem_.read_u32(ptr_hold_ + IO_DATA);
+            const auto ofs  = mem_.read_u32(ptr_hold_ + IO_OFFSET);
+
+            std::cerr << "Test board: Command=$" << hexfmt(cmd) << " Length=$" << hexfmt(len) << " Data=$" << hexfmt(data) << " Offset=$" << hexfmt(ofs) << "\n";
+
+            if (cmd == CMD_READ || cmd == CMD_WRITE || cmd == CMD_FORMAT) {
+                if (ofs > disk_.size() || len > disk_.size() || ofs > disk_.size() - len) {
+                    std::cerr << "Test board: Invalid offset\n";
+                    mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
+                } else {
+                    if (cmd == CMD_READ) {
+                        for (uint32_t i = 0; i < len; ++i)
+                            mem_.write_u8(data + i, disk_[ofs + i]);
+                        hexdump(std::cout, &disk_[ofs], len);
+                    } else if (cmd == CMD_WRITE || cmd == CMD_FORMAT) {
+                        for (uint32_t i = 0; i < len; ++i)
+                            disk_[ofs + i] = mem_.read_u8(data + i);
+                        hexdump(std::cout, &disk_[ofs], len);
+                    }
+                    mem_.write_u32(ptr_hold_ + IO_ACTUAL, len);
+                }
+            } else {
+                std::cerr << "Test board: Unsupported command $" << hexfmt(cmd) << "\n";
+                mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_NOCMD));
+            }
+
+            cpu_active_ = true;
+            ptr_hold_ = 0;
+        } else {
+            std::cerr << "Test board: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
+        }
     }
 };
 
@@ -615,9 +682,6 @@ int main(int argc, char* argv[])
             fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
             autoconf.add_device(*fast_ram);
         }
-
-        test_board b { mem };
-        autoconf.add_device(b);
 
         m68000 cpu { mem };
 
@@ -768,6 +832,9 @@ int main(int argc, char* argv[])
         #ifdef WRITE_SOUND
         std::ofstream sound_out { "c:/temp/sound.raw" };
         #endif
+
+        test_board b { mem, cpu_active };
+        autoconf.add_device(b);
 
         auto cstep = [&](bool cpu_waiting) {
             const bool cpu_was_active = cpu_active;
