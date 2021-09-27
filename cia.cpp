@@ -290,8 +290,10 @@ public:
     {
         assert(raw <= 0x7f);
         // Bit0: 1=down/0=up, Bit1..7: ~scancore (i.e. bitwise not)
-        if (static_cast<uint8_t>(kbd_buffer_head_ - kbd_buffer_tail_) >= sizeof(kbd_buffer_))
-            throw std::runtime_error { "Keyboard buffer overflow" }; // FIXME
+        if (static_cast<uint8_t>(kbd_buffer_head_ - kbd_buffer_tail_) >= sizeof(kbd_buffer_)) {
+            std::cerr << "Keyboard buffer overrun\n";
+            return;
+        }
 #ifdef KEYBOARD_DEBUG
         std::cout << "Adding to keyboard buffer: $" << hexfmt<uint8_t>((pressed & 1) | (~raw) << 1) << "\n";
 #endif

@@ -554,6 +554,7 @@ public:
     explicit impl(memory_handler& mem_handler, cia_handler& cia)
         : mem_ { mem_handler }
         , cia_ { cia }
+        , chip_ram_mask_ { static_cast<uint32_t>(mem_.ram().size()) - 2 } // -1 for normal mask, -2 for word aligned mask
     {
         mem_.register_handler(*this, 0xDFF000, 0x1000);    
         reset();
@@ -646,7 +647,7 @@ public:
         for (uint16_t cnt = 0; cnt < s_.blth; ++cnt) {
             const uint32_t addr = s_.bltpt[2];
             const bool draw = !(s_.bltcon1 & BC1F_ONEDOT) || !dot_this_line;
-            s_.bltdat[2] = mem_.read_u16(addr);
+            s_.bltdat[2] = chip_read(addr);
             s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> ashift, (s_.bltdat[1] & 1) ? 0xFFFF : 0, s_.bltdat[2]);
             s_.bltpt[0] += sign ? s_.bltmod[1] : s_.bltmod[0];
             dot_this_line = true;
@@ -680,7 +681,7 @@ public:
             s_.bltdat[1] = rol(s_.bltdat[1], 1);
             // First pixel is written to D
             if (draw)
-                mem_.write_u16(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
+                chip_write(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
         }
         s_.bplpt[3] = s_.bplpt[2];
     }
@@ -706,7 +707,7 @@ public:
                     pt += n;
             };
             auto do_dma = [&](uint8_t index) {
-                s_.bltdat[index] = mem_.read_u16(s_.bltpt[index]);
+                s_.bltdat[index] = chip_read(s_.bltpt[index]);
                 incr_ptr(s_.bltpt[index]);
             };
 
@@ -759,7 +760,7 @@ public:
                     }
                     any |= val;
                     if (s_.bltcon0 & BC0F_DEST) {
-                        mem_.write_u16(s_.bltpt[3], val);
+                        chip_write(s_.bltpt[3], val);
                         incr_ptr(s_.bltpt[3]);
                     }
                 }
@@ -897,7 +898,7 @@ public:
                 val = get_u16(&s_.mfm_track[s_.mfm_pos*2]);
                 ++s_.mfm_pos;
             }
-            mem_.write_u16(s_.dskpt, val);
+            chip_write(s_.dskpt, val);
             s_.dskpt += 2;
         }
         s_.intreq |= INTF_DSKBLK;
@@ -1150,8 +1151,8 @@ public:
         }
 
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
-            auto do_dma = [&mem = this->mem_](uint32_t& pt) {
-                const auto val = mem.read_u16(pt);
+            auto do_dma = [this](uint32_t& pt) {
+                const auto val = chip_read(pt);
                 pt += 2;
                 return val;
             };
@@ -1672,6 +1673,17 @@ private:
 
     uint32_t gfx_buf_[graphics_width * graphics_height];
     custom_state s_;
+    uint32_t chip_ram_mask_;
+
+    uint16_t chip_read(uint32_t addr)
+    {
+        return mem_.read_u16(addr & chip_ram_mask_);
+    }
+
+    void chip_write(uint32_t addr, uint16_t val)
+    {
+        mem_.write_u16(addr & chip_ram_mask_, val);
+    }
 };
 
 custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia)
