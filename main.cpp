@@ -25,11 +25,11 @@
 #include "debug.h"
 #include "wavedev.h"
 #include "asm.h"
+#include "autoconf.h"
+#include "harddisk.h"
 #include "rtc.h"
 
 namespace {
-
-#include "exprom.h"
 
 std::vector<std::string> split_line(const std::string& line)
 {
@@ -193,13 +193,14 @@ struct command_line_arguments {
     uint32_t chip_size;
     uint32_t slow_size;
     uint32_t fast_size;
+    uint8_t cpu_scale;
     bool test_mode;
     bool nosound;
 };
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -255,6 +256,17 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_size_arg("fast", args.fast_size, max_fast_size))
                 continue;
+            else if (!strcmp(&argv[i][1], "cpuscale")) {
+                std::string s = args.cpu_scale ? " " : ""; // Non-empty if already specified so get_string_arg will warn
+                if (get_string_arg("cpuscale", s)) {
+                    char* ep = nullptr;
+                    const auto num = strtoul(s.c_str(), &ep, 10);
+                    if (*ep || num < 1 || num > 22)
+                        usage("Invalid cpu scale (must be 1..22)");
+                    args.cpu_scale = static_cast<uint8_t>(num);
+                    continue;
+                }
+            }
             else if (!strcmp(&argv[i][1], "help"))
                 usage("");
             else if (!strcmp(&argv[i][1], "testmode")) {
@@ -280,472 +292,10 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
     if (args.chip_size < 256 << 10) {
         usage("Invalid configuration (chip RAM too small)");
     }
+    if (!args.cpu_scale)
+        args.cpu_scale = 1;
     return args;
 }
-
-class autoconf_device {
-public:
-    static constexpr uint8_t ERT_ZORROII        = 0xc0;
-    static constexpr uint8_t ERTF_MEMLIST       = 1 << 5;
-    static constexpr uint8_t ERTF_DIAGVALID     = 1 << 4;
-    static constexpr uint8_t ERTF_CHAINEDCONFIG = 1 << 3;
-
-    struct board_config {
-        uint8_t type;
-        uint32_t size;
-        uint8_t product_number;
-        uint16_t hw_manufacturer;
-        uint32_t serial_no;
-        uint16_t rom_vector_offset;
-    };
-
-    uint8_t read_config_byte(uint8_t offset) const
-    {
-        assert(offset < sizeof(conf_data_));
-        assert(mode_ == mode::autoconf);
-        return conf_data_[offset];
-    }
-
-    void write_config_byte(uint8_t offset, uint8_t val)
-    {
-        assert(mode_ == mode::autoconf);
-        throw std::runtime_error { "TODO: Write config byte $" + hexstring(offset) + " val $" + hexstring(val) };
-    }
-
-    void shutup()
-    {
-        assert(mode_ == mode::autoconf);
-        std::cout << "[AUTOCONF] " << desc() << " shutting up\n";
-        mode_ = mode::shutup;
-    }
-
-    void activate(uint8_t base)
-    {
-        assert(mode_ == mode::autoconf);
-        mode_ = mode::active;
-        std::cout << "[AUTOCONF] " << desc() << " activating at $" << hexfmt(base << 16, 8) << "\n";
-        mem_handler_.register_handler(area_handler_, base << 16, config_.size);
-    }
-
-protected:
-    explicit autoconf_device(memory_handler& mem_handler, memory_area_handler& area_handler, const board_config& config)
-        : mem_handler_ { mem_handler }
-        , area_handler_ { area_handler }
-        , config_ { config }
-    {
-        memset(conf_data_, 0, sizeof(conf_data_));
-        assert((config.type & 0xc7) == 0);
-        /* $00/$02 */ conf_data_[0] = ERT_ZORROII | config.type | board_size(config.size);
-        /* $04/$06 */ conf_data_[1] = config.product_number;
-        /* $10-$18 */ put_u16(&conf_data_[4], config.hw_manufacturer);
-        /* $18-$28 */ put_u32(&conf_data_[6], config.serial_no);
-        /* $28-$30 */ put_u16(&conf_data_[10], config.rom_vector_offset);
-    }
-
-private:
-    enum class mode { autoconf, shutup, active } mode_ = mode::autoconf;
-    memory_handler& mem_handler_;
-    memory_area_handler& area_handler_;
-    const board_config config_;
-    uint8_t conf_data_[12];
-
-    std::string desc() const
-    {
-        return hexstring(config_.product_number) + "/" + hexstring(config_.hw_manufacturer) + "/" + hexstring(config_.serial_no);
-    }
-
-    static const uint8_t board_size(uint32_t size)
-    {
-        switch (size) {
-        case 64 << 10:
-            return 0b001;
-        case 128 << 10:
-            return 0b010;
-        case 256 << 10:
-            return 0b011;
-        case 512 << 10:
-            return 0b100;
-        case 1 << 20:
-            return 0b101;
-        case 2 << 20:
-            return 0b110;
-        case 4 << 20:
-            return 0b111;
-        case 8 << 20:
-            return 0b000;
-        default:
-            throw std::runtime_error { "Unsupported autoconf board size $" + hexstring(size) };
-        }
-    }
-};
-
-class fastmem_handler : public autoconf_device, public ram_handler {
-public:
-    explicit fastmem_handler(memory_handler& mem_handler, uint32_t size)
-        : autoconf_device { mem_handler, *this, make_config(size) }
-        , ram_handler { size }
-    {
-    }
-
-private:
-    static constexpr board_config make_config(uint32_t size)
-    {
-        return board_config {
-            .type = ERTF_MEMLIST,
-            .size = size,
-            .product_number = 0x12,
-            .hw_manufacturer = 0x1234,
-            .serial_no = 0x12345678,
-            .rom_vector_offset = 0,
-        };
-    }
-};
-
-
-// For now: only handle one board (for fast memory)
-class autoconf_handler : public memory_area_handler {
-public:
-    explicit autoconf_handler(memory_handler& mem_handler)
-    {
-        mem_handler.register_handler(*this, base, 0x10000);
-    }
-
-    void add_device(autoconf_device& dev)
-    {
-        devices_.push_back(&dev);
-    }
-
-private:
-    static constexpr uint32_t base = 0xe80000;
-    std::vector<autoconf_device*> devices_;
-    uint8_t low_addr_hold_ = 0;
-    bool has_low_addr_ = 0;
-
-    void remove_device()
-    {
-        assert(!devices_.empty());
-        has_low_addr_ = false;
-        devices_.pop_back();
-    }
-
-    uint8_t read_u8(uint32_t, uint32_t offset) override
-    {
-        if (!(offset & 1)) {
-            if (offset < 0x30) {
-                if (devices_.empty()) {
-                    return 0xff;
-                }
-                auto b = devices_.back()->read_config_byte(static_cast<uint8_t>(offset >> 2));
-                if (offset & 2)
-                    b <<= 4;
-                else
-                    b &= 0xf0;
-                return offset < 4 ? b : static_cast<uint8_t>(~b);
-            } else if (offset < 0x40) {
-                return 0xff;
-            } else if (offset == 0x40 || offset == 0x42) {
-                // Interrupt pending register - Not inverted
-                return 0;             
-            }
-        }
-
-        std::cerr << "[AUTOCONF] Unhandled read offset $" << hexfmt(offset) << "\n";
-        return 0xff;
-    }
-
-    uint16_t read_u16(uint32_t addr, uint32_t offset) override
-    {
-        return read_u8(addr, offset) << 8 | read_u8(addr, offset+1);
-    }
-
-    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
-    {
-        if (!devices_.empty()) {
-            auto& dev = *devices_.back();
-            if (offset == 0x48) {
-                if (!has_low_addr_)
-                    std::cerr << "[AUTOCONF] Warning high address written without low address val=$" << hexfmt(val) << "\n";
-                dev.activate(static_cast<uint16_t>((val & 0xf0) | low_addr_hold_));
-                remove_device();
-                return;
-            } else if (offset == 0x4a) {
-                if (has_low_addr_)
-                    std::cerr << "[AUTOCONF] Warning already has low address ($" << hexfmt(low_addr_hold_) << ") got $" << hexfmt(val) << "\n";
-                has_low_addr_ = true;
-                low_addr_hold_ = val >> 4;
-                return;
-            } else if (offset == 0x4c) {
-                // shutup
-                dev.shutup();
-                remove_device();
-                return;
-            }
-        } else {
-            std::cerr << "[AUTCONF] Write without device\n";
-        }
-
-        std::cerr << "[AUTOCONF] Unhandled write offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
-    }
-
-    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
-    {
-        std::cerr << "[AUTOCONF] Unhandled write offset $" << hexfmt(offset) << " val=$" << hexfmt(val) << "\n";
-    }
-};
-
-class builder {
-public:
-    explicit builder()
-    {
-    }
-
-    uint32_t ofs() const
-    {
-        return static_cast<uint32_t>(data_.size());
-    }
-
-    const std::vector<uint8_t>& data() const
-    {
-        return data_;
-    }
-
-    void u8(uint8_t val)
-    {
-        data_.push_back(val);
-    }
-
-    void u16(uint16_t val)
-    {
-        data_.push_back(static_cast<uint8_t>(val >> 8));
-        data_.push_back(static_cast<uint8_t>(val));
-    }
-
-    void u32(uint32_t val)
-    {
-        data_.push_back(static_cast<uint8_t>(val >> 24));
-        data_.push_back(static_cast<uint8_t>(val >> 16));
-        data_.push_back(static_cast<uint8_t>(val >> 8));
-        data_.push_back(static_cast<uint8_t>(val));
-    }
-
-    void str(const std::string& str)
-    {
-        data_.insert(data_.end(), str.begin(), str.end());
-    }
-
-    void even()
-    {
-        if (data_.size() & 1)
-            data_.push_back(0);
-    }
-
-private:
-    std::vector<uint8_t> data_;
-};
-
-
-class harddisk : public memory_area_handler, public autoconf_device {
-public:
-    explicit harddisk(memory_handler& mem, bool& cpu_active, const std::string& hdfilename)
-        : autoconf_device { mem, *this, config }
-        , mem_ { mem }
-        , cpu_active_ { cpu_active }
-        , hdfile_ { hdfilename, std::ios::binary | std::ios::in | std::ios::out }
-    {
-        if (!hdfile_.is_open())
-            throw std::runtime_error { "Error opening " + hdfilename };
-        hdfile_.seekg(0, std::fstream::end);
-        total_size_ = hdfile_.tellg();
-        const auto cyl_size = num_heads_ * sectors_per_track_ * sector_size_bytes;
-        if (!total_size_ || total_size_ % cyl_size || total_size_ > 504 * 1024 * 1024 || total_size_ < 8 * 1024 * 1024) // Limit to 504MB for now (probably need more heads)
-            throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size_) };
-        num_cylinders_ = static_cast<uint32_t>(total_size_ / cyl_size);
-    }
-
-private:
-    static constexpr board_config config {
-        .type = ERTF_DIAGVALID,
-        .size = 64 << 10,
-        .product_number = 0x88,
-        .hw_manufacturer = 1337,
-        .serial_no = 1,
-        .rom_vector_offset = EXPROM_BASE,
-    };
-    static constexpr uint32_t sector_size_bytes = 512;
-    memory_handler& mem_;
-    bool& cpu_active_;
-    std::fstream hdfile_;
-    uint32_t num_heads_ = 16;
-    uint32_t sectors_per_track_ = 63;
-    uint32_t num_cylinders_;
-    uint64_t total_size_;
-    uint32_t ptr_hold_ = 0;
-    std::vector<uint8_t> buffer_;
-
-    uint8_t read_u8(uint32_t, uint32_t offset) override
-    {
-        if (offset >= config.rom_vector_offset && offset < config.rom_vector_offset + sizeof(exprom)) {
-            return exprom[offset - config.rom_vector_offset];
-        }
-
-        std::cerr << "harddisk: Read U8 offset $" << hexfmt(offset) << "\n";
-        return 0;
-    }
-
-    uint16_t read_u16(uint32_t, uint32_t offset) override
-    {
-        if (offset >= config.rom_vector_offset && offset + 1 < config.rom_vector_offset + sizeof(exprom)) {
-            offset -= config.rom_vector_offset;
-            return static_cast<uint16_t>(exprom[offset] << 8 | exprom[offset + 1]);
-        }
-        std::cerr << "harddisk: Read U16 offset $" << hexfmt(offset) << "\n";
-        return 0;
-    }
-
-    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
-    {
-        std::cerr << "harddisk: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
-    }
-
-    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
-    {
-        const uint32_t special_offset = static_cast<uint32_t>(config.rom_vector_offset + sizeof(exprom));
-        if (offset == special_offset) {
-            ptr_hold_ = val << 16 | (ptr_hold_ & 0xffff);
-            return;
-        } else if (offset == special_offset + 2) {
-            ptr_hold_ = (ptr_hold_ & 0xffff0000) | val;
-        } else if (offset == special_offset + 4) {
-            if ((val != 0xfede && val != 0xfedf) || !ptr_hold_ || (ptr_hold_ & 1) || !cpu_active_) {
-                std::cerr << "harddisk: Invalid conditions! written val = $" << hexfmt(val) << " ptr_hold = $" << hexfmt(ptr_hold_) << " cpu_active_ = " << cpu_active_ << "\n";
-                return;
-            }
-            cpu_active_ = false;
-
-            if (val == 0xfede)
-                handle_disk_cmd();
-            else
-                handle_init();
-
-            cpu_active_ = true;
-            ptr_hold_ = 0;
-        } else {
-            std::cerr << "harddisk: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
-        }
-    }
-
-    void handle_init()
-    {
-        // keep in check with exprom.asm
-        constexpr uint16_t devn_sizeBlock = 0x14; // # longwords in a block
-        constexpr uint16_t devn_numHeads  = 0x1C; // number of surfaces
-        constexpr uint16_t devn_blkTrack  = 0x24; // secs per track
-        constexpr uint16_t devn_upperCyl  = 0x38; // upper cylinder
-
-        mem_.write_u32(ptr_hold_ + devn_sizeBlock, sector_size_bytes / 4);
-        mem_.write_u32(ptr_hold_ + devn_numHeads, num_heads_);
-        mem_.write_u32(ptr_hold_ + devn_blkTrack, sectors_per_track_);
-        mem_.write_u32(ptr_hold_ + devn_upperCyl, num_cylinders_- 1);
-    }
-
-    void handle_disk_cmd()
-    {
-        constexpr int8_t IOERR_NOCMD      = -3;
-        constexpr int8_t IOERR_BADLENGTH  = -4;
-        constexpr int8_t IOERR_BADADDRESS = -5;
-
-        // Standard commands
-        constexpr uint16_t CMD_INVALID     = 0;
-        constexpr uint16_t CMD_RESET       = 1;
-        constexpr uint16_t CMD_READ        = 2;
-        constexpr uint16_t CMD_WRITE       = 3;
-        constexpr uint16_t CMD_UPDATE      = 4;
-        constexpr uint16_t CMD_CLEAR       = 5;
-        constexpr uint16_t CMD_STOP        = 6;
-        constexpr uint16_t CMD_START       = 7;
-        constexpr uint16_t CMD_FLUSH       = 8;
-        constexpr uint16_t CMD_NONSTD      = 9;
-        constexpr uint16_t TD_MOTOR        = CMD_NONSTD + 0;  // 09
-        constexpr uint16_t TD_SEEK         = CMD_NONSTD + 1;  // 0A 
-        constexpr uint16_t TD_FORMAT       = CMD_NONSTD + 2;  // 0B 
-        constexpr uint16_t TD_REMOVE       = CMD_NONSTD + 3;  // 0C 
-        constexpr uint16_t TD_CHANGENUM    = CMD_NONSTD + 4;  // 0D 
-        constexpr uint16_t TD_CHANGESTATE  = CMD_NONSTD + 5;  // 0E 
-        constexpr uint16_t TD_PROTSTATUS   = CMD_NONSTD + 6;  // 0F 
-        constexpr uint16_t TD_RAWREAD      = CMD_NONSTD + 7;  // 10
-        constexpr uint16_t TD_RAWWRITE     = CMD_NONSTD + 8;  // 11
-        constexpr uint16_t TD_GETDRIVETYPE = CMD_NONSTD + 9;  // 12
-        constexpr uint16_t TD_GETNUMTRACKS = CMD_NONSTD + 10; // 13
-        constexpr uint16_t TD_ADDCHANGEINT = CMD_NONSTD + 11; // 14
-        constexpr uint16_t TD_REMCHANGEINT = CMD_NONSTD + 12; // 15
-
-
-        constexpr uint32_t IO_COMMAND = 0x1C;
-        constexpr uint32_t IO_ERROR   = 0x1F;
-        constexpr uint32_t IO_ACTUAL  = 0x20;
-        constexpr uint32_t IO_LENGTH  = 0x24;
-        constexpr uint32_t IO_DATA    = 0x28;
-        constexpr uint32_t IO_OFFSET  = 0x2C;
-        const auto cmd  = mem_.read_u16(ptr_hold_ + IO_COMMAND);
-        const auto len  = mem_.read_u32(ptr_hold_ + IO_LENGTH);
-        const auto data = mem_.read_u32(ptr_hold_ + IO_DATA);
-        const auto ofs  = mem_.read_u32(ptr_hold_ + IO_OFFSET);
-
-        //std::cerr << "harddisk: Command=$" << hexfmt(cmd) << " Length=$" << hexfmt(len) << " Data=$" << hexfmt(data) << " Offset=$" << hexfmt(ofs) << "\n";
-        switch (cmd) {
-        case CMD_READ:
-        case CMD_WRITE:
-        case TD_FORMAT:
-            if (ofs > total_size_ || len > total_size_ || ofs > total_size_ - len || ofs % sector_size_bytes) {
-                std::cerr << "Test board: Invalid offset $" << hexfmt(ofs) << " length=$" << hexfmt(len) << "\n";
-                mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
-            } else if (len % sector_size_bytes) {
-                std::cerr << "Test board: Invalid length $" << hexfmt(len) << "\n";
-                mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
-            } else {
-                buffer_.resize(len);
-                if (cmd == CMD_READ) {
-                    hdfile_.seekg(ofs);
-                    hdfile_.read(reinterpret_cast<char*>(&buffer_[0]), len);
-                    if (!hdfile_)
-                        throw std::runtime_error { "Error reading from harddrive" };
-                    for (uint32_t i = 0; i < len; i += 4)
-                        mem_.write_u32(data + i, get_u32(&buffer_[i]));
-                } else {
-                    for (uint32_t i = 0; i < len; i += 4)
-                        put_u32(&buffer_[i], mem_.read_u32(data + i));
-                    hdfile_.seekp(ofs);
-                    hdfile_.write(reinterpret_cast<const char*>(&buffer_[0]), len);
-                    if (!hdfile_)
-                        throw std::runtime_error { "Error writing to harddrive" };
-                }
-                mem_.write_u32(ptr_hold_ + IO_ACTUAL, len);
-                mem_.write_u8(ptr_hold_ + IO_ERROR, 0);
-            }
-            break;
-        case CMD_RESET:
-        case CMD_UPDATE:
-        case CMD_CLEAR:
-        case CMD_STOP:
-        case CMD_START:
-        case CMD_FLUSH:
-        case TD_MOTOR:
-        case TD_SEEK:
-        case TD_REMOVE:
-        case TD_CHANGENUM:
-        case TD_CHANGESTATE:
-        case TD_PROTSTATUS:
-        case TD_ADDCHANGEINT:
-        case TD_REMCHANGEINT:
-            mem_.write_u32(ptr_hold_ + IO_ACTUAL, 0);
-            mem_.write_u8(ptr_hold_ + IO_ERROR, 0);
-            break;
-        default:
-            std::cerr << "Test board: Unsupported command $" << hexfmt(cmd) << "\n";
-            mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_NOCMD));
-        }
-    }
-};
 
 int main(int argc, char* argv[])
 {
@@ -930,7 +480,7 @@ int main(int argc, char* argv[])
         std::unique_ptr<harddisk> hd;
         if (!cmdline_args.hd.empty()) {
             hd = std::make_unique<harddisk>(mem, cpu_active, cmdline_args.hd);
-            autoconf.add_device(*hd);
+            autoconf.add_device(hd->autoconf_dev());
         }
 
         auto cstep = [&](bool cpu_waiting) {
@@ -975,9 +525,9 @@ int main(int argc, char* argv[])
         };
 
         auto do_all_custom_cylces = [&]() {
-            while (cycles_todo) {
+            while (cycles_todo >= cmdline_args.cpu_scale) {
                 cstep(false);
-                --cycles_todo;
+                cycles_todo -= cmdline_args.cpu_scale;
             }
         };
 
