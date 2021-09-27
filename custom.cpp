@@ -1804,7 +1804,7 @@ public:
                 if (DEBUG_SPRITE && s_.spr_dma_active[spr])
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA off\n";
                 s_.spr_dma_active[spr] = false;
-            } else if (spr_vpos_check > sprite_dma_start_vpos && s_.sprite_vpos_start(spr) == spr_vpos_check) {
+            } else if (!s_.spr_dma_active[spr] && spr_vpos_check > sprite_dma_start_vpos && s_.sprite_vpos_start(spr) == spr_vpos_check) {
                 if (DEBUG_SPRITE)
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA on\n";
                 s_.spr_dma_active[spr] = true;
@@ -2336,7 +2336,7 @@ public:
         auto write_partial = [offset, &val](uint32_t& r) {
             if (offset & 2) {
                 //assert(!(val & 1)); // Blitter pointers (and modulo) ignore bit0
-                r = (r & 0xffff0000) | val;
+                r = (r & 0xffff0000) | (val & 0xfffe);
             }
             else
                 r = val << 16 | (r & 0xffff);
@@ -2617,10 +2617,10 @@ public:
         case BPLCON3: // $106
             return;
         case BPLMOD1: // $108
-            s_.bplmod1 = val;
+            s_.bplmod1 = val & 0xfffe;
             return;
         case BPLMOD2: // $10A
-            s_.bplmod2 = val;
+            s_.bplmod2 = val & 0xfffe;
             return;
         case BPLCON4: // $10C:
         case 0x0F8:  // BPL7PTH
@@ -2683,8 +2683,8 @@ private:
     uint32_t current_pc_; // For debug output
     uint32_t floppy_speed_;
     // bitplane debugging (don't need to be saved)
-    uint32_t rem_pixels_odd_;
-    uint32_t rem_pixels_even_;
+    int rem_pixels_odd_;
+    int rem_pixels_even_;
 
 
     uint16_t chip_read(uint32_t addr)

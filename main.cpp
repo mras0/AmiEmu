@@ -1081,7 +1081,7 @@ int main(int argc, char* argv[])
                             }
                         } else if (args[0] == "W") {
                             if (args.size() > 2) {
-                                auto [avalid, address] = from_hex(args[1]);
+                                auto [avalid, address] = get_simple_expr(args[1]);
                                 if (avalid) {
                                     for (uint32_t i = 2; i < args.size(); ++i) {
                                         const auto& a = args[i];
