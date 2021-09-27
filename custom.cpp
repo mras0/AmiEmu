@@ -775,6 +775,7 @@ struct custom_state {
     bool bpl1dat_written;
     bool bpl1dat_written_this_line;
     uint8_t bpldata_avail;
+    uint16_t bplcon1_denise;
     uint32_t ham_color;
     ddfstate ddfst;
     uint16_t ddfcycle;
@@ -1828,8 +1829,6 @@ public:
             }
         }
 
-        static int rem_pixelsO = 0, rem_pixelsE = 0;
-
         if (!(s_.hpos & 1) && s_.bpl1dat_written) {
             if (DEBUG_BPL) {
                 DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Making BPL data available";
@@ -1902,10 +1901,10 @@ public:
                     }
 
                     if (DEBUG_BPL) {
-                        rem_pixelsO--;
-                        rem_pixelsE--;
-                        if ((rem_pixelsO | rem_pixelsE) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixelsO << " E=" << rem_pixelsE << "\n";
+                        rem_pixels_odd_--;
+                        rem_pixels_even_--;
+                        if ((rem_pixels_odd_ | rem_pixels_even_) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixels_odd_ << " E=" << rem_pixels_even_ << "\n";
                         }
                     }
 
@@ -1981,8 +1980,8 @@ public:
                 if (s_.bpl1dat_written_this_line) {
                     // Shift out pixels to make delay work
                     if (DEBUG_BPL) {
-                        rem_pixelsO--;
-                        rem_pixelsE--;
+                        rem_pixels_odd_--;
+                        rem_pixels_even_--;
                     }
                     for (int i = 0; i < 6; ++i)
                         s_.bpldat_shift[i] <<= 1;
@@ -1998,37 +1997,41 @@ public:
 
         if (s_.bpldata_avail) {
             const uint8_t mask = s_.bplcon0 & BPLCON0F_HIRES ? 7 : 15;
-            const uint8_t delay1 = s_.bplcon1 & mask;
-            const uint8_t delay2 = (s_.bplcon1 >> 4) & mask;
-            const uint8_t hp = (s_.hpos + 1) & mask; // The compared hpos seems to be advanced by one? (e.g. desert dream rotating logo box + vAmigaTS denise/bplcon1/timing4)
+            const uint8_t delay1 = s_.bplcon1_denise & mask;
+            const uint8_t delay2 = (s_.bplcon1_denise >> 4) & mask;
 
-            if ((s_.bpldata_avail & 1) && delay1 == hp) {
+            if ((s_.bpldata_avail & 1) && delay1 == (s_.hpos & mask)) {
                 for (int i = 0; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~1;
 
                 if (DEBUG_BPL) {
                     DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (delay=$" << hexfmt(delay1, 1) << ")";
-                    if (rem_pixelsO > 0)
-                        *debug_stream << " Warning discarded " << rem_pixelsO;
+                    if (rem_pixels_odd_ > 0)
+                        *debug_stream << " Warning discarded " << rem_pixels_odd_;
                     *debug_stream << "\n";
-                    rem_pixelsO = 16;
+                    rem_pixels_odd_ = 16;
                 }
             }
-            if ((s_.bpldata_avail & 2) && delay2 == hp) {
+            if ((s_.bpldata_avail & 2) && delay2 == (s_.hpos & mask)) {
                 for (int i = 1; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~2;
 
                 if (DEBUG_BPL) {
                     DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (delay=$" << hexfmt(delay2, 1) << ")";
-                    if (rem_pixelsE > 0)
-                        *debug_stream << " Warning discarded " << rem_pixelsE;
+                    if (rem_pixels_even_ > 0)
+                        *debug_stream << " Warning discarded " << rem_pixels_even_;
                     *debug_stream << "\n";
-                    rem_pixelsE = 16;
+                    rem_pixels_even_ = 16;
                 }
             }
         }
+        // Seems like there's a slight delay before updates to BPL1CON relating to bitplane delays take effect
+        // Ex. desert dream rotating logo cube, Brian The Lion start menu and vAmigaTS DENISE/BPLCON1/Timing4
+        if (DEBUG_BPL && s_.bplcon1_denise != s_.bplcon1)
+            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " DDFSTRT=$" << hexfmt(s_.ddfstrt) << " BPLCON1 update to " << hexfmt(s_.bplcon1) << " taking effect (previous: $" << hexfmt(s_.bplcon1_denise) << ")\n";
+        s_.bplcon1_denise = s_.bplcon1;
 
         if (!(s_.hpos & 1)) {
             do_audio();
@@ -2207,7 +2210,7 @@ public:
             s_.bpl1dat_written = false;
             s_.bpl1dat_written_this_line = false;
             s_.bpldata_avail = 0;
-            rem_pixelsO = rem_pixelsE = 0;
+            rem_pixels_odd_ = rem_pixels_even_ = 0;
             s_.ham_color = rgb4_to_8(s_.color[0]);
             s_.ddfst = ddfstate::before_ddfstrt;
             memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
@@ -2679,6 +2682,10 @@ private:
     uint32_t chip_ram_mask_;
     uint32_t current_pc_; // For debug output
     uint32_t floppy_speed_;
+    // bitplane debugging (don't need to be saved)
+    uint32_t rem_pixels_odd_;
+    uint32_t rem_pixels_even_;
+
 
     uint16_t chip_read(uint32_t addr)
     {
