@@ -173,15 +173,23 @@ bool simple_asm_tests()
         { "illegal", { 0x4afc } },
         { "reset", { 0x4e70 } },
         { "stop #$2700", { 0x4e72, 0x2700 } },
-        // ORI, ANDI, EORI to SR/CCR
-        // BCHG,BSET,BCLR,BTST
+        { "or #$ab, ccr", { 0x003c, 0x00ab } },
+        { "or #$abcd, sr", { 0x007c, 0xabcd } },
+        { "and #$ab, ccr", { 0x023c, 0x00ab } },
+        { "and #$abcd, sr", { 0x027c, 0xabcd } },
+        { "eor #$ab, ccr", { 0x0a3c, 0x00ab } },
+        { "eor #$abcd, sr", { 0x0a7c, 0xabcd } },
+        { "move #$ab, ccr", { 0x44fc, 0x00ab } },
+        { "move #$abcd, sr", { 0x46fc, 0xabcd } },
+        { "move sr, d0", { 0x40c0 } },
+        { "move.w sr, 12(a2)", { 0x40ea, 0x000c } },
+        { "move sp, d0", { 0x300f } },
+        { "move usp, a0", { 0x4e68 } },
+        { "move a3, usp", { 0x4e63 } },
         // MOVEP
-        // MOVE from SR
-        // MOVE to CCR, SR
         // MOVEM
         // TAS
         // CHK
-        // MOVE USP
         // RTR
         // TRAPV
         // TRAP
