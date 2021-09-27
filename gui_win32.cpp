@@ -161,24 +161,148 @@ struct gdi_deleter {
 };
 using font_ptr = std::unique_ptr<HFONT__, gdi_deleter>;
 
-
-class serial_data_window {
+template <typename Derived>
+class window_base {
 public:
-    static serial_data_window* create()
-    {
-        std::unique_ptr<serial_data_window> wnd { new serial_data_window {} };
-        return wnd.release();
-    }
-
-    HWND hwnd()
+    HWND handle()
     {
         return hwnd_;
+    }
+
+protected:
+    ~window_base()
+    {
+        if (hwnd_)
+            DestroyWindow(hwnd_);
+    }
+
+    void do_create(const std::wstring& title, DWORD style, int x, int y, int cx, int cy, HWND parent)
+    {
+        assert(!hwnd_);
+
+        if (!class_atom_)
+            do_register_class();
+
+        if (!CreateWindow(MAKEINTATOM(class_atom_), title.c_str(), style, x, y, cx, cy, parent, nullptr, GetModuleHandle(nullptr), static_cast<Derived*>(this))) {
+            throw_system_error("CreateWindow");
+        }
+        assert(hwnd_);
+    }
+
+private:
+    static ATOM class_atom_;
+    HWND hwnd_ = nullptr;
+
+    static void modify_window_class(WNDCLASS&)
+    {
+    }
+
+    static void do_register_class()
+    {
+        assert(!class_atom_);
+        WNDCLASS wc;
+        ZeroMemory(&wc, sizeof(wc));
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = &s_wndproc;
+        wc.hInstance = GetModuleHandle(nullptr);
+        wc.lpszClassName = Derived::class_name_;
+        wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        Derived::modify_window_class(wc);
+        if ((class_atom_ = RegisterClass(&wc)) == 0) {
+            throw_system_error("RegisterClass");
+        }
+    }
+
+    #define MAKE_DETECTOR(name)                                                                         \
+    template<typename T, typename = void> struct has_##name##_t : std::false_type { };                  \
+    template<typename T> struct has_##name##_t<T, std::void_t<decltype(&T::name)>> : std::true_type {}; \
+    template<typename T = Derived> static constexpr bool has_##name = has_##name##_t<T>::value;
+
+    MAKE_DETECTOR(on_create);
+    MAKE_DETECTOR(on_destroy);
+    MAKE_DETECTOR(on_paint);
+    MAKE_DETECTOR(on_size);
+
+    #undef MAKE_DETECTOR
+
+    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
+
+#if 0
+    template<typename T, typename = void>
+    struct has_on_create_t : std::false_type { };
+
+    template<typename T>
+    struct has_on_create_t<T, std::void_t<decltype( std::declval<T&>().on_create(std::declval<HWND>(), std::declval<const CREATESTRUCT&>()) )>> : std::true_type {};
+
+    template<typename T = Derived>
+    static constexpr bool has_on_create = has_on_create_t<T>::value;
+#endif
+
+    static LRESULT CALLBACK s_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        Derived* self = nullptr;
+        if (uMsg == WM_NCCREATE) {
+            self = reinterpret_cast<Derived*>(reinterpret_cast<const CREATESTRUCT*>(lParam)->lpCreateParams);
+            self->hwnd_ = hwnd;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        } else {
+            self = reinterpret_cast<Derived*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+        }
+
+        if (self) {
+            switch (uMsg) {
+            case WM_CREATE:
+                if constexpr (has_on_create<>)
+                    return self->on_create(hwnd, *reinterpret_cast<const CREATESTRUCT*>(lParam)) ? 0 : -1;
+                break;
+            case WM_DESTROY:
+                if constexpr (has_on_destroy<>)
+                    self->on_destroy(hwnd);
+                break;
+            case WM_PAINT:
+                if constexpr (has_on_paint<>) {
+                    self->on_paint(hwnd);
+                    return 0;
+                }
+                break;
+            case WM_SIZE:
+                if constexpr (has_on_size<Derived>) {
+                    self->on_size(hwnd, LOWORD(lParam), HIWORD(lParam));
+                    return 0;
+                }
+                break;
+            }
+        }
+
+        const auto ret = self ? self->wndproc(hwnd, uMsg, wParam, lParam) : DefWindowProc(hwnd, uMsg, wParam, lParam);
+        if (uMsg == WM_NCDESTROY && self) {
+            self->hwnd_ = nullptr;
+            delete self;
+        }
+        return ret;
+    }
+};
+template <typename Derived>
+ATOM window_base<Derived>::class_atom_ = 0;
+
+class serial_data_window : public window_base<serial_data_window> {
+public:
+    static serial_data_window* create(int x, int y)
+    {
+        std::unique_ptr<serial_data_window> wnd { new serial_data_window {} };
+        wnd->do_create(L"Serial console", WS_OVERLAPPEDWINDOW, x, y, 800, 480, nullptr);
+        return wnd.release();
     }
 
     void append_text(const std::string& strdat)
     {
         if (!visible_) {
-            ShowWindow(hwnd_, SW_NORMAL);
+            ShowWindow(handle(), SW_NORMAL);
             visible_ = true;
         }
 
@@ -190,8 +314,8 @@ public:
     }
 
 private:
+    friend window_base<serial_data_window>;
     static constexpr const wchar_t* const class_name_ = L"SerialDataWindow";
-    HWND hwnd_ = nullptr;
     HWND edit_window_ = nullptr;
     font_ptr edit_font_;
     bool visible_ = false;
@@ -215,71 +339,18 @@ private:
         edit_font_.reset(CreateFontIndirectA(&lf));
         if (!edit_font_)
             throw_system_error("CreateFontIndirect");
-
-        HINSTANCE const hInstance = GetModuleHandle(nullptr);
-        WNDCLASS wc;
-        ZeroMemory(&wc, sizeof(wc));
-        wc.style = CS_HREDRAW | CS_VREDRAW;
-        wc.lpfnWndProc = &s_wndproc;
-        wc.hInstance = hInstance;
-        wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-        wc.lpszClassName = class_name_;
-        if (!RegisterClass(&wc)) {
-            throw_system_error("RegisterClass");
-        }
-        const DWORD style = WS_OVERLAPPEDWINDOW;
-
-        const char* title = "Serial console";
-        if (!CreateWindow(class_name_, std::wstring(title, title + strlen(title)).c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, 800, 480, nullptr, nullptr, hInstance, this)) {
-            throw_system_error("CreateWindow");
-        }
-        assert(hwnd_);
     }
 
-    static LRESULT CALLBACK s_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
-        serial_data_window* self = nullptr;
-        if (uMsg == WM_NCCREATE) {
-            self = reinterpret_cast<serial_data_window*>(reinterpret_cast<const CREATESTRUCT*>(lParam)->lpCreateParams);
-            self->hwnd_ = hwnd;
-            SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        } else {
-            self = reinterpret_cast<serial_data_window*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-        }
-        const auto ret = self ? self->wndproc(hwnd, uMsg, wParam, lParam) : DefWindowProc(hwnd, uMsg, wParam, lParam);
-        if (uMsg == WM_NCDESTROY && self) {
-            self->hwnd_ = nullptr;
-            delete self;
-        }
-        return ret;
-    }
-
-    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-    {
-        switch (uMsg) {
-        case WM_CREATE:
-            return on_create() ? 0 : -1;
-        case WM_DESTROY:
-            break;
-        case WM_SIZE:
-            on_size(LOWORD(lParam), HIWORD(lParam));
-            break;
-        }
-        return DefWindowProc(hwnd, uMsg, wParam, lParam);
-    }
-
-    bool on_create()
-    {
-        edit_window_ = CreateWindow(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY, 0, 0, 100, 100, hwnd_, nullptr, nullptr, nullptr);
+        edit_window_ = CreateWindow(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY, 0, 0, 100, 100, hwnd, nullptr, nullptr, nullptr);
         if (!edit_window_)
             return false;
         SendMessage(edit_window_, WM_SETFONT, (WPARAM)edit_font_.get(), FALSE);
         return true;
     }
 
-    void on_size(UINT client_width, UINT client_height)
+    void on_size(HWND, UINT client_width, UINT client_height)
     {
         SetWindowPos(edit_window_, nullptr, 0, 0, client_width, client_height, SWP_NOZORDER);
     }
@@ -293,46 +364,22 @@ constexpr int extra_height = border_height*2 + led_height;
 
 }
 
-class gui::impl {
+class gui::impl : public window_base<impl> {
 public:
-    explicit impl(int width, int height)
-        : width_ { width }
-        , height_ { height }
+    static impl* create(int width, int height)
     {
-        HINSTANCE const hInstance = GetModuleHandle(nullptr);
-        WNDCLASS wc;
-        ZeroMemory(&wc, sizeof(wc));
-        wc.style = CS_HREDRAW | CS_VREDRAW;
-        wc.lpfnWndProc = &s_wndproc;
-        wc.hInstance = hInstance;
-        wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-        wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-        wc.lpszClassName = class_name_;
-        if (!RegisterClass(&wc)) {
-            throw_system_error("RegisterClass");
-        }
+        std::unique_ptr<impl> wnd { new impl {width, height} };
         const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~WS_THICKFRAME;
-        RECT r = { 0, 0, width_, height_ + extra_height };
+        RECT r = { 0, 0, width, height + extra_height };
         AdjustWindowRect(&r, style, FALSE);
+        wnd->do_create(title_, style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr);
 
-        if (!CreateWindow(class_name_, title_, style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr, nullptr, hInstance, this)) {
-            throw_system_error("CreateWindow");
-        }
-        assert(hwnd_);
+        // Position serial data window to the right of the main window
+        GetWindowRect(wnd->handle(), &r);
+        wnd->ser_data_ = serial_data_window::create(r.right + 10, r.top);
 
-        ser_data_ = serial_data_window::create();
+        return wnd.release();
 
-        // Move serial data window to the right of the main window
-        GetWindowRect(hwnd_, &r);
-        SetWindowPos(ser_data_->hwnd(), nullptr, r.right + 10, r.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-        SetFocus(hwnd_);
-    }
-
-    ~impl()
-    {
-        if (hwnd_)
-            DestroyWindow(hwnd_);
     }
 
     std::vector<event> update()
@@ -378,14 +425,14 @@ public:
     void serial_data(const std::vector<uint8_t>& data)
     {
         ser_data_->append_text(std::string { data.begin(), data.end() });
-        SetFocus(hwnd_);
+        SetFocus(handle());
     }
 
     void set_active(bool act)
     {
         if (act) {
-            SetFocus(hwnd_);
-            SetForegroundWindow(hwnd_);
+            SetFocus(handle());
+            SetForegroundWindow(handle());
             active_ = true;
         } else {
             if (mouse_captured_)
@@ -397,11 +444,11 @@ public:
     }
 
 private:
+    friend window_base<impl>;
     static constexpr const wchar_t* const class_name_ = L"Display";
     static constexpr const wchar_t* const title_ = L"Amiemu";
     int width_;
     int height_;
-    HWND hwnd_ = nullptr;
     HDC hdc_ = nullptr;
     HBITMAP hbm_ = nullptr;
     std::vector<event> events_;
@@ -411,26 +458,20 @@ private:
     bool mouse_captured_ = false;
     bool active_ = true;
 
-    void redraw()
+    impl(int width, int height)
+        : width_ { width }
+        , height_ { height }
     {
-        RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     }
 
-    static LRESULT CALLBACK s_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    static void modify_window_class(WNDCLASS& wc)
     {
-        impl* self = nullptr;
-        if (uMsg == WM_NCCREATE) {
-            self = reinterpret_cast<impl*>(reinterpret_cast<const CREATESTRUCT*>(lParam)->lpCreateParams);
-            self->hwnd_ = hwnd;
-            SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        } else {
-            self = reinterpret_cast<impl*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-        }
-        const auto ret = self ? self->wndproc(hwnd, uMsg, wParam, lParam) : DefWindowProc(hwnd, uMsg, wParam, lParam);
-        if (uMsg == WM_NCDESTROY && self) {
-            self->hwnd_ = nullptr;
-        }
-        return ret;
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    }
+
+    void redraw()
+    {
+        RedrawWindow(handle(), nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     }
 
     void do_enqueue_keyboard_event(bool pressed, WPARAM vk)
@@ -473,21 +514,22 @@ private:
 
     void capture_mouse()
     {
+        HWND hwnd = handle();
         assert(!mouse_captured_);
-        SetCapture(hwnd_);
+        SetCapture(hwnd);
         RECT rcClient;
-        GetClientRect(hwnd_, &rcClient);
+        GetClientRect(hwnd, &rcClient);
         POINT ptUL, ptLR;
         ptUL.x = rcClient.left;
         ptUL.y = rcClient.top;
         ptLR.x = rcClient.right + 1;
         ptLR.y = rcClient.bottom + 1;
-        ClientToScreen(hwnd_, &ptUL);
-        ClientToScreen(hwnd_, &ptLR);
+        ClientToScreen(hwnd, &ptUL);
+        ClientToScreen(hwnd, &ptLR);
         SetRect(&rcClient, ptUL.x, ptUL.y, ptLR.x, ptLR.y);
         ClipCursor(&rcClient);
         ShowCursor(FALSE);
-        SetWindowText(hwnd_, (std::wstring { title_ } + L" - Mouse captured").c_str());
+        SetWindowText(hwnd, (std::wstring { title_ } + L" - Mouse captured").c_str());
         // Center mouse in window
         last_mouse_pos_ = { ptUL.x + (ptLR.x - ptUL.x) / 2, ptUL.y + (ptLR.y - ptUL.y) / 2 };
         SetCursorPos(last_mouse_pos_.x, last_mouse_pos_.y);
@@ -500,21 +542,13 @@ private:
         ShowCursor(TRUE);
         ClipCursor(NULL);
         ReleaseCapture();
-        SetWindowText(hwnd_, title_);
+        SetWindowText(handle(), title_);
         mouse_captured_ = false;
     }
 
     LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         switch (uMsg) {
-        case WM_CREATE:
-            return on_create() ? 0 : -1;
-        case WM_DESTROY:
-            on_destroy();
-            break;
-        case WM_PAINT:
-            on_paint();
-            return 0;
         case WM_SYSKEYDOWN:
         case WM_KEYDOWN:
             if (active_ && !(lParam & 0x4000'0000) && wParam != VK_F11 && wParam != VK_F12)
@@ -540,7 +574,7 @@ private:
                     set_active(false);
                 } else {
                     evt.type = event_type::disk_inserted;
-                    evt.disk_inserted = browse_for_file(hwnd_, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0");
+                    evt.disk_inserted = browse_for_file(hwnd, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0");
                     events_.push_back(evt);
                     if (was_captured)
                         capture_mouse();
@@ -564,7 +598,7 @@ private:
             if (!mouse_captured_)
                 break;
             POINT mouse_pos = { LOWORD(lParam), HIWORD(lParam) };
-            ClientToScreen(hwnd_, &mouse_pos);
+            ClientToScreen(hwnd, &mouse_pos);
             event evt;
             evt.type = event_type::mouse_move;
             evt.mouse_move = { mouse_pos.x - last_mouse_pos_.x, mouse_pos.y - last_mouse_pos_.y };
@@ -580,24 +614,24 @@ private:
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
 
-    bool on_create()
+    bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
-        if (HDC hdc = GetWindowDC(hwnd_)) {
+        if (HDC hdc = GetWindowDC(hwnd)) {
             if ((hdc_ = CreateCompatibleDC(hdc)) != nullptr) {
                 if ((hbm_ = CreateCompatibleBitmap(hdc, width_, height_)) != nullptr) {
                     if (SelectObject(hdc_, hbm_)) {
-                        ReleaseDC(hwnd_, hdc);
+                        ReleaseDC(hwnd, hdc);
                         return true;
                     }
                 }
                 DeleteDC(hdc_);
             }
-            ReleaseDC(hwnd_, hdc);
+            ReleaseDC(hwnd, hdc);
         }
         return false;
     }
 
-    void on_destroy()
+    void on_destroy(HWND)
     {
         if (mouse_captured_)
             release_mouse();
@@ -606,12 +640,12 @@ private:
         PostQuitMessage(0);
     }
 
-    void on_paint()
+    void on_paint(HWND hwnd)
     {
         PAINTSTRUCT ps;
-        if (BeginPaint(hwnd_, &ps) && !IsRectEmpty(&ps.rcPaint)) {
+        if (BeginPaint(hwnd, &ps) && !IsRectEmpty(&ps.rcPaint)) {
             RECT r;
-            GetClientRect(hwnd_, &r);
+            GetClientRect(hwnd, &r);
             assert(r.left == 0 && r.top == 0);
             BitBlt(ps.hdc, 0, 0, width_, height_, hdc_, 0, 0, SRCCOPY);
 
@@ -620,17 +654,17 @@ private:
             FillRect(ps.hdc, &power_led_rect, power_led_brush);
             DeleteObject(power_led_brush);
 
-            EndPaint(hwnd_, &ps);
+            EndPaint(hwnd, &ps);
         }
     }
 };
 
 gui::gui(unsigned width, unsigned height)
-    : impl_ { std::make_unique<impl>(static_cast<int>(width), static_cast<int>(height)) }
+    : impl_ { impl::create(static_cast<int>(width), static_cast<int>(height)) }
 {
 }
 
-gui::~gui() = default;
+gui::~gui() = default; // impl_ already destroyed
 
 std::vector<gui::event> gui::update()
 {

@@ -1,7 +1,6 @@
 #ifndef GUI_H
 #define GUI_H
 
-#include <memory>
 #include <vector>
 #include <string>
 #include <stdint.h>
@@ -52,7 +51,7 @@ public:
 
 private:
     class impl;
-    std::unique_ptr<impl> impl_;
+    impl* impl_;
 };
 
 bool debug_prompt(std::string& line);
