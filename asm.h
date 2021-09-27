@@ -4,6 +4,6 @@
 #include <stdint.h>
 #include <vector>
 
-std::vector<uint16_t> assemble(uint32_t start_pc, const char* code);
+std::vector<uint8_t> assemble(uint32_t start_pc, const char* code);
 
 #endif

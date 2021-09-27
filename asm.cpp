@@ -2,6 +2,7 @@
 #include "instruction.h"
 #include "ioutil.h"
 #include "disasm.h"
+#include "memory.h"
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -111,31 +112,32 @@ constexpr bool range16(uint32_t val)
     X(TST       , bwl  , w    , 1)        \
     X(UNLK      , none , none , 1)        \
 
-#define TOKENS(X)      \
-    X(size_b , ".B"  ) \
-    X(size_w , ".W"  ) \
-    X(size_l , ".L"  ) \
-    X(d0     , "D0"  ) \
-    X(d1     , "D1"  ) \
-    X(d2     , "D2"  ) \
-    X(d3     , "D3"  ) \
-    X(d4     , "D4"  ) \
-    X(d5     , "D5"  ) \
-    X(d6     , "D6"  ) \
-    X(d7     , "D7"  ) \
-    X(a0     , "A0"  ) \
-    X(a1     , "A1"  ) \
-    X(a2     , "A2"  ) \
-    X(a3     , "A3"  ) \
-    X(a4     , "A4"  ) \
-    X(a5     , "A5"  ) \
-    X(a6     , "A6"  ) \
-    X(a7     , "A7"  ) \
-    X(usp    , "USP" ) \
-    X(pc     , "PC"  ) \
-    X(sr     , "SR"  ) \
-    X(ccr    , "CCR" ) \
-    X(dc     , "DC"  ) \
+#define TOKENS(X)       \
+    X(size_b , ".B"   ) \
+    X(size_w , ".W"   ) \
+    X(size_l , ".L"   ) \
+    X(d0     , "D0"   ) \
+    X(d1     , "D1"   ) \
+    X(d2     , "D2"   ) \
+    X(d3     , "D3"   ) \
+    X(d4     , "D4"   ) \
+    X(d5     , "D5"   ) \
+    X(d6     , "D6"   ) \
+    X(d7     , "D7"   ) \
+    X(a0     , "A0"   ) \
+    X(a1     , "A1"   ) \
+    X(a2     , "A2"   ) \
+    X(a3     , "A3"   ) \
+    X(a4     , "A4"   ) \
+    X(a5     , "A5"   ) \
+    X(a6     , "A6"   ) \
+    X(a7     , "A7"   ) \
+    X(usp    , "USP"  ) \
+    X(pc     , "PC"   ) \
+    X(sr     , "SR"   ) \
+    X(ccr    , "CCR"  ) \
+    X(dc     , "DC"   ) \
+    X(even   , "EVEN" ) \
 
 constexpr struct instruction_info_type {
     const char* const name;
@@ -164,7 +166,7 @@ public:
     }
 
 
-    std::vector<uint16_t> process()
+    std::vector<uint8_t> process()
     {
         do {
             const bool start_of_line = col_ == 1;
@@ -190,26 +192,22 @@ public:
                 ii.value = pc_;
                 for (const auto& f : ii.fixups) {
                     // TODO: Check range
+                    assert(f.offset < result_.size());
+                    auto p = &result_[f.offset];
                     switch (f.size) {
                     case opsize::none:
                         ASSEMBLER_ERROR("Invalid fixup");
                     case opsize::b: {
-                        assert(f.offset / 2 < result_.size());
                         assert(f.offset & 1);
-                        auto v = (result_[f.offset / 2] & 0xff) + ii.value & 0xff;
-                        result_[f.offset / 2] = (result_[f.offset / 2] & 0xff00) | (v & 0xff);
+                        *p += ii.value & 0xff;
                         break;
                     }
                     case opsize::w: {
-                        assert(f.offset % 2 == 0 && f.offset / 2 < result_.size());
-                        result_[f.offset / 2] += static_cast<uint16_t>(ii.value);
+                        put_u16(p, get_u16(p) + static_cast<uint16_t>(ii.value));
                         break;
                     }
                     case opsize::l: {
-                        assert(f.offset % 2 == 0 && f.offset / 2 + 1< result_.size());
-                        auto v = (result_[f.offset / 2] << 16 | result_[f.offset / 2 + 1]) + ii.value;
-                        result_[f.offset / 2] = static_cast<uint16_t>(v >> 16);
-                        result_[f.offset / 2 + 1] = static_cast<uint16_t>(v);
+                        put_u32(p, get_u32(p) + ii.value);
                         break;
                     }
                     }
@@ -221,6 +219,11 @@ public:
                 process_instruction(inst);
             } else if (token_type_ == token_type::dc) {
                 process_dc();
+            } else if (token_type_ == token_type::even) {
+                if (pc_ & 1) {
+                    result_.push_back(0);
+                    ++pc_;
+                }
             } else {
                 ASSEMBLER_ERROR("Unexpected token: " << token_type_string(token_type_));
             }
@@ -290,7 +293,7 @@ private:
 
     std::vector<identifier_info_type> identifier_info_;
 
-    std::vector<uint16_t> result_;
+    std::vector<uint8_t> result_;
     uint32_t pc_;
     const char* input_;
     uint32_t line_ = 1;
@@ -875,7 +878,7 @@ operands_done:
                 ASSEMBLER_ERROR("Unsupported operand to " << info.name << ": " << ea_string(ea[1].type));
             const int32_t disp = ea[1].val - (pc_ + 2);
             if (ea[1].fixup)
-                ea[1].fixup->fixups.push_back(fixup_type { opsize::w, static_cast<uint32_t>(result_.size() * 2) + 2 });
+                ea[1].fixup->fixups.push_back(fixup_type { opsize::w, static_cast<uint32_t>(result_.size() + 2) });
             else if (!range16(disp))
                 ASSEMBLER_ERROR("Displacement " << disp << " is out of range");
             iwords[0] = 0x50c8 | (static_cast<uint16_t>(inst) - static_cast<uint16_t>(token_type::DBT)) << 8 | (ea[0].type & 7);
@@ -1195,7 +1198,7 @@ operands_done:
                 iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                 break;
             case ea_m_Other: {
-                uint32_t ofs = static_cast<uint32_t>((result_.size() + iword_cnt) * 2);
+                uint32_t ofs = static_cast<uint32_t>(result_.size() + iword_cnt * 2);
                 switch (ea[arg].type & 7) {
                 case ea_other_abs_w:
                     if (ea[arg].fixup)
@@ -1244,8 +1247,11 @@ operands_done:
         }
 
 done:
-        result_.insert(result_.end(), iwords, iwords + iword_cnt);
-        pc_ += iword_cnt * 2;
+        for (uint8_t i = 0; i < iword_cnt; ++i) {
+            result_.push_back(static_cast<uint8_t>(iwords[i] >> 8));
+            result_.push_back(static_cast<uint8_t>(iwords[i]));
+            pc_ += 2;
+        }
     }
 
     void process_dc()
@@ -1255,7 +1261,6 @@ done:
         if (token_type_ == token_type::size_b) {
             osize = opsize::b;
             get_token();
-            ASSEMBLER_ERROR("TODO: DC.B");
         } else if (token_type_ == token_type::size_w) {
             osize = opsize::w;
             get_token();
@@ -1267,19 +1272,30 @@ done:
         expect(token_type::whitespace);
         for (;;) {
             auto num = process_number();
-            if (num.fixup) {
-                assert(osize != opsize::b);
-                num.fixup->fixups.push_back(fixup_type { osize, static_cast<uint32_t>(result_.size() * 2) });
-            }
+            if (num.fixup)
+                num.fixup->fixups.push_back(fixup_type { osize, static_cast<uint32_t>(result_.size()) });
 
-            if (osize == opsize::l)
-                result_.push_back(static_cast<uint16_t>(num.val >> 16));
-            result_.push_back(static_cast<uint16_t>(num.val));
+            if (osize == opsize::b) {               
+                result_.push_back(static_cast<uint8_t>(num.val));
+                ++pc_;
+            }
+            else if (osize == opsize::w) {
+                result_.push_back(static_cast<uint8_t>(num.val >> 8));
+                result_.push_back(static_cast<uint8_t>(num.val));
+                pc_ += 2;
+            } else {
+                result_.push_back(static_cast<uint8_t>(num.val >> 24));
+                result_.push_back(static_cast<uint8_t>(num.val >> 16));
+                result_.push_back(static_cast<uint8_t>(num.val >> 8));
+                result_.push_back(static_cast<uint8_t>(num.val));
+                pc_ += 4;
+            }
 
             skip_whitespace();
             if (token_type_ != token_type::comma)
                 break;
             get_token();
+            skip_whitespace();
         }
         skip_to_eol();
     }
@@ -1401,7 +1417,7 @@ done:
             ASSEMBLER_ERROR("Unsupported operand to " << info.name << ": " << ea_string(ea.type));
         const int32_t disp = ea.val - (pc_ + 2);
         if (ea.fixup) {
-            const uint32_t ofs = static_cast<uint32_t>(result_.size() * 2);
+            const uint32_t ofs = static_cast<uint32_t>(result_.size());
             if (osize == opsize::none || osize == opsize::w)
                 ea.fixup->fixups.push_back(fixup_type { opsize::w, ofs + 2 });
             else
@@ -1481,7 +1497,7 @@ done:
     }
 };
 
-std::vector<uint16_t> assemble(uint32_t start_pc, const char* code)
+std::vector<uint8_t> assemble(uint32_t start_pc, const char* code)
 {
     assembler a { start_pc, code };
     return a.process();

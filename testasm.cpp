@@ -8,6 +8,7 @@
 #include "ioutil.h"
 #include "disasm.h"
 #include "asm.h"
+#include "memory.h"
 
 #define CHECK_BIN(lhs, op, rhs)                                                                                                  \
     do {                                                                                                                         \
@@ -316,13 +317,21 @@ bool simple_asm_tests()
         { "MOVEP.W $1234(a7), d3", { 0x070f, 0x1234 } },
         { "MOVEP.L d4, $1234(a7)", { 0x09cf, 0x1234 } },
         { "MOVEP.L $1234(a2), d0", { 0x014a, 0x1234 } },
+
+        { "DC.B $12, $34, $56\nEVEN\nDC.W $abcd\n", { 0x1234, 0x5600, 0xabcd } },
     };
 
     for (const auto& tc : test_cases) {
         const uint32_t start_pc = 0x1000;
         std::vector<uint16_t> code;
         try {
-            code = assemble(start_pc, tc.text);
+            auto res = assemble(start_pc, tc.text);
+            if (res.size() & 1)
+                throw std::runtime_error("Odd number of bytes");
+            for (size_t i = 0; i < res.size(); i += 2) {
+                code.push_back(get_u16(&res[i]));
+            }
+
         } catch (const std::exception& e) {
             std::cerr << "Failed to assemble: " << e.what() << "\nCode:\n" << tc.text << "\n";
             return false;

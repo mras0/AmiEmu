@@ -799,7 +799,7 @@ struct tester {
     static constexpr uint32_t code_pos = 0x1000;
     static constexpr uint32_t code_size = 0x1000;
     memory_handler mem { code_pos + code_size };
-    std::vector<uint16_t> code_words;
+    std::vector<uint8_t> code;
     unsigned cpu_cycles = 0;
     unsigned cpu_mem_accesses = 0;
 
@@ -888,15 +888,14 @@ struct tester {
                     const auto stmt = inst + s + "\t" + args;
 
                     try {
-                        code_words = assemble(code_pos, stmt.c_str());
+                        code = assemble(code_pos, stmt.c_str());
                     } catch (const std::exception& e) {
                         std::cerr << e.what() << " while assembling:\n" << stmt << "\n";
                         return false;
                     }
 
                     memset(&ram[0], 0, ram.size());
-                    for (size_t i = 0; i < std::size(code_words); ++i)
-                        put_u16(&ram[code_pos + i * 2], code_words[i]);
+                    memcpy(&ram[code_pos], &code[0], code.size());
 
                     cpu_state input_state {};
                     input_state.sr = 0x2000;
@@ -1498,7 +1497,7 @@ bool run_timing_tests()
     const uint32_t code_size = 0x1000;
     memory_handler mem { code_pos + code_size };
     auto& ram = mem.ram();
-    std::vector<uint16_t> insts;
+    std::vector<uint8_t> code;
     bool all_ok = true;
     unsigned cpu_mem_accesses;
     unsigned cpu_cyclces;
@@ -1508,15 +1507,14 @@ bool run_timing_tests()
     });
     for (const auto& tc : test_cases) {
         try {
-            insts = assemble(code_pos, tc.test_inst);
+            code = assemble(code_pos, tc.test_inst);
         } catch (const std::exception& e) {
             std::cerr << e.what() << " while assembling:\n" << tc.test_inst << "\n";
             return false;
         }
 
         memset(&ram[0], 0, ram.size());
-        for (size_t i = 0; i < std::size(insts); ++i)
-            put_u16(&ram[code_pos + i * 2], insts[i]);
+        memcpy(&ram[code_pos], &code[0], code.size());
 
         cpu_state input_state {};
         input_state.sr = 0x2000 | srm_z | srm_v;
