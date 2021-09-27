@@ -1520,6 +1520,14 @@ public:
                             s_.bpl1dat_written = true;
                             s_.bpl1dat_written_this_line = true;
                         }
+
+                        if (s_.ddfend && (!(s_.bplcon0 & BPLCON0F_HIRES) || ((s_.ddfcycle-1) & 7) > 3)) {
+                            // Final DMA cycle adds bitplane modulo
+                            if (DEBUG_BPL)
+                                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Data available -- Adding modulo for bpl=" << (int)bpl << ": " << (bpl & 1 ? s_.bplmod2 : s_.bplmod1) << "\n";
+                            s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;
+                        }
+
                         break;
                     }
                 }
@@ -1592,14 +1600,6 @@ public:
             memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
 
             cia_.increment_tod_counter(1);
-            if ((s_.dmacon & (DMAF_MASTER|DMAF_RASTER)) == (DMAF_MASTER|DMAF_RASTER) && vert_disp) {
-                int nbpls = ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
-                if (nbpls == 7)
-                    nbpls = 4;
-                for (int bpl = 0; bpl < nbpls; ++bpl) {
-                    s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;
-                }
-            }
             if (++s_.vpos == vpos_per_field) {
                 memset(s_.spr_dma_states, 0, sizeof(s_.spr_dma_states));
                 memset(s_.spr_vpos_states, 0, sizeof(s_.spr_vpos_states));
@@ -1944,7 +1944,7 @@ public:
         case 0x0FA:  // BPL7PTL
         case 0x0FC:  // BPL8PTH
         case 0x0FE:  // BPL8PTL
-            return;
+        case 0x1C0:  // HTOTAL (ignored unless VARBEAMEN=1)
         case DIWHIGH: // $1E4
         case FMODE:   // $1FC
         case 0x1fe:   // NO-OP
