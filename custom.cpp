@@ -959,7 +959,7 @@ public:
             assert(&row[1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
 
             if (vert_disp && horiz_disp) {
-                const uint8_t nbpls = (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0;
+                const uint8_t nbpls = std::min<uint8_t>(6, (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
 
                 if (DEBUG_BPL && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
                     DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
@@ -1231,7 +1231,12 @@ public:
                     }
                     ++s_.ddfcycle;
 
-                    if (bpl >= 0 && bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0)) {
+                    // OCS/ECS only "7 bitplane" effect (4 dma channels used for DMA, 6 for display)
+                    int nbpls = ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
+                    if (nbpls == 7)
+                        nbpls = 4;
+
+                    if (bpl >= 0 && bpl < nbpls) {
                         if (DEBUG_BPL)
                             DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPL " << bpl << " DMA (fetch cycle $" << hexfmt(s_.ddfcycle) << ")\n";
                         s_.bpldat[bpl] = do_dma(s_.bplpt[bpl]);
@@ -1312,7 +1317,10 @@ public:
 
             cia_.increment_tod_counter(1);
             if ((s_.dmacon & (DMAF_MASTER|DMAF_RASTER)) == (DMAF_MASTER|DMAF_RASTER) && vert_disp) {
-                for (int bpl = 0; bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0); ++bpl) {
+                int nbpls = ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
+                if (nbpls == 7)
+                    nbpls = 4;
+                for (int bpl = 0; bpl < nbpls; ++bpl) {
                     s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;
                 }
             }
