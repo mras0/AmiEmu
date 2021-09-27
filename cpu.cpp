@@ -79,6 +79,7 @@ public:
         : mem_ { mem }
         , state_ { state }
     {
+        prefetch();
     }
 
     explicit impl(memory_handler& mem)
@@ -88,6 +89,7 @@ public:
         state_.sr = srm_s | srm_ipl; // 0x2700
         state_.ssp = mem.read_u32(0);
         state_.pc = mem.read_u32(4);
+        prefetch();
     }
 
     const cpu_state& state() const
@@ -134,13 +136,9 @@ public:
 
         step_res_ = { state_.pc, 0, 0, 0 };
         start_pc_ = state_.pc;
-        iwords_[0] = mem_read16(state_.pc);
-        state_.pc += 2;
+        iword_idx_ = 0;        
+        (void)read_iword();
         inst_ = &instructions[iwords_[0]];
-        for (unsigned i = 1; i < inst_->ilen; ++i) {
-            iwords_[i] = mem_read16(state_.pc);
-            state_.pc += 2;
-        }
 
         step_res_.clock_cycles += inst_->base_cycles;
         step_res_.mem_accesses += inst_->memory_accesses;
@@ -175,27 +173,7 @@ public:
 
         assert(inst_->nea <= 2);
 
-        iword_idx_ = 1;
-
-        // Handle ea, MOVEM handles things on its own
-        if (inst_->type != inst_type::MOVEM) {
-            for (uint8_t i = 0; i < inst_->nea; ++i) {
-                const auto ea = inst_->ea[i];
-                if ((ea >> ea_m_shift) == ea_m_A_ind_pre) {
-                    state_.A(ea & ea_xn_mask) -= opsize_bytes(inst_->size);
-                    // Stack pointer is always kept word aligned
-                    if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
-                        state_.A(7)--;
-                }
-                handle_ea(i);
-                if ((ea >> ea_m_shift) == ea_m_A_ind_post) {
-                    state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
-                    // Stack pointer is always kept word aligned
-                    if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
-                        state_.A(7)++;
-                }
-            }
-        }
+        ea_calced_[0] = ea_calced_[1] = false;
 
         switch (inst_->type) {
 #define HANDLE_INST(t) \
@@ -277,6 +255,7 @@ public:
         }
 
         assert(iword_idx_ == inst_->ilen);
+        assert(inst_->nea == 0 || (ea_calced_[0] && (inst_->nea == 1 || ea_calced_[1])));
 
     out:
         if (trace_)
@@ -284,10 +263,14 @@ public:
 
         step_res_.current_pc = state_.pc;
 
+        prefetch();
+
         return step_res_;
     }
 
 private:
+    static constexpr uint32_t invalid_prefetch_address = ~0U;
+
     memory_handler& mem_;
     cpu_state state_;
 
@@ -297,6 +280,9 @@ private:
     uint8_t iword_idx_ = 0;
     const instruction* inst_ = &instructions[illegal_instruction_num];
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
+    bool ea_calced_[2];
+    uint32_t prefetch_address_ = invalid_prefetch_address;
+    uint16_t prefecth_val_ = 0;
     std::ostream* trace_ = nullptr;
     step_result step_res_ { 0, 0 };
 
@@ -334,6 +320,26 @@ private:
         mem_write16(addr + 2, static_cast<uint16_t>(val));
     }
 
+    uint16_t read_iword()
+    {
+        uint16_t val;
+        if (prefetch_address_ == state_.pc)
+            val = prefecth_val_;
+        else
+            val = mem_read16(state_.pc);
+        prefetch_address_ = invalid_prefetch_address;
+        state_.pc += 2;
+        assert(iword_idx_ < inst_->ilen);
+        iwords_[iword_idx_++] = val;
+        return val;
+    }
+
+    void prefetch()
+    {
+        prefetch_address_ = state_.pc;
+        prefecth_val_ = mem_read16(prefetch_address_);
+    }
+
     uint32_t read_reg(uint32_t val)
     {
         switch (inst_->size) {
@@ -363,6 +369,9 @@ private:
     void handle_ea(uint8_t idx)
     {
         assert(idx < inst_->nea);
+        assert(!ea_calced_[idx]);
+        assert((idx == 0 && !ea_calced_[1]) || (idx == 1 && ea_calced_[0])); // Must be in correct order
+        ea_calced_[idx] = true;
         auto& res = ea_data_[idx];
         const auto ea = inst_->ea[idx];
         switch (ea >> ea_m_shift) {
@@ -373,17 +382,31 @@ private:
             res = read_reg(state_.A(ea & ea_xn_mask));
             return;
         case ea_m_A_ind:
+            res = state_.A(ea & ea_xn_mask);
+            return;
         case ea_m_A_ind_post:
+            res = state_.A(ea & ea_xn_mask);
+            if (inst_->type != inst_type::MOVEM) {
+                state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
+                // Stack pointer is always kept word aligned
+                if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
+                    state_.A(7)++;
+            }
+            return;
         case ea_m_A_ind_pre:
+            if (inst_->type != inst_type::MOVEM) {
+                state_.A(ea & ea_xn_mask) -= opsize_bytes(inst_->size);
+                // Stack pointer is always kept word aligned
+                if ((ea & ea_xn_mask) == 7 && inst_->size == opsize::b)
+                    state_.A(7)--;
+            }
             res = state_.A(ea & ea_xn_mask);
             return;
         case ea_m_A_ind_disp16:
-            assert(iword_idx_ < inst_->ilen);
-            res = state_.A(ea & ea_xn_mask) + sext(iwords_[iword_idx_++], opsize::w);
+            res = state_.A(ea & ea_xn_mask) + sext(read_iword(), opsize::w);
             return;
         case ea_m_A_ind_index: {
-            assert(iword_idx_ < inst_->ilen);
-            const auto extw = iwords_[iword_idx_++];
+            const auto extw = read_iword();
             // Scale in bits 9/10 and full extension word format (bit 8) is ignored on 68000
             res = state_.A(ea & ea_xn_mask) + sext(extw, opsize::b);
             uint32_t r = (extw >> 12) & 7;
@@ -400,23 +423,21 @@ private:
         case ea_m_Other:
             switch (ea & ea_xn_mask) {
             case ea_other_abs_w:
-                assert(iword_idx_ < inst_->ilen);
-                res = static_cast<int32_t>(static_cast<int16_t>(iwords_[iword_idx_++]));
+                res = static_cast<int32_t>(static_cast<int16_t>(read_iword()));
                 return;
             case ea_other_abs_l:
-                assert(iword_idx_ + 1 < inst_->ilen);
-                res = iwords_[iword_idx_++] << 16;
-                res |= iwords_[iword_idx_++];
+                res = read_iword() << 16;
+                res |= read_iword();
                 return;
             case ea_other_pc_disp16:
-                assert(iword_idx_ < inst_->ilen);
-                res = start_pc_ + 2 * iword_idx_; // the PC used is the address of the extension word
-                res += sext(iwords_[iword_idx_++], opsize::w);
+                assert(state_.pc == start_pc_ + 2 * iword_idx_);
+                res = state_.pc; // the PC used is the address of the extension word
+                res += static_cast<int16_t>(read_iword());
                 return;
             case ea_other_pc_index: {
-                assert(iword_idx_ < inst_->ilen);
-                res = start_pc_ + 2 * iword_idx_; // the PC used is the address of the extension word
-                const auto extw = iwords_[iword_idx_++];
+                assert(state_.pc == start_pc_ + 2 * iword_idx_);
+                res = state_.pc; // the PC used is the address of the extension word
+                const auto extw = read_iword();
                 // Scale in bits 9/10 and full extension word format (bit 8) is ignored on 68000
                 res += sext(extw, opsize::b);
                 uint32_t r = (extw >> 12) & 7;
@@ -433,17 +454,14 @@ private:
             case ea_other_imm:
                 switch (inst_->size) {
                 case opsize::b:
-                    assert(iword_idx_ < inst_->ilen);
-                    res = iwords_[iword_idx_++] & 0xff;
+                    res = read_iword() & 0xff;
                     return;
                 case opsize::w:
-                    assert(iword_idx_ < inst_->ilen);
-                    res = iwords_[iword_idx_++];
+                    res = read_iword();
                     return;
                 case opsize::l:
-                    assert(iword_idx_ + 1 < inst_->ilen);
-                    res = iwords_[iword_idx_++] << 16;
-                    res |= iwords_[iword_idx_++];
+                    res = read_iword() << 16;
+                    res |= read_iword();
                     return;
                 }
                 break;
@@ -457,12 +475,10 @@ private:
                 res = state_.sr & srm_ccr;
                 return;
             } else if (ea == ea_reglist) {
-                assert(iword_idx_ < inst_->ilen);
-                res = iwords_[iword_idx_++];
+                res = read_iword();
                 return;
             } else if (ea == ea_bitnum) {
-                assert(iword_idx_ < inst_->ilen);
-                res = iwords_[iword_idx_++];
+                res = read_iword();
                 return;
             } else if (ea == ea_usp) {
                 assert(state_.sr & srm_s);
@@ -473,10 +489,13 @@ private:
             if (inst_->extra & extra_disp_flag) {
                 assert(ea == ea_disp);
                 assert(iword_idx_ < inst_->ilen);
-                res = start_pc_ + 2 + static_cast<int16_t>(iwords_[iword_idx_++]);
+                assert(state_.pc == start_pc_ + 2);
+                res = state_.pc;
+                res += static_cast<int16_t>(read_iword());
                 return;
             } else if (ea == ea_disp) {
-                res = start_pc_ + 2 + static_cast<int8_t>(inst_->data);
+                assert(state_.pc == start_pc_ + 2);
+                res = state_.pc + static_cast<int8_t>(inst_->data);
                 return;
             } else {
                 res = inst_->data;
@@ -487,11 +506,19 @@ private:
         throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea) };
     }
 
+    uint32_t calc_ea(uint8_t idx)
+    {
+        assert(idx < inst_->nea);
+        if (!ea_calced_[idx])
+            handle_ea(idx);
+        return ea_data_[idx];
+    }
+
     uint32_t read_ea(uint8_t idx)
     {
         assert(idx < inst_->nea);
         const auto ea = inst_->ea[idx];
-        const auto val = ea_data_[idx];
+        const auto val = calc_ea(idx);
         switch (ea >> ea_m_shift) {
         case ea_m_Dn:
         case ea_m_An:
@@ -539,6 +566,7 @@ private:
     {
         assert(idx < inst_->nea);
         const auto ea = inst_->ea[idx];
+        const auto ea_val = calc_ea(idx);
         switch (ea >> ea_m_shift) {
         case ea_m_Dn: {
             auto& reg = state_.d[ea & ea_xn_mask];
@@ -576,7 +604,7 @@ private:
         case ea_m_A_ind_pre:
         case ea_m_A_ind_disp16:
         case ea_m_A_ind_index:
-            write_mem(ea_data_[idx], val);
+            write_mem(ea_val, val);
             return;
         case ea_m_Other:
             switch (ea & ea_xn_mask) {
@@ -584,7 +612,7 @@ private:
             case ea_other_abs_l:
             case ea_other_pc_disp16:
             case ea_other_pc_index:
-                write_mem(ea_data_[idx], val);
+                write_mem(ea_val, val);
                 return;
             case ea_other_imm:
                 assert(!"Write to immediate?!");
@@ -792,6 +820,7 @@ private:
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        (void)calc_ea(1);
         state_.A(inst_->ea[1] & ea_xn_mask) += s; // And the operation performed on the full 32-bit value
         // No flags
     }
@@ -801,7 +830,8 @@ private:
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         if ((inst_->ea[1] >> ea_m_shift) == ea_m_An) {
             // ADDQ to address register is always long and doesn't update flags
-            state_.A(inst_->ea[1] & ea_xn_mask) += static_cast<int8_t>(ea_data_[0]);
+            state_.A(inst_->ea[1] & ea_xn_mask) += static_cast<int8_t>(calc_ea(0));
+            (void)calc_ea(1);
         } else {
             handle_ADD();
         }
@@ -872,26 +902,27 @@ private:
         // Taken:      10/2,       10/2
         // Not taken:   8/1,       12/2
         assert(inst_->nea == 1 && inst_->ea[0] == ea_disp && (inst_->extra & extra_cond_flag));
+        (void)calc_ea(0);
         if (!state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
             step_res_.clock_cycles = inst_->size == opsize::b ? 8 : 12;
             return;
         }
         step_res_.clock_cycles = 10;
         step_res_.mem_accesses = 2;
-        state_.pc = ea_data_[0];
+        state_.pc = calc_ea(0);
     }
 
     void handle_BRA()
     {
         assert(inst_->nea == 1);
-        state_.pc = ea_data_[0];
+        state_.pc = calc_ea(0);
     }
 
     void handle_BSR()
     {
         assert(inst_->nea == 1);
         push_u32(state_.pc);
-        state_.pc = ea_data_[0];
+        state_.pc = calc_ea(0);
     }
 
     std::pair<uint32_t, uint32_t> bit_op_helper()
@@ -965,6 +996,7 @@ private:
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const uint32_t r = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        (void)calc_ea(1);
         const uint32_t l = state_.A(inst_->ea[1] & ea_xn_mask);
         // And the performed on the full 32-bit value
         const auto res = l - r;
@@ -986,17 +1018,19 @@ private:
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) == ea_m_Dn && inst_->extra & extra_cond_flag);
         assert(inst_->size == opsize::w && inst_->ea[1] == ea_disp);
 
+        uint16_t val = static_cast<uint16_t>(read_ea(0));
+        (void)calc_ea(1);
+
         if (state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
             step_res_.clock_cycles += 4;
             return;
         }
 
-        uint16_t val = static_cast<uint16_t>(read_ea(0));
         --val;
         write_ea(0, val);
         if (val != 0xffff) {
             step_res_.clock_cycles += 2;
-            state_.pc = ea_data_[1];
+            state_.pc = calc_ea(1);          
         } else {
             step_res_.clock_cycles += 6;
             step_res_.mem_accesses++;
@@ -1007,6 +1041,7 @@ private:
     {
         assert(inst_->nea == 2 && inst_->size == opsize::w && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
         const auto d = read_ea(0);
+        (void)calc_ea(1);
         if (!d) {
             do_trap(interrupt_vector::zero_divide);
             return;
@@ -1033,6 +1068,7 @@ private:
     {
         assert(inst_->nea == 2 && inst_->size == opsize::w && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
         const auto d = sext(read_ea(0), opsize::w);
+        (void)calc_ea(1);
         if (!d) {
             do_trap(interrupt_vector::zero_divide);
             return;
@@ -1092,31 +1128,33 @@ private:
     void handle_JMP()
     {
         assert(inst_->nea == 1);
-        state_.pc = ea_data_[0];
+        state_.pc = calc_ea(0);
     }
 
     void handle_JSR()
     {
         assert(inst_->nea == 1);
+        const auto addr = calc_ea(0);
         push_u32(state_.pc);
-        state_.pc = ea_data_[0];
+        state_.pc = addr;
     }
 
     void handle_LEA()
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift == ea_m_An) && inst_->size == opsize::l);
-        write_ea(1, ea_data_[0]);
+        write_ea(1, calc_ea(0));
         // No flags affected
     }
 
     void handle_LINK()
     {
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_An) && (inst_->ea[1] == ea_immediate) && inst_->size == opsize::w);
+        (void)calc_ea(0);
         auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
         push_u32(a);
         auto& sp = state_.A(7);
         a = sp;
-        sp += sext(ea_data_[1], inst_->size);
+        sp += sext(calc_ea(1), inst_->size);
     }
 
     void handle_LSL()
@@ -1165,6 +1203,7 @@ private:
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        (void)calc_ea(1);
         state_.A(inst_->ea[1] & ea_xn_mask) = s; // Always write full 32-bit result
         // No flags
     }
@@ -1180,17 +1219,14 @@ private:
         const auto nb = opsize_bytes(inst_->size);
 
         if (inst_->ea[0] == ea_reglist) {
-            handle_ea(0);
-            handle_ea(1);
-            reglist = static_cast<uint16_t>(ea_data_[0]);
-            addr = ea_data_[1];
+            reglist = static_cast<uint16_t>(calc_ea(0));
+            addr = calc_ea(1);
             reverse_mode = inst_->ea[1] >> ea_m_shift == ea_m_A_ind_pre;
         } else {
             // reglist always immediately follows instruction
-            handle_ea(1);
-            handle_ea(0);
-            reglist = static_cast<uint16_t>(ea_data_[1]);
-            addr = ea_data_[0];
+            ea_data_[1] = reglist = read_iword();
+            addr = calc_ea(0);
+            ea_calced_[1] = true;
             mem_to_reg = true;
         }
 
@@ -1241,7 +1277,7 @@ private:
         if (inst_->ea[0] >> ea_m_shift == ea_m_Dn) {
             // Reg-to-mem
             auto val = read_ea(0);
-            auto addr = ea_data_[1];
+            auto addr = calc_ea(1);
             do {
                 shift -= 8;
                 mem_write8(addr, static_cast<uint8_t>(val >> shift));
@@ -1251,7 +1287,7 @@ private:
         } else {
             // Mem-to-reg
             uint32_t val = 0;
-            auto addr = ea_data_[0];
+            auto addr = calc_ea(0);
             do {
                 shift -= 8;
                 val |= mem_read8(addr) << shift;
@@ -1380,7 +1416,7 @@ private:
     void handle_PEA()
     {
         assert(inst_->nea == 1 && inst_->size == opsize::l);
-        push_u32(ea_data_[0]);
+        push_u32(calc_ea(0));
     }
 
     void handle_ROL()
@@ -1553,6 +1589,7 @@ private:
     {
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        (void)calc_ea(1);
         state_.A(inst_->ea[1] & ea_xn_mask) -= s; // And the operation performed on the full 32-bit value
         // No flags
     }
@@ -1562,7 +1599,8 @@ private:
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         if ((inst_->ea[1] >> ea_m_shift) == ea_m_An) {
             // SUBQ to address register is always long and doesn't update flags
-            state_.A(inst_->ea[1] & ea_xn_mask) -= static_cast<int8_t>(ea_data_[0]);
+            state_.A(inst_->ea[1] & ea_xn_mask) -= static_cast<int8_t>(calc_ea(0));
+            (void)calc_ea(1);
         } else {
             handle_SUB();
         }
@@ -1584,6 +1622,7 @@ private:
     void handle_SWAP()
     {
         assert(inst_->nea == 1 && (inst_->ea[0] >> ea_m_shift == ea_m_Dn));
+        (void)calc_ea(0);
         auto& r = state_.d[inst_->ea[0] & ea_xn_mask];
         r = (r & 0xffff) << 16 | ((r >> 16) & 0xffff);
         uint8_t ccr = 0;
@@ -1609,8 +1648,9 @@ private:
 
     void handle_TRAP()
     {
-        assert(inst_->nea == 1 && ea_data_[0] < 16);
-        do_trap(static_cast<interrupt_vector>(32 + (ea_data_[0] & 0xf)));
+        const uint8_t trap = static_cast<uint8_t>(calc_ea(0));
+        assert(inst_->nea == 1 && trap < 16);
+        do_trap(static_cast<interrupt_vector>(32 + (trap & 0xf)));
         step_res_.clock_cycles = 34;
         step_res_.mem_accesses = 7;
     }
@@ -1633,6 +1673,7 @@ private:
     void handle_UNLK()
     {
         assert(inst_->nea == 1 && (inst_->ea[0] >> ea_m_shift) == ea_m_An);
+        (void)calc_ea(0);
         auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
         state_.A(7) = a;
         a = pop_u32();
