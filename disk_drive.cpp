@@ -161,11 +161,11 @@ public:
                 dest[64 + 512 + i] = 0xaa | (raw_data[i] & 0x55);
             }
             // data checksum
-            put_split_long_fill(&dest[56], checksum(&dest[64], (1088 - 64)/4));
-            dest += 1088;
+            put_split_long_fill(&dest[56], checksum(&dest[64], (MFM_SECTOR_SIZE_WORDS*2 - 64) / 4));
+            dest += MFM_SECTOR_SIZE_WORDS*2;
         }
         // gap
-        memset(dest, 0xaa, MFM_TRACK_SIZE_WORDS * 2 - 1088 * NUMSECS);
+        memset(dest, 0xaa, MFM_TRACK_SIZE_WORDS * 2 - 2 * MFM_SECTOR_SIZE_WORDS * NUMSECS);
     }
 
     void set_disk_activity_handler(const disk_activity_handler& handler)

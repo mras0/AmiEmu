@@ -185,6 +185,22 @@ FC00CC  00FC00D2                    RT_INIT         (execution address)*
 }
 #endif
 
+struct memwatch {
+    bool enabled;
+    uint32_t address;
+    uint8_t size;
+    enum flagtype { read = 1, write = 2 } flags;
+    friend std::ostream& operator<<(std::ostream& os, const memwatch& mw)
+    {
+        os << "address $" << hexfmt(mw.address) << " size $" << hexfmt(mw.size, 1) << " ";
+        if (mw.flags & read)
+            os << "R";
+        if (mw.flags & write)
+            os << "W";
+        return os;
+    }
+};
+
 struct command_line_arguments {
     std::string rom;
     std::string df0;
@@ -441,7 +457,7 @@ int main(int argc, char* argv[])
         uint8_t pending_disk_drive = 0xff;
         uint32_t disk_chosen_countdown = 0;
         constexpr uint32_t invalid_pc = ~0U;
-        enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_non_rom_pc, wait_vpos} wait_mode = wait_none;
+        enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_rtx, wait_non_rom_pc, wait_vpos} wait_mode = wait_none;
         uint32_t wait_arg = 0;
         std::vector<uint32_t> breakpoints;
         bool debug_mode = false;
@@ -580,7 +596,31 @@ int main(int argc, char* argv[])
         });
 
         constexpr uint32_t min_rom_addr = 0x00e0'0000;
-        mem.set_memory_interceptor([&](uint32_t addr, uint32_t /*data*/, uint8_t size, bool /*write*/) {
+
+        std::vector<memwatch> memwatches;
+
+        mem.set_memory_interceptor([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
+            for (const auto& mw: memwatches) {
+                if (!mw.enabled)
+                    continue;
+                if (mw.size && mw.size != size)
+                    continue;
+                if (write) {
+                    if (!(mw.flags & memwatch::write))
+                        continue;
+                } else if (!(mw.flags & memwatch::read))
+                    continue;
+                const auto end = mw.address + (mw.size ? mw.size : 4);
+                if (addr < end && mw.address < addr + size) {
+                    std::cout << "Memwatch $" << hexfmt(&mw - &memwatches[0]) << " " << mw << " hit! Address=$" << hexfmt(addr) << " Access size=" << (int)size;
+                    if (write)
+                        std::cout << " Write of value: $" << hexfmt(data, size * 2) << "\n";
+                    else
+                        std::cout << " Read\n";
+                    active_debugger();
+                }
+            }
+
             if (!cpu_active)
                 return;
             assert(size == 1 || size == 2); (void)size;
@@ -714,7 +754,8 @@ int main(int argc, char* argv[])
                                     std::cerr << "Invalid instruction\n";
                                 }
                             } else {
-                                std::cerr << "fi without arguments not supported yet\n";
+                                wait_mode = wait_rtx;
+                                break;
                             }
                         } else if (args[0] == "g") {
                             break;
@@ -793,6 +834,55 @@ int main(int argc, char* argv[])
                                 }
                             }
                             std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
+                        } else if (args[0] == "w") {
+                            if (args.size() > 1) {
+                                auto [nvalid, num] = from_hex(args[1]);
+                                if (!nvalid)
+                                    goto memwatch_invalid_args;
+                                if (args.size() == 2) {
+                                    if (num >= memwatches.size()) {
+                                        std::cerr << "memwatch index out of range\n";
+                                        goto memwatch_invalid_args;
+                                    }
+                                    memwatches[num].enabled = false;
+                                    std::cout << "Memwatch $" << hexfmt(num) << " disabled\n";
+                                } else {
+                                    if (args.size() < 5) {
+                                        std::cerr << "Too few arguments\n";
+                                        goto memwatch_invalid_args;
+                                    }
+                                    auto [avalid, address] = from_hex(args[2]);
+                                    auto [svalid, size] = from_hex(args[3]);
+                                    uint8_t flags = 0;
+                                    for (const char c : args[4]) {
+                                        if (c == 'r' || c == 'R')
+                                            flags |= memwatch::read;
+                                        else if (c == 'w' || c == 'W')
+                                            flags |= memwatch::write;
+                                        else {
+                                            std::cerr << "Invalid mode (r/w)\n";
+                                            goto memwatch_invalid_args;
+                                        }
+                                    }
+                                    if (!avalid || !svalid || !flags)
+                                        goto memwatch_invalid_args;
+                                    if (size != 0 && size != 1 && size != 2 && size != 4) {
+                                        std::cerr << "Invalid size\n";
+                                        goto memwatch_invalid_args;
+                                    }
+                                    if (num >= memwatches.size())
+                                        memwatches.resize(num + 1);
+                                    auto& mw = memwatches[num];
+                                    mw.enabled = true;
+                                    mw.address = address;
+                                    mw.size = static_cast<uint8_t>(size);
+                                    mw.flags = static_cast<memwatch::flagtype>(flags);
+                                    std::cout << "Added memwatch $" << hexfmt(num) << ": " << mw << "\n";
+                                }
+                            } else {
+                            memwatch_invalid_args:
+                                std::cerr << "Invalid arguments to memwatch\n";
+                            }
                         } else if (args[0] == "W") {
                             if (args.size() > 2) {
                                 auto [avalid, address] = from_hex(args[1]);
@@ -907,10 +997,39 @@ unknown_command:
                         cstep(false);
                     } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
                 } else {
-                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr) || (wait_mode == wait_exact_inst && cpu_step.instruction == wait_arg)) {
-                        active_debugger();
-                        wait_mode = wait_none;
-                    } else if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
+                    switch (wait_mode) {
+                    case wait_none:
+                        goto check_breakpoint;
+                    case wait_next_inst:
+                        break;
+                    case wait_exact_pc:
+                        if (cpu_step.current_pc != wait_arg)
+                            goto check_breakpoint;
+                        break;
+                    case wait_exact_inst:
+                        if (cpu_step.instruction != wait_arg)
+                            goto check_breakpoint;
+                        break;
+                    case wait_rtx:
+                        if (cpu_step.instruction != 0x4e73 && cpu_step.instruction != 0x4e75 && cpu_step.instruction != 0x4e77) // RTE, RTS or RTR
+                            goto check_breakpoint;
+                        break;
+                    case wait_non_rom_pc:
+                        if (cpu_step.current_pc >= min_rom_addr)
+                            goto check_breakpoint;
+                        // Ignore if next instruction is JMP ABS.L to ROM
+                        if (mem.read_u16(cpu_step.current_pc)  == 0x4ef9 && mem.read_u32(cpu_step.current_pc + 2) >= min_rom_addr)
+                            goto check_breakpoint;
+                        break;
+                    case wait_vpos: // Handled in cstep
+                        goto check_breakpoint;
+                    }
+
+                    active_debugger();
+                    wait_mode = wait_none;
+
+check_breakpoint:
+                    if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
                         active_debugger();
                         std::cout << "Breakpoint hit\n";
                     }

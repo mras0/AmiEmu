@@ -785,6 +785,7 @@ struct custom_state {
     bool dsksync_passed;
     bool dskread;
     uint16_t mfm_pos;
+    uint8_t mfm_sector_cnt;
     uint8_t mfm_track[MFM_TRACK_SIZE_WORDS * 2];
 
     uint32_t copper_pt;
@@ -1514,37 +1515,41 @@ public:
             return false;
         }
 
+        const uint16_t nwords = s_.dsklen_act & 0x3FFF;
+        TODO_ASSERT(nwords > 0);
+
         if (!s_.dsksync_passed && (s_.adkcon & 0x400)) {
             assert(s_.mfm_pos == 0);
+
+            // If short reads are requested return a new sector every time
+            // Needed for e.g. speedball 2
+            if (nwords <= MFM_TRACK_SIZE_WORDS)
+                s_.mfm_pos = s_.mfm_sector_cnt * MFM_SECTOR_SIZE_WORDS;
+            s_.mfm_sector_cnt = (s_.mfm_sector_cnt + 1) % 11;
+
             for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
-                if (get_u16(&s_.mfm_track[i * 2]) == s_.dsksync) {
+                if (get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]) == s_.dsksync) {
                     if (DEBUG_DISK)
                         DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(i) << "\n";
-                    s_.mfm_pos = i + 1;
+                    ++s_.mfm_pos;
                     s_.intreq |= INTF_DSKSYNC;
                     s_.dsksync_passed = true;
                     s_.dskwait = 10; // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
                     return false;
                 }
+                ++s_.mfm_pos;
             }
             TODO_ASSERT(!"Sync word not found?");
         }
 
 
-        const uint16_t nwords = s_.dsklen_act & 0x3FFF;
-        TODO_ASSERT(nwords > 0);
-
         if (DEBUG_DISK)
             DBGOUT << "Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm offset=$" << hexfmt(s_.mfm_pos) << "\n";
     
         for (uint16_t i = 0; i < nwords; ++i) {
-            uint16_t val = 0xaaaa;
-            if (s_.mfm_pos < MFM_TRACK_SIZE_WORDS) {
-                val = get_u16(&s_.mfm_track[s_.mfm_pos*2]);
-                ++s_.mfm_pos;
-            }
-            chip_write(s_.dskpt, val);
+            chip_write(s_.dskpt, get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]));
             s_.dskpt += 2;
+            ++s_.mfm_pos;
         }
         s_.intreq |= INTF_DSKBLK;
         s_.dsklen_act = 0;
