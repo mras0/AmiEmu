@@ -459,6 +459,7 @@ struct custom_state {
     uint32_t copper_pt;
     uint16_t copper_inst[2];
     uint8_t copper_inst_ofs;
+    bool copper_skip_next;
     bool cdang;
 
     sprite_dma_state spr_dma_states[8];
@@ -803,31 +804,34 @@ public:
             const auto hp = s_.copper_inst[0] & 0xfe;
             const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
             const auto he = s_.copper_inst[1] & 0xfe;
+            const bool reached = (s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he));
 
-            if (!(s_.copper_inst[1] & 0x8000) && (s_.dmacon & DMAF_BLTDONE)) {
+            if (s_.copper_inst[1] & 1) { // SKIP
+                // TODO: Does BFD matter?
+                s_.copper_inst_ofs = 0; // Fetch next instruction
+                s_.copper_skip_next = reached;
+            } else  if (!(s_.copper_inst[1] & 0x8000) && (s_.dmacon & DMAF_BLTDONE)) {
                 // Blitter wait
-            } else if ((s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he))) {
+            } else if (reached) {
                 if (DEBUG_COPPER)
                     DBGOUT << "Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
                 s_.copper_inst_ofs = 0; // Fetch next instruction
-                if (s_.copper_inst[1] & 1) {
-                    // SKIP instruction. Actually reads next instruction, but does nothing?
-                    if (DEBUG_COPPER)
-                        DBGOUT << "Warning: SKIP processed\n";
-                    TODO_ASSERT(!"Skip not implemented");
-                }
+                s_.copper_skip_next = false;
             }
 
         } else {
             const auto reg = s_.copper_inst[0] & 0x1ff;
+            if (DEBUG_COPPER)
+                DBGOUT << (s_.copper_skip_next ? "Skipping write" : "Writing") << " to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
             if (reg >= 0x80 || (s_.cdang && reg >= 0x40)) {
-                if (DEBUG_COPPER)
-                    DBGOUT << "Writing to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
-                write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+                if (!s_.copper_skip_next)
+                    write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
                 s_.copper_inst_ofs = 0; // Fetch next instruction
+                s_.copper_skip_next = false;
             } else {
+                // Copper stops on write to dangerous/invalid register (even if supposed to be skipped)
                 if (DEBUG_COPPER)
-                    DBGOUT << "Writing to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << " - Illegal. Pausing copper.\n";
+                    DBGOUT << "Illegal register access to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << " - Illegal. Pausing copper.\n";
                 pause_copper();
             }
         }
@@ -1308,6 +1312,7 @@ public:
                 memset(s_.spr_armed, 0, sizeof(s_.spr_armed));
                 s_.copper_pt = s_.coplc[0];
                 s_.copper_inst_ofs = 0;
+                s_.copper_skip_next = false;
                 s_.vpos = 0;
                 s_.long_frame = (s_.bplcon0 & BPLCON0F_LACE ? !s_.long_frame : true);
                 s_.intreq |= INTF_VERTB;
