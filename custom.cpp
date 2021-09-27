@@ -1112,29 +1112,55 @@ public:
 
         if (s_.bpldata_avail) {
             const uint8_t mask = s_.bplcon0 & BPLCON0F_HIRES ? 7 : 15;
+            const uint8_t delay1 = s_.bplcon1 & mask;
+            const uint8_t delay2 = (s_.bplcon1 >> 4) & mask;
 
-            if ((s_.bpldata_avail & 1) && (s_.bplcon1 & mask) == (s_.hpos & mask)) {
+            if ((s_.bpldata_avail & 1) && delay1 == (s_.hpos & mask)) {
                 for (int i = 0; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~1;
+
                 if (DEBUG_BPL) {
-                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (shift=$" << hexfmt(s_.bplcon1 & mask, 1) << ")";
+                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (delay=$" << hexfmt(delay1, 1) << ")";
                     if (rem_pixelsO > 0)
                         *debug_stream << " Warning discarded " << rem_pixelsO;
                     *debug_stream << "\n";
                     rem_pixelsO = 16;
                 }
+                // Mask out left most pixels when delay is enabled
+                if (delay1 && s_.hpos < (s_.diwstrt & 0xff)) {
+                    const uint8_t amt = 16 - (mask == 7 ? 2 * delay1 : delay1);
+                    for (int i = 0; i < 6; i += 2)
+                        s_.bpldat_shift[i] <<= amt;
+                    if (DEBUG_BPL) {
+                        rem_pixelsE -= amt;
+                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Shifted out " << (int)amt << " pixels\n";
+                    }
+                }
+
             }
-            if ((s_.bpldata_avail & 2) && ((s_.bplcon1 >> 4) & mask) == (s_.hpos & mask)) {
+            if ((s_.bpldata_avail & 2) && delay2 == (s_.hpos & mask)) {
                 for (int i = 1; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~2;
+
                 if (DEBUG_BPL) {
-                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (shift=$" << hexfmt((s_.bplcon1 >> 4) & mask, 1) << ")";
+                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (delay=$" << hexfmt(delay2, 1) << ")";
                     if (rem_pixelsE > 0)
                         *debug_stream << " Warning discarded " << rem_pixelsE;
                     *debug_stream << "\n";
                     rem_pixelsE = 16;
+                }
+
+                // Mask out left most pixels when delay is enabled
+                if (s_.hpos < (s_.diwstrt & 0xff) && ((s_.bplcon1 >> 4) & mask)) {
+                    const uint8_t amt = 16 - (mask == 7 ? 2 * delay2 : delay2);
+                    for (int i = 1; i < 6; i += 2)
+                        s_.bpldat_shift[i] <<= amt;
+                    if (DEBUG_BPL) {
+                        rem_pixelsE -= amt;
+                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Shifted out " << (int)amt << " pixels\n";
+                    }
                 }
             }
         }
