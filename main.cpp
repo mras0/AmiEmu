@@ -805,8 +805,9 @@ int main(int argc, char* argv[])
                 cycles_todo += 4;
                 return;
             }
+            const bool is_cia_access = addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size;
             do_all_custom_cylces();
-            while (!custom_step.free_chip_cycle) {
+            while (!custom_step.free_chip_cycle || (is_cia_access && !custom_step.eclock_cycle)) {
                 cstep(true);
             } 
             cycles_todo = 4;

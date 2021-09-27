@@ -206,7 +206,7 @@ public:
     {
         assert(dfs[0]);
         memcpy(drives_, dfs, sizeof(drives_));
-        mem_handler_.register_handler(*this, 0xBF0000, 0x10000);
+        mem_handler_.register_handler(*this, cia_base_addr, cia_mem_size);
         reset();
         // Since all ports are set to input, OVL in CIA pra is high -> OVL set
         assert(s_[0].port_value(0) & CIAF_OVERLAY);

@@ -686,7 +686,7 @@ constexpr uint8_t blitcycles_fill[16][5] = {
 // 64us per line (52us visible), ~454 virtual lorespixels (~369 max visible)
 // Each color clock produces 2 lores or 4 hires pixels
 
-static constexpr uint16_t hpos_per_line    = 455; // 227.5 color clocks, lores pixels
+static constexpr uint16_t hpos_per_line    = 454; // 227.5 color clocks = 455 (lores pixels), but MUST be multiple of CCKs (227 for PAL) for correct timing
 
 static constexpr uint16_t lores_min_pixel  = 0x51; 
 static constexpr uint16_t lores_max_pixel  = 0x1d1;
@@ -769,6 +769,7 @@ struct custom_state {
     // Internal state
     uint16_t hpos; // Resolution is in low-res pixels
     uint16_t vpos;
+    uint8_t  eclock_count;
     uint16_t bpldat_shift[6];
     uint16_t bpldat_temp[6];
     bool bpl1dat_written;
@@ -1717,7 +1718,7 @@ public:
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
 
         // First readble hpos that's interpreted as being on a new line is $005 (since it's resolution is half that of lowres pixels -> 20) 
-        const unsigned virt_pixel = s_.hpos * 2 + 20;
+        const unsigned virt_pixel = s_.hpos * 2 + 20 + 2; // +2 to compensate for change of hpos_per_line from 455 to 454
         const unsigned disp_pixel = virt_pixel - hires_min_pixel;
         const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < ((~s_.diwstop & 0x8000) >> 7 | s_.diwstop >> 8); // VSTOP MSB is complemented and used as the 9th bit
         const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
@@ -2125,14 +2126,16 @@ public:
             s_.copstate = copper_state::jmp_delay2;
         }
 
-        // CIA tick rate is 1/10th of (base) CPU speed
-        if (s_.hpos % 10 == 0) {
+        // CIA tick rate (EClock) is 1/10th of (base) CPU speed = 1/5th of CCK (to keep in sync with DMA)
+        if (!(s_.hpos & 1) && ++s_.eclock_count == 5) {
             cia_.step();
             const auto irq_mask = cia_.active_irq_mask();
             if (irq_mask & 1)
                 s_.intreq |= INTF_PORTS;
             if (irq_mask & 2)
                 s_.intreq |= INTF_EXTER;
+            s_.eclock_count = 0;
+            res.eclock_cycle = true;
         }
 
         if (++s_.hpos == hpos_per_line) {
