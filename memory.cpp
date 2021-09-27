@@ -44,9 +44,10 @@ uint16_t ram_handler::read_u16(uint32_t, uint32_t offset)
     return get_u16(&ram_[offset]);
 }
 
+//#define WATCH
 #ifdef WATCH
-const uint32_t watch_start = 0x00c01ea2;
-const uint32_t watch_end = watch_start + 2;
+const uint32_t watch_start = 0x00c047bc;
+const uint32_t watch_end = watch_start + 4;
 #endif
 
 void ram_handler::write_u8([[maybe_unused]] uint32_t addr, uint32_t offset, uint8_t val)
@@ -69,7 +70,7 @@ void ram_handler::write_u16([[maybe_unused]] uint32_t addr, uint32_t offset, uin
     if (addr >= watch_start && addr < watch_end) {
         std::cout << "Write to $" << hexfmt(addr) << " = $" << hexfmt(val) << "\n";
         if (val)
-            throw std::runtime_error("FIXME");
+            throw std::runtime_error { "FIXME" };
     }
 #endif
 

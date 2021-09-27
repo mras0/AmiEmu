@@ -204,6 +204,7 @@ public:
         reset();
         // Since all ports are set to input, OVL in CIA pra is high -> OVL set
         assert(s_[0].port_value(0) & CIAF_OVERLAY);
+        assert(!(s_[0].port_value(0) & CIAF_DSKCHANGE)); // Empty drive -> disk change low
     }
 
     void step()
@@ -342,7 +343,7 @@ private:
     {
         memset(s_, 0, sizeof(s_));
         // Set output pin values to high (since they're connected to pull-ups)
-        s_[0].port_input[0] = 0xFF;
+        s_[0].port_input[0] = 0xFF & ~CIAF_DSKCHANGE; // Disk change is low for empty (but connected) drive
         s_[1].port_input[1] = 0xFF;
         s_[1].port_input[0] = 0xFF;
         s_[1].port_input[1] = 0xFF;
@@ -366,6 +367,14 @@ private:
         auto& s = s_[idx];
         switch (reg) {
         case pra:
+//            if (idx == 0) {
+//                uint8_t val = s.port_value(0);
+//                if (s_[1].port_value(1) & 128) { /*CIAF_DSKMOTOR*/
+//                    val &= ~CIAF_DSKRDY;
+//                }
+//                return val;
+//            }
+//            [[fallthrough]];
         case prb:
             //std::cerr << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
             return s.port_value(reg - pra);

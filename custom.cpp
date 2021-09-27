@@ -260,6 +260,49 @@ constexpr uint16_t BPLCON0F_LPEN  = 1 << BPLCON0B_LPEN;
 constexpr uint16_t BPLCON0F_LACE  = 1 << BPLCON0B_LACE;
 constexpr uint16_t BPLCON0F_ERSY  = 1 << BPLCON0B_ERSY;
 
+
+// BLTCON0
+constexpr uint16_t BC0F_SRCA         = 0x0800;
+constexpr uint16_t BC0F_SRCB         = 0x0400;
+constexpr uint16_t BC0F_SRCC         = 0x0200;
+constexpr uint16_t BC0F_DEST         = 0x0100;
+constexpr uint16_t BC0F_ABC          = 0x0080;
+constexpr uint16_t BC0F_ABNC         = 0x0040;
+constexpr uint16_t BC0F_ANBC         = 0x0020;
+constexpr uint16_t BC0F_ANBNC        = 0x0010;
+constexpr uint16_t BC0F_NABC         = 0x0008;
+constexpr uint16_t BC0F_NABNC        = 0x0004;
+constexpr uint16_t BC0F_NANBC        = 0x0002;
+constexpr uint16_t BC0F_NANBNC       = 0x0001;
+
+// BLTCON1
+constexpr uint16_t BC1F_FILL_XOR     = 0x0010; // Exclusive fill enable
+constexpr uint16_t BC1F_FILL_OR      = 0x0008; // Inclusive fill enable
+constexpr uint16_t BC1F_FILL_CARRYIN = 0x0004; // Fill carry input
+constexpr uint16_t BC1F_BLITREVERSE  = 0x0002; // Descending (dec address)
+
+constexpr uint16_t BC1F_SIGNFLAG     = 0x0040; // Sign flag (Line mode)
+constexpr uint16_t BC1F_OVFLAG       = 0x0020; // Line/draw r/l word overflow flag (Line mode)
+constexpr uint16_t BC1F_SUD          = 0x0010; // Sometimes up or down (=AUD) (Line mode)
+constexpr uint16_t BC1F_SUL          = 0x0008; // Sometimes up or left (Line mode)
+constexpr uint16_t BC1F_AUL          = 0x0004; // Always up or left (Line mode)
+constexpr uint16_t BC1F_ONEDOT       = 0x0002; // one dot per horizontal line
+constexpr uint16_t BC1F_LINEMODE     = 0x0001; // Line mode control bit
+
+const uint8_t BC0_ASHIFTSHIFT = 12; // bits to right align ashift value
+const uint8_t BC1_BSHIFTSHIFT = 12; // bits to right align bshift value
+
+#if 0
+#define OCTANT8 24
+#define OCTANT7 4
+#define OCTANT6 12
+#define OCTANT5 28
+#define OCTANT4 20
+#define OCTANT3 8
+#define OCTANT2 0
+#define OCTANT1 16
+#endif
+
 // 454 virtual Lores pixels
 // 625 lines/frame (interlaced)
 // https://retrocomputing.stackexchange.com/questions/44/how-to-obtain-256-arbitrary-colors-with-limitation-of-64-per-line-in-amiga-ecs
@@ -329,8 +372,10 @@ struct custom_state {
     uint16_t bltafwm;
     uint16_t bltalwm;
     uint32_t bltpt[4];
-    uint16_t bltdat[3];
+    uint16_t bltdat[4];
     int16_t  bltmod[4];
+    uint16_t bltw;
+    uint16_t blth;
 };
 
 }
@@ -365,17 +410,92 @@ public:
         serial_data_handler_ = handler;
     }
 
-    void do_blit(uint16_t size)
+    void log_blitter_state()
     {
-        std::cout << "TODO: Blit size=$" << hexfmt(size) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
+        std::cout << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
         for (int i = 0; i < 4; ++i) {
             const char name[5] = { 'B', 'L', 'T', static_cast<char>('A' + i), 0 };
-            std::cout << "  " << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(i < 4 ? s_.bltdat[i] : 0) << " " << name << "MOD=" << (int)s_.bltmod[i] << "\n";
+            std::cout << "  " << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(s_.bltdat[i]) << " " << name << "MOD=" << (int)s_.bltmod[i] << "\n";
         }
-        assert(!s_.bltcon0);
+    }
+
+    void do_blit()
+    {
+        // For now just do immediate blit
+
+        uint16_t any = 0;
+
+        if (s_.bltcon1 & BC1F_LINEMODE) {
+            std::cout << "TODO: Line mode\n";
+            log_blitter_state();
+        } else {
+            TODO_ASSERT(!(s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR | BC1F_FILL_CARRYIN)));
+
+            const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
+            const uint8_t ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
+            const uint8_t bshift = s_.bltcon1 >> BC1_BSHIFTSHIFT;
+
+            auto incr_ptr = [reverse](uint32_t& pt, int16_t n = 2) {
+                if (reverse)
+                    pt -= n;
+                else
+                    pt += n;
+            };
+            auto do_dma = [&](uint8_t index) {
+                s_.bltdat[index] = mem_.read_u16(s_.bltpt[index]);
+                incr_ptr(s_.bltpt[index]);
+            };
+            auto shift_val = [&](uint16_t& oldval, uint16_t newval, uint8_t shift) {
+                const uint16_t res = reverse
+                    ? ((oldval << 16) | (newval)) << shift
+                    : ((oldval << 16) | (newval)) >> shift;
+                oldval = newval;
+                return res;
+            };
+
+            uint16_t areg = 0;
+            uint16_t breg = 0;
+
+            for (uint16_t y = 0; y < s_.blth; ++y) {
+                for (uint16_t x = 0; x < s_.bltw; ++x) {
+                    if (s_.bltcon0 & BC0F_SRCA) do_dma(0);
+                    if (s_.bltcon0 & BC0F_SRCB) do_dma(1);
+                    if (s_.bltcon0 & BC0F_SRCC) do_dma(2);
+                    uint16_t amask = 0xffff;
+                    if (x == 0)
+                        amask &= s_.bltafwm;
+                    if (x == s_.bltw - 1)
+                        amask &= s_.bltalwm;
+                    const uint16_t a = shift_val(areg, s_.bltdat[0] & amask, ashift);
+                    const uint16_t b = shift_val(breg, s_.bltdat[1], bshift);
+                    const uint16_t c = s_.bltdat[2];
+                    uint16_t val = 0;
+                    if (s_.bltcon0 & BC0F_ABC)    val |=   a &  b &  c;
+                    if (s_.bltcon0 & BC0F_ABNC)   val |=   a &  b &(~c);
+                    if (s_.bltcon0 & BC0F_ANBC)   val |=   a &(~b)&  c;
+                    if (s_.bltcon0 & BC0F_ANBNC)  val |=   a &(~b)&(~c);
+                    if (s_.bltcon0 & BC0F_NABC)   val |= (~a)&  b &  c;
+                    if (s_.bltcon0 & BC0F_NABNC)  val |= (~a)&  b &(~c);
+                    if (s_.bltcon0 & BC0F_NANBC)  val |= (~a)&(~b)&  c;
+                    if (s_.bltcon0 & BC0F_NANBNC) val |= (~a)&(~b)&(~c);
+
+                    any |= val;
+                    if (s_.bltcon0 & BC0F_DEST) {
+                        mem_.write_u16(s_.bltpt[3], val);
+                        incr_ptr(s_.bltpt[3]);
+                    }
+                }
+                if (s_.bltcon0 & BC0F_SRCA) incr_ptr(s_.bltpt[0], s_.bltmod[0]);
+                if (s_.bltcon0 & BC0F_SRCB) incr_ptr(s_.bltpt[1], s_.bltmod[1]);
+                if (s_.bltcon0 & BC0F_SRCC) incr_ptr(s_.bltpt[2], s_.bltmod[2]);
+                if (s_.bltcon0 & BC0F_DEST) incr_ptr(s_.bltpt[3], s_.bltmod[3]);
+            }
+        }
         s_.intreq |= INTF_BLIT;
-        s_.dmacon &= ~DMAF_BLTDONE;
-        s_.dmacon |= DMAF_BLTNZERO;
+        s_.dmacon &= ~(DMAF_BLTDONE|DMAF_BLTNZERO);
+        if (!any)
+            s_.dmacon |= DMAF_BLTNZERO;
+        s_.bltw = s_.blth = 0;
     }
 
     void step()
@@ -527,6 +647,9 @@ public:
                 }
                 
                 // TODO: Blitter
+                if (s_.blth) {
+                    do_blit();
+                }
             } while (0);
         }
 
@@ -623,7 +746,7 @@ public:
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
         //std::cerr << "Write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
-        auto write_partial = [offset, val](uint32_t& r) {
+        auto write_partial = [offset, &val](uint32_t& r) {
             if (offset & 2) {
                 assert(!(val & 1));
                 r = (r & 0xffff0000) | val;
@@ -689,36 +812,46 @@ public:
         case BLTALWM:
             s_.bltalwm = val;
             return;
-        case BLTCPTH:
         case BLTCPTL:
+            val &= 0xfffe;
+            [[fallthrough]];
+        case BLTCPTH:
             write_partial(s_.bltpt[2]);
             return;
-        case BLTBPTH:
         case BLTBPTL:
+            val &= 0xfffe;
+            [[fallthrough]];
+        case BLTBPTH:
             write_partial(s_.bltpt[1]);
             return;
-        case BLTAPTH:
         case BLTAPTL:
+            val &= 0xfffe;
+            [[fallthrough]];
+        case BLTAPTH:
             write_partial(s_.bltpt[0]);
             return;
-        case BLTDPTH:
         case BLTDPTL:
+            val &= 0xfffe;
+            [[fallthrough]];
+        case BLTDPTH:
             write_partial(s_.bltpt[3]);
             return;
-        case BLTSIZE:
-            do_blit(val);
+        case BLTSIZE:        
+            assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTDONE));
+            s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
+            s_.blth = val >> 6 ? val >> 6 : 0x400;
             return;
         case BLTCMOD:
-            s_.bltmod[2] = val;
+            s_.bltmod[2] = val & 0xfffe;
             return;
         case BLTBMOD:
-            s_.bltmod[1] = val;
+            s_.bltmod[1] = val & 0xfffe;
             return;
         case BLTAMOD:
-            s_.bltmod[0] = val;
+            s_.bltmod[0] = val & 0xfffe;
             return;
         case BLTDMOD:
-            s_.bltmod[3] = val;
+            s_.bltmod[3] = val & 0xfffe;
             return;
         case BLTCDAT:
             s_.bltdat[2] = val;

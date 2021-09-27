@@ -76,6 +76,11 @@ class rom_area_handler : public memory_area_handler {
 public:
     explicit rom_area_handler(class memory_handler& mem_handler, std::vector<uint8_t>&& data);
 
+    const std::vector<uint8_t>& rom() const
+    {
+        return rom_data_;
+    }
+
     void set_overlay(bool ovl);
 
     uint8_t read_u8(uint32_t, uint32_t offset) override;
