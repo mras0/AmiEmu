@@ -2181,7 +2181,8 @@ public:
             return;
         }
         if (offset >= AUD0LCH && offset <= AUD3VOL) {
-            auto& ch = s_.audio_channels[(offset - AUD0LCH) / 16];
+            const int idx = (offset - AUD0LCH) / 16;
+            auto& ch = s_.audio_channels[idx];
             if (DEBUG_AUDIO)
                 DBGOUT << "Audio write to " << custom_regname(offset) << " val $" << hexfmt(val) << "\n";
             switch ((offset & 0xf) >> 1) {
@@ -2205,6 +2206,9 @@ public:
             case 5: // DAT
                 DBGOUT << "Audio unspported write to " << custom_regname(offset) << " val $" << hexfmt(val) << "\n";
                 ch.dat = val;
+                // The below isn't enough (should actually play the sample, etc.) but gets us past the first requester in AIBB
+                if (!(s_.dmacon & (1 << (DMAB_AUD0 + idx))))
+                    s_.intreq |= 1 << (INTB_AUD0 + idx);
                 return;
             }
         }
