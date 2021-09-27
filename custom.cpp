@@ -467,7 +467,7 @@ public:
                 // Copper
                 if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2) {
                     s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
-                    //if (s_.copper_inst_ofs == 2) std::cout << "Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << "\n";
+                    //if (s_.copper_inst_ofs == 2) std::cout << "Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt-4) << "\n";
                 }
                 
                 // TODO: Blitter
@@ -518,7 +518,7 @@ public:
             return s_.dmacon;
         case VPOSR:   // $004
             // TODO: Bit15 LOF (long frame)
-            return (s_.vpos >> 8)&1;
+            return 0x8000 | ((s_.vpos >> 8)&1);
         case VHPOSR:  // $006
             return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
         case POTGOR:  // $016
@@ -575,7 +575,7 @@ public:
         };
 
         if (offset >= COP1LCH && offset <= COP2LCL) {
-            //std::cerr << "Update register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
+            std::cerr << "Update register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
             if (offset == COP2LCL && !val) {
                 std::cerr << "HACK: Ignoring write of 0 to COP2LCL\n";
                 return;
@@ -692,7 +692,7 @@ public:
             setclr(s_.intreq, val);
             return;
         case BPLCON0: // $100
-            TODO_ASSERT(!(val & BPLCON0F_LACE));
+            TODO_ASSERT(!(val & BPLCON0F_LACE)); // TODO: Handle LOF in vposr
             s_.bplcon0 = val;
             return;
         case BPLCON1: // $102

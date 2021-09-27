@@ -156,6 +156,12 @@ public:
                 do_trap(interrupt_vector::illegal_instruction);
                 goto out;
             }
+            // line 1111
+            if ((iwords_[0] & 0xf000) == 0xf000) {
+                do_trap(interrupt_vector::line_1111);
+                goto out;
+            }
+
             throw std::runtime_error { "ILLEGAL" };
         }
 
@@ -539,6 +545,9 @@ private:
                 assert((state_.sr & srm_s) || inst_->type == inst_type::MOVE);
                 state_.sr = static_cast<uint16_t>(val);
                 return;
+            } else if (ea == ea_ccr) {
+                state_.update_sr(srm_ccr, val & srm_ccr);
+                return;
             } else if (ea == ea_usp) {
                 assert(state_.sr & srm_s); // Checked
                 state_.usp = val;
@@ -751,8 +760,8 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l & r;
-        write_ea(1, res);
         update_flags(srm_ccr_no_x, res, 0);
+        write_ea(1, res);
     }
 
     void handle_ASL()
@@ -929,8 +938,8 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l ^ r;
-        write_ea(1, res);
         update_flags(srm_ccr_no_x, res, 0);
+        write_ea(1, res);
     }
 
     void handle_EXG()
@@ -1021,8 +1030,8 @@ private:
     {
         assert(inst_->nea == 2);
         const uint32_t src = read_ea(0);
+        update_flags(srm_ccr_no_x, src, 0); // Before write EA in case it's to CCR/SR
         write_ea(1, src);
-        update_flags(srm_ccr_no_x, src, 0);
     }
 
     void handle_MOVEA()
@@ -1199,8 +1208,8 @@ private:
         const uint32_t r = read_ea(0);
         const uint32_t l = read_ea(1);
         const uint32_t res = l | r;
-        write_ea(1, res);
         update_flags(srm_ccr_no_x, res, 0);
+        write_ea(1, res);
     }
 
     void handle_PEA()

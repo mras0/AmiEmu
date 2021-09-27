@@ -15,18 +15,19 @@
 int main(int argc, char* argv[])
 {
     try {
-        const char* const rom_file = "../../Misc/DiagROM/DiagROM";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
+        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
         //const char* const rom_file = "../../rom.bin";
+        //const char* const rom_file = "../../aros.rom";
         memory_handler mem { 1U << 20 };
         rom_area_handler rom { mem, read_file(rom_file) };
         cia_handler cias { mem, rom };
         custom_handler custom { mem, cias };
 
-        const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
-        ram_handler slow_ram { slow_size }; // For KS1.2
-        mem.register_handler(slow_ram, slow_base, slow_size);
+        //const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
+        //ram_handler slow_ram { slow_size }; // For KS1.2
+        //mem.register_handler(slow_ram, slow_base, slow_size);
 
         m68000 cpu { mem };
 
@@ -36,6 +37,8 @@ int main(int argc, char* argv[])
             else
                 throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
         }
+
+        //cpu.trace(&std::cout);
 
 
         gui g {graphics_width, graphics_height};
@@ -75,7 +78,7 @@ int main(int argc, char* argv[])
                     events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
                 }
-                //if (cpu.instruction_count() == 2449900 - 20)
+                //if (cpu.instruction_count() == 562251 - 10)
                 //    cpu.trace(&std::cout);
             } catch (...) {
                 cpu.show_state(std::cerr);

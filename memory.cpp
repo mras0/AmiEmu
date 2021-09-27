@@ -7,14 +7,16 @@
 uint8_t default_handler::read_u8(uint32_t addr, uint32_t)
 {
     std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
-    return 0xff;
+    //return 0xff;
+    return 0;
 }
 uint16_t default_handler::read_u16(uint32_t addr, uint32_t)
 {
     // Don't warn a bunch when scanning for ROM tags
     if (addr < 0xf00000)
         std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
-    return 0xffff;
+    //return 0xffff;
+    return 0;
 }
 void default_handler::write_u8(uint32_t addr, uint32_t, uint8_t val)
 {
@@ -46,9 +48,19 @@ void ram_handler::write_u8(uint32_t, uint32_t offset, uint8_t val)
     assert(offset < ram_.size());
     ram_[offset] = val;
 }
+
+
+//const uint32_t watch_start = 0x00c04490 + 0x12;
+//const uint32_t watch_end = watch_start + 4;
+//
 void ram_handler::write_u16(uint32_t, uint32_t offset, uint16_t val)
 {
     assert(offset < ram_.size() - 1);
+
+  //  if (addr >= watch_start && addr < watch_end) {
+  //      std::cout << "Write to $" << hexfmt(addr) << " = $" << hexfmt(val) << "\n";
+  //  }
+  //
     put_u16(&ram_[offset], val);
 }
 
@@ -63,8 +75,13 @@ rom_area_handler::rom_area_handler(memory_handler& mem_handler, std::vector<uint
     , rom_data_ { std::move(data) }
 {
     const auto size = static_cast<uint32_t>(rom_data_.size());
-    if (size != 256 * 1024 && size != 512 * 1024) {
+    if (size != 256 * 1024 && size != 512 * 1024 && size != 1024 * 1024) {
         throw std::runtime_error { "Unexpected size of ROM: $" + hexstring(size) };
+    }
+
+    if (size == 1024 * 1024) {
+        mem_handler_.register_handler(*this, 0xf00000, size);
+        return;
     }
     mem_handler_.register_handler(*this, 0xf80000, size);
     if (rom_data_.size() != 512 * 1024)
@@ -153,6 +170,7 @@ void memory_handler::write_u16(uint32_t addr, uint16_t val)
 {
     if (addr & 1)
         throw std::runtime_error { "Word write to odd address " + hexstring(addr) };
+
     auto& a = find_area(addr);
     return a.handler->write_u16(addr, addr - a.base, val);
 }
@@ -162,6 +180,7 @@ void memory_handler::write_u32(uint32_t addr, uint32_t val)
     // TODO: Handle if write to two different areas...
     if (addr & 1)
         throw std::runtime_error { "Long write to odd address " + hexstring(addr) };
+
     auto& a = find_area(addr);
     return a.handler->write_u32(addr, addr - a.base, val);
 }

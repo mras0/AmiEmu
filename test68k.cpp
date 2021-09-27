@@ -378,6 +378,12 @@ bool run_simple_tests()
             { 0xFFFF0000, 2 }, srm_c,
             { 0xFFFF0000, 2 }, srm_z,
         },
+        { // MOVE.B #7, CCR
+            { 0x44FC, 0x0007 },
+            {}, 0,
+            {}, srm_c | srm_v | srm_z,
+
+        }
     };
     // TODO: more ROR and ROL tests (especially rotates with 0 and > width size)
 
