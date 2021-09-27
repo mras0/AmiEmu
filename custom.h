@@ -10,6 +10,9 @@
 constexpr unsigned graphics_width  = 768; // 24*16*2
 constexpr unsigned graphics_height = 570; // 285*2 (285 is only for every other field)
 
+constexpr unsigned audio_samples_per_frame = 313 * 2; // Two stereo sample per scanline
+constexpr unsigned audio_buffer_size = audio_samples_per_frame * 2;
+
 class cia_handler;
 
 class custom_handler {
@@ -20,6 +23,7 @@ public:
     using serial_data_handler = std::function<void(uint8_t numbits, uint8_t data)>;
     struct step_result {
         const uint32_t* frame;
+        const int16_t* audio;
         uint16_t vpos;
         uint16_t hpos;
         uint8_t ipl;

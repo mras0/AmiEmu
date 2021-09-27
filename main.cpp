@@ -4,6 +4,8 @@
 #include <cassert>
 #include <fstream>
 #include <chrono>
+#include <mutex>
+#include <condition_variable>
 
 //#define TRACE_LOG
 
@@ -21,6 +23,7 @@
 #include "disk_drive.h"
 #include "gui.h"
 #include "debug.h"
+#include "wavedev.h"
 
 namespace {
 
@@ -206,11 +209,12 @@ struct command_line_arguments {
     uint32_t slow_size;
     uint32_t fast_size;
     bool test_mode;
+    bool nosound;
 };
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0 adf-file] [-chip size] [-slow size] [-fast size] [-testmode] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0 adf-file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -268,6 +272,10 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 usage("");
             else if (!strcmp(&argv[i][1], "testmode")) {
                 args.test_mode = true;
+                args.nosound = true;
+                continue;
+            } else if (!strcmp(&argv[i][1], "nosound")) {
+                args.nosound = true;
                 continue;
             }
         }
@@ -588,7 +596,7 @@ int main(int argc, char* argv[])
             serdata.push_back(data ? data : ' ');
             });
 
-        
+
         gui g { graphics_width, graphics_height, std::array<std::string, 4>{ cmdline_args.df0, cmdline_args.df1, "", "" } };
         auto serdata_flush = [&g, &serdata]() {
             if (!serdata.empty()) {
@@ -630,21 +638,58 @@ int main(int argc, char* argv[])
         bool cpu_active = true;
         uint32_t cycles_todo = 0;
         uint32_t idle_count = 0;
+        std::mutex audio_mutex_;
+        std::condition_variable audio_buffer_ready_cv;
+        std::condition_variable audio_buffer_played_cv;
+        int16_t audio_buffer[2][audio_buffer_size];
+        bool audio_buffer_ready[2] = { false, false };
+        int audio_next_to_play = 0;
+        int audio_next_to_fill = 0;
 
         cpu.set_cycle_handler([&](uint8_t cycles) {
             assert(cpu_active);
             cycles_todo += cycles;
         });
 
+        auto active_debugger = [&]() {
+            g.set_active(false);
+            debug_mode = true;
+        };
+
+        std::unique_ptr<wavedev> audio;
+
         auto cstep = [&](bool cpu_waiting) {
             cpu_active = false;
             custom_step = custom.step(cpu_waiting);
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
-                g.set_active(false);
-                debug_mode = true;
+                active_debugger();
                 wait_mode = wait_none;
-            } else if (!(custom_step.vpos | custom_step.hpos))
+            } else if (!(custom_step.vpos | custom_step.hpos)) {
                 new_frame = true;
+                
+                if (audio)
+                {
+                    std::unique_lock<std::mutex> lock { audio_mutex_ };
+                    if (audio_buffer_ready[audio_next_to_fill]) {
+                        audio_buffer_played_cv.wait(lock, [&]() { return !audio_buffer_ready[audio_next_to_fill]; });
+                    }
+                    memcpy(audio_buffer[audio_next_to_fill], custom_step.audio, sizeof(audio_buffer[audio_next_to_fill]));
+                    audio_buffer_ready[audio_next_to_fill] = true;
+                    audio_next_to_fill = !audio_next_to_fill;
+                }
+                audio_buffer_ready_cv.notify_one();
+                #if 0
+                static auto last_time = std::chrono::high_resolution_clock::now();
+                static int frame_cnt = 0;
+                if (++frame_cnt == 100) {
+                    auto now = std::chrono::high_resolution_clock::now();
+                    const auto t = std::chrono::duration_cast<std::chrono::microseconds>(now - last_time).count();
+                    std::cout << "FPS: " << frame_cnt * 1e6 / t << "\n"; 
+                    last_time = now;
+                    frame_cnt = 0;
+                }
+                #endif
+            }
             cpu_active = true;
         };
 
@@ -654,6 +699,56 @@ int main(int argc, char* argv[])
                 --cycles_todo;
             }
         };
+
+        if (!cmdline_args.nosound) {
+            audio = std::make_unique<wavedev>(audio_samples_per_frame * 50, audio_buffer_size, [&](int16_t* buf, size_t sz) {
+                static_assert(2 * audio_samples_per_frame == audio_buffer_size);
+                assert(sz == audio_samples_per_frame);
+                {
+                    std::unique_lock<std::mutex> lock { audio_mutex_ };
+                    if (!audio_buffer_ready[audio_next_to_play]) {
+                        std::cerr << "Audio buffer not ready!\n";
+                        audio_buffer_ready_cv.wait(lock, [&]() { return audio_buffer_ready[audio_next_to_play]; });
+                    }
+                    memcpy(buf, audio_buffer[audio_next_to_play], sz * 2 * sizeof(int16_t));
+                    audio_buffer_ready[audio_next_to_play] = false;
+                    audio_next_to_play = !audio_next_to_play;
+                }
+                audio_buffer_played_cv.notify_one();
+            });
+        }
+
+        // Make sure audio stops
+        struct at_exit {
+            explicit at_exit(std::function<void()> ae)
+                : ae_ { ae }
+            {
+                assert(ae_);
+            }
+
+            ~at_exit()
+            {
+                ae_();
+            }
+
+        private:
+            std::function<void()> ae_;
+        } kill_audio([&]() {
+            std::unique_lock<std::mutex> lock { audio_mutex_ };
+            audio_buffer_ready[0] = true;
+            audio_buffer_ready[1] = true;
+            audio_buffer_ready_cv.notify_all();
+        });
+
+
+
+        g.set_on_pause_callback([&](bool pause) {
+            if (audio)
+                audio->set_paused(pause);
+        });
+
+        // Temp:
+        //debug_flags |= debug_flag_audio;
 
         constexpr uint32_t min_rom_addr = 0x00e0'0000;
         mem.set_memory_interceptor([&](uint32_t addr, uint32_t /*data*/, uint8_t size, bool /*write*/) {
@@ -832,6 +927,8 @@ int main(int argc, char* argv[])
                                             debug_flags |= debug_flag_disk;
                                         else if (args[i] == "blitter")
                                             debug_flags |= debug_flag_blitter;
+                                        else if (args[i] == "audio")
+                                            debug_flags |= debug_flag_audio;
                                         else
                                             std::cerr << "Unknown trace flag \"" << args[i] << "\"\n";
                                     }
@@ -945,12 +1042,10 @@ unknown_command:
                 cpu_step = cpu.step(custom_step.ipl);
                    
                 if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < min_rom_addr)) {
-                    g.set_active(false);
-                    debug_mode = true;
+                    active_debugger();
                     wait_mode = wait_none;
                 } else if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
-                    g.set_active(false);
-                    debug_mode = true;
+                    active_debugger();
                     std::cout << "Breakpoint hit\n";
                 }
 
@@ -1036,8 +1131,7 @@ unknown_command:
 
 #ifndef TRACE_LOG
                 serdata_flush();
-                debug_mode = true;
-                g.set_active(false);
+                active_debugger();
                 if (cmdline_args.test_mode)
                     throw;
 #else

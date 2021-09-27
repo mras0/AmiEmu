@@ -12,12 +12,14 @@ constexpr uint32_t debug_flag_bpl     = 1 << 1;
 constexpr uint32_t debug_flag_sprite  = 1 << 2;
 constexpr uint32_t debug_flag_disk    = 1 << 3;
 constexpr uint32_t debug_flag_blitter = 1 << 4;
+constexpr uint32_t debug_flag_audio   = 1 << 5;
 
 #define DEBUG_COPPER  (debug_flags & debug_flag_copper)
 #define DEBUG_BPL     (debug_flags & debug_flag_bpl)
 #define DEBUG_SPRITE  (debug_flags & debug_flag_sprite)
 #define DEBUG_DISK    (debug_flags & debug_flag_disk)
 #define DEBUG_BLITTER (debug_flags & debug_flag_blitter)
-#define DEBUG_DMA     (DEBUG_COPPER|DEBUG_BPL|DEBUG_SPRITE|DEBUG_DISK|DEBUG_BLITTER)
+#define DEBUG_AUDIO   (debug_flags & debug_flag_audio)
+#define DEBUG_DMA     (DEBUG_COPPER|DEBUG_BPL|DEBUG_SPRITE|DEBUG_DISK|DEBUG_BLITTER|DEBUG_AUDIO)
 
 #endif

@@ -814,6 +814,29 @@ struct custom_state {
     uint16_t bltsize;
     enum { blit_stopped, blit_running, blit_final } blitstate;
 
+    // audio
+    enum class audio_channel_state {
+        inactive      = 0b000,
+        dma_starting  = 0b001, 
+        dma_has_first = 0b101,
+        dma_samp1     = 0b010,
+        dma_samp2     = 0b011,
+    };
+    struct audio_channel {
+        uint32_t lc;
+        uint16_t len;
+        uint16_t per;
+        uint16_t vol;
+        uint16_t dat;
+
+        audio_channel_state state;
+        uint32_t ptr;
+        uint16_t actlen;
+        uint16_t percnt;
+        uint16_t actvol;
+        bool dmareq;
+    } audio_channels[4];
+
     uint16_t sprite_vpos_start(uint8_t spr)
     {
         assert(spr < 8);
@@ -854,6 +877,7 @@ public:
     void reset()
     {
         memset(gfx_buf_, 0, sizeof(gfx_buf_));
+        memset(audio_buf_, 0, sizeof(audio_buf_));
         memset(&s_, 0, sizeof(s_));
         s_.long_frame = true;
         pause_copper();
@@ -1420,6 +1444,122 @@ public:
         return true;
     }
 
+    void do_audio()
+    {
+        const bool dma_master = !!(s_.dmacon & DMAF_MASTER);
+        for (uint8_t idx = 0; idx < 4; ++idx) {
+            auto& ch = s_.audio_channels[idx];
+            const bool active = dma_master && !!(s_.dmacon & (1 << idx));
+
+            auto stop = [&]() {
+                if (DEBUG_AUDIO)
+                    DBGOUT << "Audio channel " << (int)idx << " stopping\n";
+                ch.state = custom_state::audio_channel_state::inactive;
+                ch.dmareq = false;
+            };
+
+            if (ch.state != custom_state::audio_channel_state::inactive && !active) {
+                stop();
+                continue;
+            }
+
+            switch (ch.state) {
+            case custom_state::audio_channel_state::inactive:
+                if (active) {
+                    ch.state = custom_state::audio_channel_state::dma_starting;
+                    ch.ptr = ch.lc;
+                    ch.actlen = ch.len;
+                    ch.percnt = ch.per;
+                    ch.actvol = ch.vol;
+                    ch.dmareq = true;
+                    if (DEBUG_AUDIO)
+                        DBGOUT << "Audio channel " << (int)idx << " starting\n";
+                }
+                break;
+            case custom_state::audio_channel_state::dma_samp1:
+                if (ch.percnt == 0) {
+                    ch.state = custom_state::audio_channel_state::dma_samp2;
+                    ch.percnt = ch.per;
+                } else {
+                    ch.percnt--;
+                }
+                break;
+            case custom_state::audio_channel_state::dma_samp2:
+                if (ch.percnt == 0) {
+                    ch.percnt = ch.per;
+                    ch.dmareq = true;
+                    if (ch.actlen == 1) {
+                        if (DEBUG_AUDIO)
+                            DBGOUT << "Audio channel " << (int)idx << " finished playing (restarting)\n";
+                        ch.ptr = ch.lc;
+                        ch.actlen = ch.len;
+                        s_.intreq |= 1 << (idx + INTB_AUD0);
+                    } else {
+                        ch.actlen--;
+                    }
+                } else {
+                    ch.percnt--;
+                }
+                break;
+            }
+        }
+    }
+
+    bool audio_dma(uint8_t idx)
+    {
+        assert(!!(s_.dmacon & DMAF_MASTER));
+        assert(idx < 4);
+        auto& ch = s_.audio_channels[idx];
+        if (!(s_.dmacon & (1 << idx)) || !ch.dmareq)
+            return false;
+        ch.dat = chip_read(ch.ptr);
+        ch.ptr += 2;
+        ch.dmareq = false;
+        switch (ch.state) {
+        case custom_state::audio_channel_state::dma_starting:
+            if (DEBUG_AUDIO)
+                DBGOUT << "Audio channel " << (int)idx << " DMA started\n";
+            if (ch.actlen != 1)
+                ch.actlen--;
+            s_.intreq |= 1 << (idx + INTB_AUD0);
+            ch.state = custom_state::audio_channel_state::dma_samp1;
+            break;
+        case custom_state::audio_channel_state::dma_samp2:
+            ch.state = custom_state::audio_channel_state::dma_samp1;
+            break;
+        default:
+            DBGOUT << "Audio channel " << (int)idx << " in unknown state " << (int)ch.state << " in audio_dma\n";
+            throw std::runtime_error { "FIXME" };
+        }
+        return true;
+    }
+
+    void audio_mix()
+    {
+        // Audio
+        int16_t l = 0, r = 0;
+        for (uint8_t idx = 0; idx < 4; ++idx) {
+            int16_t dat = 0;
+            auto& ch = s_.audio_channels[idx];
+            if (ch.state == custom_state::audio_channel_state::dma_samp1)
+                dat = static_cast<int8_t>(ch.dat >> 8);
+            else if (ch.state == custom_state::audio_channel_state::dma_samp2)
+                dat = static_cast<int8_t>(ch.dat & 0xff);
+            else
+                continue;
+            // -128..127 * 128 (max) = -16384..16383 (and then two channels)
+            dat *= static_cast<int16_t>(std::min(128, ch.vol * 2));
+
+            if (idx == 0 || idx == 3)
+                l += dat;
+            else
+                r += dat;
+        }
+        const auto idx = s_.vpos * 4 + 2 * (s_.hpos ? 1 : 0);
+        audio_buf_[idx] = l;
+        audio_buf_[idx + 1] = r;
+    }
+
     step_result step(bool cpu_wants_access)
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
@@ -1433,6 +1573,7 @@ public:
 
         step_result res {
             .frame = gfx_buf_,
+            .audio = audio_buf_,
         };
 
         uint8_t spriteidx[8];
@@ -1674,9 +1815,15 @@ public:
             }
         }
 
-        if (s_.copper_inst_ofs == 2) {
+        // Mix 2 samples per line
+        if (s_.hpos == 0 || s_.hpos == hpos_per_line / 2)
+            audio_mix();
+
+        if (!(s_.hpos & 1))
+            do_audio();
+
+        if (s_.copper_inst_ofs == 2)
             do_copper();
-        }
 
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
             auto do_dma = [this](uint32_t& pt) {
@@ -1700,7 +1847,15 @@ public:
                         break;
                 }
 
-                // TODO: Audio
+                // Audio
+                if (colclock == 13 && audio_dma(0))
+                    break;
+                if (colclock == 15 && audio_dma(1))
+                    break;
+                if (colclock == 17 && audio_dma(2))
+                    break;
+                if (colclock == 19 && audio_dma(3))
+                    break;
 
                 // Display
                 const uint16_t act_ddfstop = std::min<uint16_t>(0xD8, s_.ddfstop);
@@ -1985,8 +2140,33 @@ public:
             return;
         }
         if (offset >= AUD0LCH && offset <= AUD3VOL) {
-            // Ignore audio
-            return;
+            auto& ch = s_.audio_channels[(offset - AUD0LCH) / 16];
+            if (DEBUG_AUDIO)
+                DBGOUT << "Audio write to " << custom_regname(offset) << " val $" << hexfmt(val) << "\n";
+            switch ((offset & 0xf) >> 1) {
+            case 0: // LCH
+                ch.lc = val << 16 | (ch.lc & 0xffff);
+                return;
+            case 1: // LCL
+                ch.lc = (ch.lc & 0xffff0000) | (val & 0xfffe);
+                return;
+            case 2: // LEN
+                ch.len = val;
+                return;
+            case 3: // PER
+                if (val < 124) {
+                    DBGOUT << "Audio write to " << custom_regname(offset) << " val $" << hexfmt(val) << " -- Warning period value is too low!\n";
+                }
+                ch.per = val;
+                return;
+            case 4: // VOL
+                ch.vol = val;
+                return;
+            case 5: // DAT
+                DBGOUT << "Audio unspported write to " << custom_regname(offset) << " val $" << hexfmt(val) << "\n";
+                ch.dat = val;
+                return;
+            }
         }
         if (offset >= BPL1PTH && offset <= BPL6PTL) {
             write_partial(s_.bplpt[(offset - BPL1PTH) / 4]);
@@ -2189,7 +2369,7 @@ public:
             return;
         case ADKCON:  // $09E
             setclr(s_.adkcon, val);
-            if (DEBUG_DISK)
+            if (DEBUG_DISK || DEBUG_AUDIO)
                 DBGOUT << "Write to ADKCON val=$" << hexfmt(val) << " adkcon=$" << hexfmt(s_.adkcon) << "\n";
             return;
         case BPLCON0: // $100
@@ -2257,6 +2437,7 @@ private:
     serial_data_handler serial_data_handler_;
 
     uint32_t gfx_buf_[graphics_width * graphics_height];
+    int16_t audio_buf_[audio_buffer_size];
     custom_state s_;
     uint32_t chip_ram_mask_;
 
@@ -2376,29 +2557,47 @@ uint16_t custom_handler::impl::internal_read(uint16_t reg)
         return s_.intreq;
     case ADKCON:
         return s_.adkcon;
-    //case AUD0LCH:
-    //case AUD0LCL:
-    //case AUD0LEN:
-    //case AUD0PER:
-    //case AUD0VOL:
-    //case AUD0DAT:
-    //case AUD1LCH:
-    //case AUD1LCL:
-    //case AUD1LEN:
-    //case AUD1PER:
-    //case AUD1VOL:
-    //case AUD1DAT:
-    //case AUD2LCH:
-    //case AUD2LCL:
-    //case AUD2LEN:
-    //case AUD2PER:
-    //case AUD2VOL:
-    //case AUD2DAT:
-    //case AUD3LCH:
-    //case AUD3LCL:
-    //case AUD3LEN:
-    //case AUD3PER:
-    //case AUD3VOL:
+    case AUD0LCH:
+    case AUD0LCL:
+    case AUD0LEN:
+    case AUD0PER:
+    case AUD0VOL:
+    case AUD0DAT:
+    case AUD1LCH:
+    case AUD1LCL:
+    case AUD1LEN:
+    case AUD1PER:
+    case AUD1VOL:
+    case AUD1DAT:
+    case AUD2LCH:
+    case AUD2LCL:
+    case AUD2LEN:
+    case AUD2PER:
+    case AUD2VOL:
+    case AUD2DAT:
+    case AUD3LCH:
+    case AUD3LCL:
+    case AUD3LEN:
+    case AUD3PER:
+    case AUD3VOL: {
+        auto& ch = s_.audio_channels[(reg - AUD0LCH) / 16];
+        switch ((reg & 0xf) >> 1) {
+        case 0:
+            return hi(ch.lc);
+        case 1:
+            return lo(ch.lc);
+        case 2:
+            return ch.len;
+        case 3:
+            return ch.per;
+        case 4:
+            return ch.vol;
+        case 5:
+            return ch.dat;
+        }
+        assert(0);
+        return 0;
+    }
     case BPL1PTH:
     case BPL1PTL:
     case BPL2PTH:

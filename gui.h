@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <functional>
 #include <stdint.h>
 
 class gui {
@@ -45,6 +46,8 @@ public:
         };
     };
 
+    using on_pause_callback = std::function<void (bool)>;
+
     std::vector<event> update();
     void update_image(const uint32_t* data);
     void led_state(uint8_t s);
@@ -53,6 +56,7 @@ public:
     bool debug_prompt(std::string& line);
     void set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom);
     void set_debug_windows_visible(bool visible);
+    void set_on_pause_callback(const on_pause_callback& on_pause);
 
 private:
     class impl;

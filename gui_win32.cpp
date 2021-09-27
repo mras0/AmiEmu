@@ -1194,6 +1194,8 @@ public:
             SetForegroundWindow(GetConsoleWindow());
             active_ = false;
         }
+        if (on_pause_)
+            on_pause_(!act);
     }
 
     void handle_message(MSG& msg)
@@ -1214,6 +1216,12 @@ public:
         ShowWindow(mem_vis_window_->handle(), visible ? SW_SHOW : SW_HIDE);
     }
 
+    void set_on_pause_callback(const on_pause_callback& on_pause)
+    {
+        assert(!on_pause_);
+        on_pause_ = on_pause;
+    }
+
 private:
     friend window_base<impl>;
     static constexpr const wchar_t* const class_name_ = L"Display";
@@ -1229,6 +1237,7 @@ private:
     bool mouse_captured_ = false;
     bool active_ = true;
     std::array<std::string, 4> disk_filenames_;
+    on_pause_callback on_pause_;
 
     impl(int width, int height, const std::array<std::string, 4>& disk_filenames)
         : width_ { width }
@@ -1336,6 +1345,8 @@ private:
                     events_.push_back(evt);
                     set_active(false);
                 } else {
+                    if (on_pause_)
+                        on_pause_(true);
                     std::array<std::string, 4> disk_filenames = disk_filenames_;
                     config_dialog::run(hwnd, disk_filenames);
                     for (int i = 0; i < 4; ++i) {
@@ -1349,6 +1360,8 @@ private:
                     }
                     if (was_captured)
                         capture_mouse();
+                    if (on_pause_)
+                        on_pause_(false);
                 }
             } else
                 enqueue_keyboard_event(false, wParam, lParam);
@@ -1488,4 +1501,9 @@ void gui::set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<ui
 void gui::set_debug_windows_visible(bool visible)
 {
     impl_->set_debug_windows_visible(visible);
+}
+
+void gui::set_on_pause_callback(const on_pause_callback& on_pause)
+{
+    impl_->set_on_pause_callback(on_pause);
 }
