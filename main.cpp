@@ -61,28 +61,34 @@ struct command_line_arguments {
     std::string df0;
 };
 
+void usage(const std::string& msg)
+{
+    std::cerr << "Command line arguments: -rom rom-file [-df0 adf-file] [-help]\n";
+    throw std::runtime_error { msg };
+}
+
 command_line_arguments parse_command_line_arguments(int argc, char* argv[])
 {
     command_line_arguments args;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-df0")) {
             if (++i == argc)
-                throw std::runtime_error { "Missing df0 argument" };
+                usage("Missing df0 argument");
             if (!args.df0.empty())
-                throw std::runtime_error { "Multiple df0 arguments" };
+                usage("Multiple df0 arguments");
             args.df0 = argv[i];
         } else if (!strcmp(argv[i], "-rom")) {
             if (++i == argc)
-                throw std::runtime_error { "Missing rom argument" };
+                usage("Missing rom argument");
             if (!args.rom.empty())
-                throw std::runtime_error { "Multiple rom arguments" };
+                usage("Multiple rom arguments");
             args.rom = argv[i];
         } else {
-            throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
+            usage("Unrecognized command line parameter: " + std::string { argv[i] });
         }
     }
     if (args.rom.empty())
-        args.rom = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        usage("No ROM selected");
     return args;
 }
 
@@ -90,14 +96,6 @@ int main(int argc, char* argv[])
 {
     try {
         const auto args = parse_command_line_arguments(argc, argv);
-        //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 2.0 (A600).rom";
-        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 3.1 (A600).rom";
-        //const char* const rom_file = "../../rom.bin";
-        //const char* const rom_file = "../../aros.rom";
-        //const char* const rom_file = "../../Misc/simple-amiga-rom/out/rom.bin";
         disk_drive df0 {};
         disk_drive* drives[max_drives] = { &df0 };
         memory_handler mem { 1U << 20 };
@@ -108,11 +106,6 @@ int main(int argc, char* argv[])
         //const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
         //ram_handler slow_ram { slow_size }; // For KS1.2
         //mem.register_handler(slow_ram, slow_base, slow_size);
-
-        //const char* disk = "";
-        //disk = "../../Misc/AmigaWorkbench/Workbench13.adf";
-        //disk = R"(..\..\misc\amiga\ctest\out\test.adf)";
-
 
         m68000 cpu { mem };
 

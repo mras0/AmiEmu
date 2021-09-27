@@ -3,6 +3,7 @@
 #include <system_error>
 #include <array>
 #include <iostream>
+#include "ioutil.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -35,7 +36,7 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     map['0'] = 0x0A;
     map[VK_OEM_MINUS] = 0x0B; // -_
     map[VK_OEM_PLUS] = 0x0C;  // =+
-    // \| 0x0D
+    map[VK_OEM_5] = 0x0D;  // \| 0x0D
     // 0x0E
     // 0x0F
     map['Q'] = 0x10;
@@ -48,8 +49,8 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     map['I'] = 0x17;
     map['O'] = 0x18;
     map['P'] = 0x19;
-    // [{ 0x1A
-    // ]} 0x1B
+    map[VK_OEM_4] = 0x1A; // [{ 0x1A
+    map[VK_OEM_6] = 0x1B; // ]} 0x1B
     // 0x1C
     // keypad 1 0x1D
     // keypad 2 0x1E
@@ -63,8 +64,8 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     map['J'] = 0x26;
     map['K'] = 0x27;
     map['L'] = 0x28;
-    // ;: 0x29
-    // '" 0x2A
+    map[VK_OEM_1] = 0x29;  // ;: 0x29
+    map[VK_OEM_7] = 0x2A;  // '" 0x2A
     // 0x2B
     // 0x2C
     // keypad 4 0x2D
@@ -78,9 +79,9 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     map['B'] = 0x35;
     map['N'] = 0x36;
     map['M'] = 0x37;
-    // ,< 0x38
-    // .> 0x39
-    // /? 0x3A
+    map[VK_OEM_COMMA] = 0x38;  // ,< 0x38
+    map[VK_OEM_PERIOD] = 0x39; // .> 0x39
+    map[VK_OEM_2] = 0x3A; // /? 0x3A
     // 0x3B
     // numpad . 0x3C
     // numpad 7 0x3D
@@ -124,10 +125,9 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     map[VK_LCONTROL] = 0x63; // No right control!
     map[VK_LMENU] = 0x64;
     map[VK_RMENU] = 0x65;
-    // left amiga 0x66
-    // right amiga 0x67
-    
-
+    map[VK_HOME] = 0x66;  // left amiga 0x66
+    map[VK_INSERT] = 0x67; // right amiga 0x67
+ 
     return map;
 }();
 
@@ -388,6 +388,16 @@ private:
         return ret;
     }
 
+    void do_enqueue_keyboard_event(bool pressed, WPARAM vk)
+    {
+        const auto key = vk_to_scan[static_cast<uint8_t>(vk)];
+        if (key == 0xff) {
+            std::cerr << "Unhandled virtual key " << vk << " ($" << hexfmt(static_cast<uint8_t>(vk)) << ")\n";
+            return;
+        }
+        events_.push_back({ event_type::keyboard, keyboard_event { pressed, key } });
+    }
+
     void enqueue_keyboard_event(bool pressed, WPARAM wParam, LPARAM lParam)
     {
         WPARAM vk = wParam;
@@ -399,13 +409,7 @@ private:
         } else if (wParam == VK_MENU) {
             vk =  lParam & 0x01000000 ? VK_RMENU : VK_LMENU;
         }
-        const auto key = vk_to_scan[static_cast<uint8_t>(vk)];
-        if (key == 0xff) {
-            std::cerr << "Unhandled virtual key " << vk << "\n";
-            return;
-        }
-
-        events_.push_back({ event_type::keyboard, keyboard_event { pressed, key } });
+        do_enqueue_keyboard_event(pressed, vk);
     }
 
     LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -421,9 +425,8 @@ private:
             return 0;
         case WM_SYSKEYDOWN:
         case WM_KEYDOWN:
-            if (!(lParam & 0x4000'0000)) {
+            if (!(lParam & 0x4000'0000))
                 enqueue_keyboard_event(true, wParam, lParam);
-            }
             return 0;
         case WM_SYSKEYUP:
         case WM_KEYUP:
@@ -431,7 +434,6 @@ private:
                 PostQuitMessage(0);
             enqueue_keyboard_event(false, wParam, lParam);
             return 0;
-
         }
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }

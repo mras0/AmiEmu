@@ -4,6 +4,7 @@
 #include <iostream>
 
 //#define FLOPPY_DEBUG
+//#define KEYBOARD_DEBUG
 
 namespace {
 
@@ -232,6 +233,9 @@ public:
             kbd_ack_ = false;
             s_[0].sdrdata = kbd_buffer_[kbd_buffer_tail_++ % sizeof(kbd_buffer_)];
             s_[0].trigger_int(CIAICRB_SP);
+#ifdef KEYBOARD_DEBUG
+            std::cout << "Dequeuing keyboard data: $" << hexfmt(s_[0].sdrdata) << "\n";
+#endif
         }
     }
 
@@ -290,6 +294,9 @@ public:
         // Bit0: 1=down/0=up, Bit1..7: ~scancore (i.e. bitwise not)
         if (static_cast<uint8_t>(kbd_buffer_head_ - kbd_buffer_tail_) >= sizeof(kbd_buffer_))
             throw std::runtime_error { "Keyboard buffer overflow" }; // FIXME
+#ifdef KEYBOARD_DEBUG
+        std::cout << "Adding to keyboard buffer: $" << hexfmt<uint8_t>((pressed & 1) | (~raw) << 1) << "\n";
+#endif
         kbd_buffer_[(kbd_buffer_head_++) % sizeof(kbd_buffer_)] = (pressed & 1) | (~raw) << 1;
     }
 
@@ -506,7 +513,6 @@ private:
             if (!(s.cr[0] & CIACRAF_SPMODE))
                 throw std::runtime_error { "SR not in output mode?" };
             assert(s.cr[0] & CIACRAF_SPMODE); // SDR must be in output mode
-            kbd_ack_ = true;
             s.sdrdata = val;
             break; // Ignore value written (probably keyboard handshake)
         case icr: {
@@ -527,6 +533,14 @@ private:
                 s.timer_val[0] = s.timer_latch[0];
                 if (val & CIACRAF_RUNMODE)
                     val |= CIACRAF_START;
+            }
+            if (idx == 0 && !(s.cr[0] & CIACRAF_SPMODE) && (val & CIACRAF_SPMODE)) {
+                if (!kbd_ack_) {
+#ifdef KEYBOARD_DEBUG
+                    std::cout << "CIAA SPMODE set. Acking keyboard command srdata=$" << hexfmt(s.sdrdata) << "\n";
+#endif
+                    kbd_ack_ = true;
+                }
             }
             s.cr[reg - cra] = val;
             break;
