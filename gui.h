@@ -55,4 +55,6 @@ private:
     std::unique_ptr<impl> impl_;
 };
 
+bool debug_prompt(std::string& line);
+
 #endif

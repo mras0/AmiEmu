@@ -419,11 +419,10 @@ int main(int argc, char* argv[])
                     cpu.show_state(std::cout);
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
-                        std::cout << "> " << std::flush;
                         std::string line;
-                        if (!std::getline(std::cin, line)) {
-                            assert(0);
+                        if (!debug_prompt(line)) {
                             debug_mode = false;
+                            quit = true;
                             break;
                         }
                         const auto args = split_line(line);

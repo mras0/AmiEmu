@@ -3,6 +3,7 @@
 #include <system_error>
 #include <array>
 #include <iostream>
+#include <thread>
 #include "ioutil.h"
 
 #define WIN32_LEAN_AND_MEAN
@@ -159,6 +160,7 @@ struct gdi_deleter {
     }
 };
 using font_ptr = std::unique_ptr<HFONT__, gdi_deleter>;
+
 
 class serial_data_window {
 public:
@@ -384,11 +386,13 @@ public:
         if (act) {
             SetFocus(hwnd_);
             SetForegroundWindow(hwnd_);
+            active_ = true;
         } else {
             if (mouse_captured_)
                 release_mouse();
             SetFocus(GetConsoleWindow());
             SetForegroundWindow(GetConsoleWindow());
+            active_ = false;
         }
     }
 
@@ -405,6 +409,7 @@ private:
     serial_data_window* ser_data_ = nullptr;
     POINT last_mouse_pos_ { 0, 0 };
     bool mouse_captured_ = false;
+    bool active_ = true;
 
     void redraw()
     {
@@ -454,6 +459,8 @@ private:
 
     void enqueue_mouse_button_event(bool pressed, bool left)
     {
+        if (!active_)
+            return;
         if (!mouse_captured_) {
             capture_mouse();
             return;
@@ -510,13 +517,15 @@ private:
             return 0;
         case WM_SYSKEYDOWN:
         case WM_KEYDOWN:
-            if (!(lParam & 0x4000'0000) && wParam != VK_F11 && wParam != VK_F12)
+            if (active_ && !(lParam & 0x4000'0000) && wParam != VK_F11 && wParam != VK_F12)
                 enqueue_keyboard_event(true, wParam, lParam);
             return 0;
         case WM_SYSKEYUP:
         case WM_KEYUP:
             if (wParam == VK_F4 && GetKeyState(VK_MENU) < 0)
                 PostQuitMessage(0);
+            else if (!active_)
+                return 0;
             else if (wParam == VK_F11) {
                 // For now do nothing
             }
@@ -646,4 +655,35 @@ void gui::serial_data(const std::vector<uint8_t>& data)
 void gui::set_active(bool act)
 {
     impl_->set_active(act);
+}
+
+bool debug_prompt(std::string& line)
+{
+    const DWORD gui_thread = GetCurrentThreadId();
+
+    // Yes, waste a thread for each line..
+    std::thread t {
+        [&]() {
+            std::cout << "> " << std::flush;
+            std::getline(std::cin, line);
+            PostThreadMessage(gui_thread, WM_APP, 0, 0);
+        }
+    };
+
+    MSG msg;
+    while (GetMessage(&msg, nullptr, 0, 0) && msg.message != WM_QUIT) {
+        if (msg.message == WM_APP)
+            break;
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    if (msg.message == WM_QUIT) {
+        PostQuitMessage(static_cast<int>(msg.wParam));
+        t.detach(); // We don't care about the result any more (dangerous)
+    } else {
+        t.join();
+    }
+
+    return !!std::cin && msg.message != WM_QUIT;
 }
