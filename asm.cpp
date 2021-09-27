@@ -79,6 +79,7 @@ constexpr bool range16(uint32_t val)
     X(LSR       , bwl  , w    , 3)        \
     X(MOVE      , bwl  , w    , 2)        \
     X(MOVEM     , wl   , w    , 2)        \
+    X(MOVEP     , wl   , w    , 2)        \
     X(MOVEQ     , l    , l    , 2)        \
     X(MULS      , w    , w    , 2)        \
     X(MULU      , w    , w    , 2)        \
@@ -104,6 +105,7 @@ constexpr bool range16(uint32_t val)
     X(SUBX      , bwl  , w    , 2)        \
     X(SUBQ      , bwl  , w    , 2)        \
     X(SWAP      , w    , w    , 1)        \
+    X(TAS       , b    , b    , 1)        \
     X(TRAP      , none , none , 1)        \
     X(TRAPV     , none , none , 0)        \
     X(TST       , bwl  , w    , 1)        \
@@ -1139,6 +1141,11 @@ operands_done:
                 ASSEMBLER_ERROR("Invalid operand to SWAP");
             iwords[0] = 0x4840 | (ea[0].type & 7);
             goto done;
+        case token_type::TAS:
+            if (ea[0].type >> ea_m_shift == ea_m_An || ea[0].type >= ea_immediate)
+                ASSEMBLER_ERROR("Invalid operand to " << info.name);
+            iwords[0] = 0x4ac0 | (ea[0].type & 0x3f);
+            break;
         case token_type::TRAP:
             if (ea[0].type != ea_immediate)
                 ASSEMBLER_ERROR("Invalid operand to TRAP");

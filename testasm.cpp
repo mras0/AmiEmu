@@ -304,8 +304,15 @@ bool simple_asm_tests()
         { "ROXR #8, d7", { 0xe057 } },
         { "ROXR $12345678.l", { 0xe4f9, 0x1234, 0x5678 } },
         { "ROXR.L d4, d6", { 0xe8b6 } },
+        { "TAS d2", { 0x4ac2 } },
+        { "TAS (a2)", { 0x4ad2 } },
+        { "TAS (a1)+", { 0x4ad9 } },
+        { "TAS -(a3)", { 0x4ae3 } },
+        { "TAS 12(a2)", { 0x4aea, 0x000c } },
+        { "TAS 2(a3,d0.w)", { 0x4af3, 0x0002 } },
+        { "TAS $1234.w", { 0x4af8, 0x1234 } },
+        { "TAS $12345678.l", { 0x4af9, 0x1234, 0x5678 } },
         // MOVEP
-        // TAS
     };
 
     for (const auto& tc : test_cases) {

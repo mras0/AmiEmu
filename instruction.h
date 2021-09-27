@@ -74,6 +74,7 @@ enum class inst_type {
     MOVE,
     MOVEA,
     MOVEM,
+    MOVEP,
     MOVEQ,
     MULS,
     MULU,

@@ -44,7 +44,8 @@
     X(LSd)	        \
     X(MOVE)	        \
     X(MOVEA)	    \
-    X(MOVEM)	    \
+    X(MOVEM)        \
+    X(MOVEP)	    \
     X(MOVEQ)	    \
     X(MULS)	        \
     X(MULU)	        \
