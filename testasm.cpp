@@ -317,8 +317,40 @@ bool simple_asm_tests()
         { "MOVEP.W $1234(a7), d3", { 0x070f, 0x1234 } },
         { "MOVEP.L d4, $1234(a7)", { 0x09cf, 0x1234 } },
         { "MOVEP.L $1234(a2), d0", { 0x014a, 0x1234 } },
-
         { "DC.B $12, $34, $56\nEVEN\nDC.W $abcd\n", { 0x1234, 0x5600, 0xabcd } },
+        { "DC.W 2000-1000", { 0x3e8 } },        
+        { "lab1: dc.w $1234,$5678\nlab2: dc.w $abcd\n dc.w lab2-lab1\n", { 0x1234, 0x5678, 0xabcd, 0x0004 } },
+        { "dc.b 'hello', 0", { 'h'<<8|'e', 'l'<<8|'l', 'o'<<8 } },
+        { "dc.w $1234 ; we want comments", { 0x1234 } },
+        { "dc.w $1234;blahblah\ndc.w   $5678", { 0x1234, 0x5678} },
+        { R"(
+DiagStart:
+    dc.b $00, $00
+    dc.w EndCopy-DiagStart
+    dc.w DiagEntry-DiagStart
+    dc.w BootEntry-DiagStart
+    dc.w DevName-DiagStart
+    dc.w $0000, $0000
+
+DevName: dc.b 'hello.device', 0
+    even
+
+BootEntry:
+    rts
+DiagEntry:
+    rts
+EndCopy:
+)", {
+        0x0000,
+        0x0020, // Size
+        0x001E, // Diag
+        0x001C, // Boot
+        0x000E, // Devname
+        0x0000, 0x0000, // reserved
+        'h' << 8 | 'e', 'l' << 8 | 'l', 'o' << 8 | '.', 'd' << 8 | 'e', 'v' << 8 | 'i', 'c' << 8 | 'e', 0x0000,
+        0x4e75,
+        0x4e75
+        } },
     };
 
     for (const auto& tc : test_cases) {

@@ -246,6 +246,7 @@ private:
         number,
         // 33 ... 127 reserved for operators
         hash = '#',
+        quote = '\'',
         lparen = '(',
         rparen = ')',
         plus = '+',
@@ -414,7 +415,15 @@ private:
             ++line_;
             col_ = 1;
             return;
+        case ';':
+            while (*input_ && *input_ != '\n')
+                ++input_;
+            token_type_ = token_type::newline;
+            ++line_;
+            col_ = 1;
+            return;
         case '#':
+        case '\'':
         case '(':
         case ')':
         case '+':
@@ -1271,24 +1280,46 @@ done:
       
         expect(token_type::whitespace);
         for (;;) {
-            auto num = process_number();
-            if (num.fixup)
-                num.fixup->fixups.push_back(fixup_type { osize, static_cast<uint32_t>(result_.size()) });
-
-            if (osize == opsize::b) {               
-                result_.push_back(static_cast<uint8_t>(num.val));
-                ++pc_;
-            }
-            else if (osize == opsize::w) {
-                result_.push_back(static_cast<uint8_t>(num.val >> 8));
-                result_.push_back(static_cast<uint8_t>(num.val));
-                pc_ += 2;
+            if (token_type_ == token_type::quote) {
+                if (osize != opsize::b)
+                    ASSEMBLER_ERROR("Strings only supported for DC.B");
+                while (*input_ != '\'' ) {
+                    if (!*input_ || *input_ == '\n')
+                        ASSEMBLER_ERROR("Unexpected end of string");
+                    result_.push_back(*input_++);
+                    ++col_;
+                    ++pc_;
+                }
+                get_token(); // quote char
+                get_token();
             } else {
-                result_.push_back(static_cast<uint8_t>(num.val >> 24));
-                result_.push_back(static_cast<uint8_t>(num.val >> 16));
-                result_.push_back(static_cast<uint8_t>(num.val >> 8));
-                result_.push_back(static_cast<uint8_t>(num.val));
-                pc_ += 4;
+                auto num = process_number();
+                if (num.fixup)
+                    num.fixup->fixups.push_back(fixup_type { osize, static_cast<uint32_t>(result_.size()) });
+
+                // Only support for lab1-lab2 for now
+                if (token_type_ == token_type::minus) {
+                    get_token();
+                    auto num2 = process_number();
+                    if (num2.fixup)
+                        ASSEMBLER_ERROR("Not supported: minus with fixup (num2)");
+                    num.val -= num2.val;
+                }
+
+                if (osize == opsize::b) {
+                    result_.push_back(static_cast<uint8_t>(num.val));
+                    ++pc_;
+                } else if (osize == opsize::w) {
+                    result_.push_back(static_cast<uint8_t>(num.val >> 8));
+                    result_.push_back(static_cast<uint8_t>(num.val));
+                    pc_ += 2;
+                } else {
+                    result_.push_back(static_cast<uint8_t>(num.val >> 24));
+                    result_.push_back(static_cast<uint8_t>(num.val >> 16));
+                    result_.push_back(static_cast<uint8_t>(num.val >> 8));
+                    result_.push_back(static_cast<uint8_t>(num.val));
+                    pc_ += 4;
+                }
             }
 
             skip_whitespace();
