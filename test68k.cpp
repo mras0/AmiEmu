@@ -4,6 +4,7 @@
 #include "cpu.h"
 #include "memory.h"
 #include "disasm.h"
+#include "asm.h"
 
 namespace fs = std::filesystem;
 
@@ -1140,10 +1141,95 @@ bool run_simple_tests()
     return true;
 }
 
+bool run_timing_tests()
+{
+    const struct {
+        const char* test_inst;
+        uint8_t clock_cycles, memory_accesses;
+    } test_cases[] = {
+        { "MOVE.B D0, D1"         ,  4, 1 },
+        { "MOVE.B (A0), D1"       ,  8, 2 },
+        { "MOVE.B (A0)+, D0"      ,  8, 2 },
+        { "MOVE.B -(A0), D0"      , 10, 2 },
+        { "MOVE.B 10(A0), D0"     , 12, 3 },
+        { "MOVE.B 2(A0,D0.L), D0" , 14, 3 },
+        { "MOVE.B 0.W, D0"        , 12, 3 },
+        { "MOVE.B 0.L, D0"        , 16, 4 },
+        { "MOVE.B 0(pc), D0"      , 12, 3 },
+        { "MOVE.B 0(pc,D0.L), D0" , 14, 3 },
+        { "MOVE.B #$12, D0"       ,  8, 2 },
+
+        { "MOVE.W D0, D1"         ,  4, 1 },
+        { "MOVE.W A0, D1"         ,  4, 1 },
+        { "MOVE.W (A0), D1"       ,  8, 2 },
+        { "MOVE.W (A0)+, D0"      ,  8, 2 },
+        { "MOVE.W -(A0), D0"      , 10, 2 },
+        { "MOVE.W 10(A0), D0"     , 12, 3 },
+        { "MOVE.W 2(A0,D0.L), D0" , 14, 3 },
+        { "MOVE.W 0.W, D0"        , 12, 3 },
+        { "MOVE.W 0.L, D0"        , 16, 4 },
+        { "MOVE.W 0(pc), D0"      , 12, 3 },
+        { "MOVE.W 0(pc,D0.L), D0" , 14, 3 },
+        { "MOVE.W #$12, D0"       ,  8, 2 },
+
+        { "MOVE.L D0, D1"         ,  4, 1 },
+        { "MOVE.L A0, D1"         ,  4, 1 },
+        { "MOVE.L (A0), D1"       , 12, 3 },
+        { "MOVE.L (A0)+, D0"      , 12, 3 },
+        { "MOVE.L -(A0), D0"      , 14, 3 },
+        { "MOVE.L 10(A0), D0"     , 16, 4 },
+        { "MOVE.L 2(A0,D0.L), D0" , 18, 4 },
+        { "MOVE.L 0.W, D0"        , 16, 4 },
+        { "MOVE.L 0.L, D0"        , 20, 5 },
+        { "MOVE.L 0(pc), D0"      , 16, 4 },
+        { "MOVE.L 0(pc,D0.L), D0" , 18, 4 },
+        { "MOVE.L #$12, D0"       , 12, 3 },
+    };
+
+    const uint32_t code_pos = 0x1000;
+    const uint32_t code_size = 0x2000;
+    memory_handler mem { code_pos + code_size };
+    auto& ram = mem.ram();
+    std::vector<uint16_t> insts;
+    
+    for (const auto& tc : test_cases) {
+        try {
+            insts = assemble(code_pos, tc.test_inst);
+        } catch (const std::exception& e) {
+            std::cerr << e.what() << " while assembling:\n" << tc.test_inst << "\n";
+            return false;
+        }
+
+        memset(&ram[0], 0, ram.size());
+        for (size_t i = 0; i < std::size(insts); ++i)
+            put_u16(&ram[code_pos + i * 2], insts[i]);
+
+        cpu_state input_state {};
+        input_state.pc = code_pos;
+
+        m68000 cpu { mem, input_state };
+
+        const auto step_res = cpu.step();
+        if (step_res.clock_cycles != tc.clock_cycles || step_res.mem_accesses != tc.memory_accesses) {
+            std::cerr << "Test failed for:\n" << tc.test_inst << "\n";
+            std::cerr << "Expected clock cycles:    " << (int)tc.clock_cycles << "\tActual: " << (int)step_res.clock_cycles << "\n";
+            std::cerr << "Expected memory accesses: " << (int)tc.memory_accesses << "\tActual: " << (int)step_res.mem_accesses << "\n";
+            return false;
+        }
+    }
+
+    throw std::runtime_error("PASS");
+
+    return true;
+}
+
 int main()
 {
     try {
         if (!run_simple_tests())
+            return 1;
+
+        if (!run_timing_tests())
             return 1;
 
         if (!run_winuae_tests())

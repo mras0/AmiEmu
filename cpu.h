@@ -164,11 +164,16 @@ public:
     explicit m68000(memory_handler& mem);
     ~m68000();
 
+    struct step_result {
+        uint8_t clock_cycles;
+        uint8_t mem_accesses;
+    };
+
     const cpu_state& state() const;
     void trace(std::ostream* os);
     void show_state(std::ostream& os);
 
-    void step(uint8_t current_ipl = 0);
+    step_result step(uint8_t current_ipl = 0);
 
 private:
     class impl;

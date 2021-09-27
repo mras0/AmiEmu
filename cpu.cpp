@@ -92,10 +92,11 @@ public:
         os << '\n';
     }
 
-    void step(uint8_t current_ipl)
+    step_result step(uint8_t current_ipl)
     {
         assert(current_ipl < 8);
 
+        step_res_ = { 0, 0 };
         ++state_.instruction_count;
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
@@ -107,16 +108,20 @@ public:
             print_cpu_state(*trace_, state_);
 
         if (state_.stopped) {
-            return;
+            return { 0, 0 };
         }
 
         start_pc_ = state_.pc;
         iwords_[0] = mem_.read_u16(state_.pc);
         state_.pc += 2;
+        step_res_.clock_cycles += 4;
+        ++step_res_.mem_accesses;
         inst_ = &instructions[iwords_[0]];
         for (unsigned i = 1; i < inst_->ilen; ++i) {
             iwords_[i] = mem_.read_u16(state_.pc);
             state_.pc += 2;
+            step_res_.clock_cycles += 4;
+            ++step_res_.mem_accesses;
         }
 
         if (trace_) {
@@ -249,6 +254,8 @@ public:
     out:
         if (trace_)
             *trace_ << "\n";
+
+        return step_res_;
     }
 
 private:
@@ -262,6 +269,7 @@ private:
     const instruction* inst_ = &instructions[illegal_instruction_num];
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     std::ostream* trace_ = nullptr;
+    step_result step_res_ { 0, 0 };
 
     uint32_t read_reg(uint32_t val)
     {
@@ -278,12 +286,17 @@ private:
 
     uint32_t read_mem(uint32_t addr)
     {
+        step_res_.clock_cycles += 4;
+        ++step_res_.mem_accesses;
+
         switch (inst_->size) {
         case opsize::b:
             return mem_.read_u8(addr);
         case opsize::w:
             return mem_.read_u16(addr);
         case opsize::l:
+            step_res_.clock_cycles += 4;
+            ++step_res_.mem_accesses;
             return mem_.read_u32(addr);
         }
         throw std::runtime_error { "Invalid opsize" };
@@ -301,9 +314,11 @@ private:
         case ea_m_An:
             res = read_reg(state_.A(ea & ea_xn_mask));
             return;
+        case ea_m_A_ind_pre:
+            step_res_.clock_cycles += 2;
+            [[fallthrough]];
         case ea_m_A_ind:
         case ea_m_A_ind_post:
-        case ea_m_A_ind_pre:
             res = state_.A(ea & ea_xn_mask);
             return;
         case ea_m_A_ind_disp16:
@@ -312,6 +327,7 @@ private:
             return;
         case ea_m_A_ind_index: {
             assert(iword_idx_ < inst_->ilen);
+            step_res_.clock_cycles += 2;
             const auto extw = iwords_[iword_idx_++];
             // Scale in bits 9/10 and full extension word format (bit 8) is ignored on 68000
             res = state_.A(ea & ea_xn_mask) + sext(extw, opsize::b);
@@ -344,6 +360,7 @@ private:
                 return;
             case ea_other_pc_index: {
                 assert(iword_idx_ < inst_->ilen);
+                step_res_.clock_cycles += 2;
                 res = start_pc_ + 2 * iword_idx_; // the PC used is the address of the extension word
                 const auto extw = iwords_[iword_idx_++];
                 // Scale in bits 9/10 and full extension word format (bit 8) is ignored on 68000
@@ -450,6 +467,9 @@ private:
 
     void write_mem(uint32_t addr, uint32_t val)
     {
+        step_res_.clock_cycles += 4;
+        ++step_res_.mem_accesses;
+
         switch (inst_->size) {
         case opsize::b:
             mem_.write_u8(addr, static_cast<uint8_t>(val));
@@ -458,6 +478,8 @@ private:
             mem_.write_u16(addr, static_cast<uint16_t>(val));
             return;
         case opsize::l:
+            step_res_.clock_cycles += 4;
+            ++step_res_.mem_accesses;
             mem_.write_u32(addr, val);
             return;
         }
@@ -1487,7 +1509,7 @@ void m68000::show_state(std::ostream& os)
     impl_->show_state(os);
 }
 
-void m68000::step(uint8_t current_ipl)
+m68000::step_result m68000::step(uint8_t current_ipl)
 {
-    impl_->step(current_ipl);
+    return impl_->step(current_ipl);
 }
