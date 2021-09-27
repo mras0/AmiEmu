@@ -520,13 +520,13 @@ struct custom_state {
     uint16_t sprite_vpos_start(uint8_t spr)
     {
         assert(spr < 8);
-        return (sprpos[spr] >> 8) | (sprctl[spr] & 4) << 7;
+        return (sprpos[spr] >> 8) | (sprctl[spr] & 4) << 6;
     }
 
     uint16_t sprite_vpos_end(uint8_t spr)
     {
         assert(spr < 8);
-        return (sprctl[spr] >> 8) | (sprctl[spr] & 2) << 8;
+        return (sprctl[spr] >> 8) | (sprctl[spr] & 2) << 7;
     }
 
     uint16_t sprite_hpos_start(uint8_t spr)
@@ -1146,6 +1146,7 @@ public:
 #endif
             s_.ham_color = rgb4_to_8(s_.color[0]);
             s_.ddfst = ddfstate::before_ddfstrt;
+            memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
 
             cia_.increment_tod_counter(1);
             if ((s_.dmacon & (DMAF_MASTER|DMAF_RASTER)) == (DMAF_MASTER|DMAF_RASTER) && vert_disp) {

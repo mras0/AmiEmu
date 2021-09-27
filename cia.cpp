@@ -281,10 +281,8 @@ public:
         assert(cia < 2);
         auto& s = s_[cia];
         ++s.counter;
-        if (/*(s.icrmask & CIAICRF_ALRM) && */ (s.counter & 0xffffff) == s.alarm) {
-            std::cerr << "[CIA] Todo: trigger alarm intterupt? for alarm=$" << hexfmt(s.alarm) << "\n";
-            //s.trigger_int(CIAICRB_ALRM);
-            assert(0);
+        if ((s.counter & 0xffffff) == s.alarm) {
+            s.trigger_int(CIAICRB_ALRM);
         }
     }
 
