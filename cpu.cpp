@@ -485,7 +485,6 @@ private:
             throw address_error_exception {};
         }
         mem_read16(state_.pc);
-        state_.prefetch_address = invalid_prefetch_address;
     }
 
     uint32_t read_reg(uint32_t val)
@@ -1374,7 +1373,7 @@ private:
     void handle_DIVU()
     {
         assert(inst_->nea == 2 && inst_->size == opsize::w && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
-        const auto d = read_ea(0);
+        const auto d = static_cast<uint16_t>(read_ea(0));
         auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
         (void)calc_ea(1);
         if (!d) {
@@ -1389,20 +1388,48 @@ private:
             return;
         }
              
-        add_cycles(72); // Best case: 76/ Worst case 136/140
-        const auto q = reg / d;
-        const auto r = reg % d;
         uint16_t ccr = 0;
-        if (q > 0xffff) {
-            add_cycles(10); // Overflow costs 10 cycles
+        uint8_t cycles = 6; // Overflow check/fixed cost
+        if (reg >> 16 >= d) {
             ccr = srm_v | srm_n;
         } else {
-            if (q & 0x8000)
+            // Best case: 76/ Worst case 136/140
+            // 
+            // From YACHT
+            // .for each iteration of the loop : shift dividend to the left by 1 bit then
+            //  substract divisor to the MSW of new dividend, discard after test if result
+            //  is negative keep it if positive.
+            // .MSB = most significant bit : bit at the far left of the dividend
+            // .pMSB = previous MSB : MSB used in the previous iteration of the loop
+            //
+
+            constexpr uint32_t msb = 0x8000'0000;
+            for (int i = 0; i < 16; ++i) {
+                uint8_t cost = 4;
+                const bool prevmsb = reg & msb;
+                reg <<= 1;
+                const unsigned saved = reg;
+                reg -= d << 16;
+                if (prevmsb) {
+                    reg |= 1;
+                } else {
+                    cost += 2;
+                    if (reg >= saved) {
+                        reg = saved;
+                        cost += 2;
+                    } else {
+                        reg |= 1;
+                    }
+                }
+                cycles += i == 15 ? 6 : cost; // Final iteration has fixed cost
+            }
+
+            if (reg & 0x8000)
                 ccr |= srm_n;
-            if (!q)
+            if (!(reg & 0xffff))
                 ccr |= srm_z;
-            reg = (q & 0xffff) | (r & 0xffff) << 16;
         }
+        add_cycles(cycles);
         state_.update_sr(srm_ccr_no_x, ccr);
     }
 

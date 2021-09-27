@@ -1457,12 +1457,12 @@ bool run_timing_tests()
         { "MOVEM.L D0-D7, $12.W"            , 76, 19 },
         { "MOVEM.L D0-D7, $12.L"            , 80, 20 },
 
-        // The following is not 100% correct (also need division by zero)
         // TODO: Check overflow
-        { "DIVU D3, D0"                     , 76, 1 },
-        { "DIVU #123, D0"                   , 80, 2 },
+        { "DIVU D3, D0"                     , 136, 1 },
+        { "DIVU #123, D0"                   , 140, 2 },
         { "DIVU D5, D0"                     , 38, 7 }, // Division by zero
-        { "DIVS D3, D0"                     , 120, 1 },
+        // The following is not 100% correct (also need division by zero)
+        { "DIVS D3, D0", 120, 1 },
         { "DIVS #123, D0"                   , 124, 2 },
         { "DIVS D5, D0"                     , 38, 7 }, // Division by zero
 
