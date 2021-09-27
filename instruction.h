@@ -10,6 +10,11 @@ enum class opsize {
     l,
 };
 
+constexpr uint8_t opsize_bytes(opsize size)
+{
+    return size == opsize::l ? 4 : size == opsize::b ? 1 : 2;
+}
+
 enum class inst_type {
     ILLEGAL,
     ABCD,
@@ -120,6 +125,9 @@ enum ea_other {
 
 constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
+
+constexpr uint8_t ea_m_shift = 3;
+constexpr uint8_t ea_xn_mask = 7;
 
 constexpr uint8_t ea_disp    = 0b01'000'011;
 constexpr uint8_t ea_sr      = 0b01'000'100;

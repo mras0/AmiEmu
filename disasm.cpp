@@ -7,6 +7,55 @@
 #include "instruction.h"
 #include "ioutil.h"
 
+std::string ea_string(uint8_t ea)
+{
+    switch (ea >> ea_m_shift) {
+    case ea_m_Dn:
+        return "D" + std::to_string(ea & ea_xn_mask);
+    case ea_m_An:
+        return "A" + std::to_string(ea & ea_xn_mask);
+    case ea_m_A_ind:
+        return "(A" + std::to_string(ea & ea_xn_mask) + ")";
+    case ea_m_A_ind_post:
+        return "(A" + std::to_string(ea & ea_xn_mask) + ")+";
+    case ea_m_A_ind_pre:
+        return "-(A" + std::to_string(ea & ea_xn_mask) + ")";
+    case ea_m_A_ind_disp16:
+        return "(d16, A" + std::to_string(ea & ea_xn_mask) + ")";
+    case ea_m_A_ind_index:
+        return "(d8, A" + std::to_string(ea & ea_xn_mask) + ", Xn)";
+    case ea_m_Other:
+        switch (ea & ea_xn_mask) {
+        case ea_other_abs_w:
+            return "(ABS.W)";
+        case ea_other_abs_l:
+            return "(ABS.L)";
+        case ea_other_pc_disp16:
+            return "(d16, PC)";
+        case ea_other_pc_index:
+            return "(d8, PC, Xn)";
+        case ea_other_imm:
+            return "#IMM";
+        }
+        break;
+    case ea_m_inst_data:
+        switch (ea) {
+        case ea_sr:
+            return "SR";
+        case ea_ccr:
+            return "CCR";
+        case ea_reglist:
+            return "REGLIST";
+        }
+
+        if (ea <= ea_disp) {
+            return "<EA (emebdded) $" + hexstring(ea) + ">";
+        }
+    }
+    assert(!"Not handled");
+    return "<EA $" + hexstring(ea) + ">";
+}
+
 std::string reg_list_string(uint16_t list, bool reverse)
 {
     // postincrement a7..d0 (bit 15..0) reversed for predecrement mode
@@ -48,7 +97,7 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
 {
     assert(iwords && num_iwords);
     const auto& inst = instructions[iwords[0]];
-    assert(inst.ilen <= num_iwords);
+    assert(inst.ilen > 0 && inst.ilen <= num_iwords);
 
     os << hexfmt(pc) << ' ';
     for (unsigned i = 0; i < max_instruction_words; ++i) {
@@ -69,7 +118,7 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
     for (unsigned i = 0; i < inst.nea; ++i) {
         os << (i == 0 ? "\t" : ", ");
         const auto ea = inst.ea[i];
-        switch (ea >> 3) {
+        switch (ea >> ea_m_shift) {
         case ea_m_Dn:
             os << "D" << (ea & 7);
             break;
@@ -103,6 +152,7 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
             if (extw & (7 << 8)) {
                 os << "Full extension word/scale not supported\n";
                 assert(0);
+                break;
             } else {
                 auto disp = static_cast<int8_t>(extw & 255);
                 os << "$";
@@ -117,7 +167,7 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
             }
         }
         case ea_m_Other:
-            switch (ea & 7) {
+            switch (ea & ea_xn_mask) {
             case ea_other_abs_w:
                 assert(eaw < inst.ilen);
                 os << "$";

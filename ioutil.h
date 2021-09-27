@@ -3,6 +3,7 @@
 
 #include <iosfwd>
 #include <stdint.h>
+#include <string>
 
 class num_formatter {
 public:
@@ -25,6 +26,22 @@ template <typename T>
 num_formatter binfmt(T n, int w = static_cast<int>(sizeof(T) * 8))
 {
     return num_formatter { static_cast<uint64_t>(n), 2, w };
+}
+
+namespace detail {
+std::string do_format(const num_formatter& nf);
+}
+
+template <typename T>
+std::string hexstring(T n, int w = static_cast<int>(sizeof(T) * 2))
+{
+    return detail::do_format(hexfmt(n, w));
+}
+
+template <typename T>
+std::string binstring(T n, int w = static_cast<int>(sizeof(T) * 8))
+{
+    return detail::do_format(binfmt(n, w));
 }
 
 #endif

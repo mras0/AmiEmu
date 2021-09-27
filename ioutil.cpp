@@ -1,6 +1,7 @@
 #include "ioutil.h"
 #include <ostream>
 #include <cassert>
+#include <sstream>
 
 std::ostream& operator<<(std::ostream& os, const num_formatter& nf)
 {
@@ -14,4 +15,11 @@ std::ostream& operator<<(std::ostream& os, const num_formatter& nf)
         os << ("0123456789abcdef"[(nf.num_ >> (w*shift)) & mask]);
     }
     return os;
+}
+
+std::string detail::do_format(const num_formatter& nf)
+{
+    std::ostringstream os;
+    os << nf;
+    return os.str();
 }
