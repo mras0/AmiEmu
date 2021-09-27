@@ -215,8 +215,8 @@ constexpr const inst_desc insts[] = {
     { inst_type::BSR     , "BW " , "0 1 1 0 0 0 0 1 Displacement   " , "W d" , cycle_none , },
     { inst_type::Bcc     , "BW " , "0 1 1 0 Cond    Displacement   " , "W d" , cycle_none , },
     { inst_type::MOVEQ   , "  L" , "0 1 1 1 Dn    0 Data8          " , "   " , cycle_none , },
-    { inst_type::DIVU    , " W " , "1 0 0 0 Dn    0 1 1 M     Xn   " , "   " , cycle_none , },
-    { inst_type::DIVS    , " W " , "1 0 0 0 Dn    1 1 1 M     Xn   " , "   " , cycle_none , },
+    { inst_type::DIVU    , " W " , "1 0 0 0 Dn    0 1 1 M     Xn   " , "   " , cycle_norm , },
+    { inst_type::DIVS    , " W " , "1 0 0 0 Dn    1 1 1 M     Xn   " , "   " , cycle_norm , },
     { inst_type::SBCD    , "B  " , "1 0 0 0 Xn    1 0 0 0 0 m Xn   " , "   " , cycle_rmw  , },
     { inst_type::OR      , "BWL" , "1 0 0 0 Dn    DzSx  M     Xn   " , "   " , cycle_rmw  , },
     { inst_type::SUB     , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   " , cycle_rmw  , 0 },
@@ -226,8 +226,8 @@ constexpr const inst_desc insts[] = {
     { inst_type::CMPM    , "BWL" , "1 0 1 1 An    1 Sx  0 0 1 An   " , "   " , cycle_norm , },
     { inst_type::CMP     , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " , cycle_norm , 0 },
     { inst_type::CMPA    , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   " , cycle_norm , 0 },
-    { inst_type::MULU    , " W " , "1 1 0 0 Dn    0 1 1 M     Xn   " , "   " , cycle_none , },
-    { inst_type::MULS    , " W " , "1 1 0 0 Dn    1 1 1 M     Xn   " , "   " , cycle_none , },
+    { inst_type::MULU    , " W " , "1 1 0 0 Dn    0 1 1 M     Xn   " , "   " , cycle_norm , },
+    { inst_type::MULS    , " W " , "1 1 0 0 Dn    1 1 1 M     Xn   " , "   " , cycle_norm , },
     { inst_type::ABCD    , "B  " , "1 1 0 0 Xn    1 0 0 0 0 m Xn   " , "   " , cycle_rmw  , },
     { inst_type::EXG     , "  L" , "1 1 0 0 Xn    1 ME  0 0 MeXn   " , "   " , cycle_none , 0 },
     { inst_type::AND     , "BWL" , "1 1 0 0 Dn    DzSx  M     Xn   " , "   " , cycle_rmw  , },
@@ -651,7 +651,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             case 0b011: // (An)+
                 break;
             case 0b100: // -(An)
-                if (i != 1 || (desc.type != inst_type::MOVE && desc.type != inst_type::MOVEA && desc.type != inst_type::ADDX && desc.type != inst_type::SUBX && desc.type != inst_type::ABCD && desc.type != inst_type::SBCD))
+                if (i != 1 || (desc.type != inst_type::MOVE && desc.type != inst_type::MOVEA && desc.type != inst_type::MOVEM && desc.type != inst_type::ADDX && desc.type != inst_type::SUBX && desc.type != inst_type::ABCD && desc.type != inst_type::SBCD))
                     ai.base_cycles += 2;
                 if (i == 1 && desc.type == inst_type::MOVE && ai.ea[0] == ea_sr)
                     ai.base_cycles += 2; // MOVE SR, -(An) is not optimized?
@@ -785,7 +785,12 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                 ai.base_cycles = ai.osize == opsize::l ? 4 : 2;
             else
                 ai.base_cycles += 2;
-        }
+        } else if (desc.type == inst_type::MULU || desc.type == inst_type::MULS)
+            ai.base_cycles += 34;
+        else if (desc.type == inst_type::DIVU)
+            ai.base_cycles += 72;
+        else if (desc.type == inst_type::DIVS)
+            ai.base_cycles += 116;
         
         ai.memory_accesses += 1 + ai.ea_words;
 

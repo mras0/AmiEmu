@@ -1386,6 +1386,68 @@ bool run_timing_tests()
         { "ROXR.L #7, D0"                   , 22, 1 },
         { "ROXR.B #8, D0"                   , 22, 1 },
         { "ROXR.L #8, D0"                   , 24, 1 },
+
+        // M->R
+        { "MOVEM.W (A0), D0"                , 16, 4 },
+        { "MOVEM.W (A0)+, D0"               , 16, 4 },
+        { "MOVEM.W $12(A0), D0"             , 20, 5 },
+        { "MOVEM.W $12(A0,D1), D0"          , 22, 5 },
+        { "MOVEM.W $12.W, D0"               , 20, 5 },
+        { "MOVEM.W $12.L, D0"               , 24, 6 },
+        { "MOVEM.L (A0), D0"                , 20, 5 },
+        { "MOVEM.L (A0)+, D0"               , 20, 5 },
+        { "MOVEM.L $12(A0), D0"             , 24, 6 },
+        { "MOVEM.L $12(A0,D1), D0"          , 26, 6 },
+        { "MOVEM.L $12.W, D0"               , 24, 6 },
+        { "MOVEM.L $12.L, D0"               , 28, 7 },
+        { "MOVEM.W (A0), D0-D7"             , 44, 11 },
+        { "MOVEM.W (A0)+, D0-D7"            , 44, 11 },
+        { "MOVEM.W $12(A0), D0-D7"          , 48, 12 },
+        { "MOVEM.W $12(A0,D1), D0-D7"       , 50, 12 },
+        { "MOVEM.W $12.W, D0-D7"            , 48, 12 },
+        { "MOVEM.W $12.L, D0-D7"            , 52, 13 },
+        { "MOVEM.L (A0), D0-D7"             , 76, 19 },
+        { "MOVEM.L (A0)+, D0-D7"            , 76, 19 },
+        { "MOVEM.L $12(A0), D0-D7"          , 80, 20 },
+        { "MOVEM.L $12(A0,D1), D0-D7"       , 82, 20 },
+        { "MOVEM.L $12.W, D0-D7"            , 80, 20 },
+        { "MOVEM.L $12.L, D0-D7"            , 84, 21 },
+
+        // R->M
+        { "MOVEM.W D0, (A0)"                , 12, 3 },
+        { "MOVEM.W D0, -(A2)"               , 12, 3 },
+        { "MOVEM.W D0, $12(A0)"             , 16, 4 },
+        { "MOVEM.W D0, $12(A0,D1)"          , 18, 4 },
+        { "MOVEM.W D0, $12.W"               , 16, 4 },
+        { "MOVEM.W D0, $12.L"               , 20, 5 },
+        { "MOVEM.L D0, (A0)"                , 16, 4 },
+        { "MOVEM.L D0, -(A2)"               , 16, 4 },
+        { "MOVEM.L D0, $12(A0)"             , 20, 5 },
+        { "MOVEM.L D0, $12(A0,D1)"          , 22, 5 },
+        { "MOVEM.L D0, $12.W"               , 20, 5 },
+        { "MOVEM.L D0, $12.L"               , 24, 6 },
+        { "MOVEM.W D0-D7, (A0)"             , 40, 10 },
+        { "MOVEM.W D0-D7, -(A2)"            , 40, 10 },
+        { "MOVEM.W D0-D7, $12(A0)"          , 44, 11 },
+        { "MOVEM.W D0-D7, $12(A0,D1)"       , 46, 11 },
+        { "MOVEM.W D0-D7, $12.W"            , 44, 11 },
+        { "MOVEM.W D0-D7, $12.L"            , 48, 12 },
+        { "MOVEM.L D0-D7, (A0)"             , 72, 18 },
+        { "MOVEM.L D0-D7, -(A2)"            , 72, 18 },
+        { "MOVEM.L D0-D7, $12(A0)"          , 76, 19 },
+        { "MOVEM.L D0-D7, $12(A0,D1)"       , 78, 19 },
+        { "MOVEM.L D0-D7, $12.W"            , 76, 19 },
+        { "MOVEM.L D0-D7, $12.L"            , 80, 20 },
+
+        // The following is not correct, but should ensure we're not vastly undercounting
+        { "DIVU D5, D0"                     , 76, 1 },
+        { "DIVU #123, D0"                   , 80, 2 },
+        { "DIVS D5, D0"                     , 120, 1 },
+        { "DIVS #123, D0"                   , 124, 2 },
+        { "MULU D5, D0"                     , 38, 1 },
+        { "MULU #123, D0"                   , 42, 2 },
+        { "MULS D5, D0"                     , 38, 1 },
+        { "MULS #123, D0"                   , 42, 2 },
     };
 
     const uint32_t code_pos = 0x1000;
@@ -1410,7 +1472,7 @@ bool run_timing_tests()
         cpu_state input_state {};
         input_state.sr = 0x2000 | srm_z;
         input_state.pc = code_pos;
-        input_state.a[2] = 32;
+        input_state.a[2] = 100;
         input_state.d[2] = 0x100;
         input_state.d[3] = 5;
         input_state.d[4] = 17;
@@ -1435,7 +1497,6 @@ bool run_timing_tests()
 
 
 // TODO:
-// MOVEM
 // CHK
 // RESET
 // STOP
@@ -1446,6 +1507,7 @@ bool run_timing_tests()
 // DIVS
 // MULU
 // MULS
+// Exceptions/interrupts
 
 bool test_timing()
 {

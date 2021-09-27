@@ -1188,6 +1188,8 @@ private:
                 const auto regnum = 15 - bit;
                 addr -= nb;
                 write_mem(addr, regnum < 8 ? state_.d[regnum] : state_.A(regnum & 7));
+                step_res_.clock_cycles += nb * 2;
+                step_res_.mem_accesses += nb / 2;
             }
             // Update address register
             state_.A(inst_->ea[1] & ea_xn_mask) = addr;
@@ -1201,12 +1203,24 @@ private:
                 } else
                     write_mem(addr, reg);
                 addr += nb;
+                step_res_.clock_cycles += nb * 2;
+                step_res_.mem_accesses += nb / 2;
             }
 
             // Update address register if post-increment mode
             if (inst_->ea[0] >> ea_m_shift == ea_m_A_ind_post) {
                 state_.A(inst_->ea[0] & ea_xn_mask) = addr;
             }
+        }
+
+        if (mem_to_reg) {
+            // Mem to reg mode apparently does an extra read access
+            (void)mem_.read_u16(addr);
+#ifndef NDEBUG
+            ++mem_accesses_;
+#endif
+            step_res_.clock_cycles += 4;
+            step_res_.mem_accesses += 1;
         }
     }
 
