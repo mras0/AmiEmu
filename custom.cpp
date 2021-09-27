@@ -362,9 +362,8 @@ struct custom_state {
     uint16_t vpos;
     uint16_t bpldat_shift[6];
     uint16_t bpldat_temp[6];
-    uint16_t bpldat_temp2[6];
-    bool bpldat_reload;
-    bool bpldat_reload2;
+    bool bpl1dat_written;
+    uint8_t bpldata_avail;
 
     uint32_t copper_pt;
     uint16_t copper_inst[2];
@@ -627,6 +626,7 @@ public:
         const unsigned disp_pixel = virt_pixel - hires_min_pixel;
         const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < (0x100 | s_.diwstop >> 8);
         const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
+        const uint16_t colclock = s_.hpos >> 1;
 
         if (s_.copper_inst_ofs == 2) {
             if (s_.copper_inst[0] & 1) {
@@ -640,7 +640,7 @@ public:
                     // Blitter wait
                 } else if ((s_.vpos & ve) >= (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he)) {
 #ifdef COPPER_DEBUG
-                    std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
+                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
 #endif
                     s_.copper_inst_ofs = 0; // Fetch next instruction
                     if (s_.copper_inst[1] & 1) {
@@ -662,14 +662,28 @@ public:
                 if (reg != 0 || s_.copper_inst[1] != 0) // Seems to be used as a kind of NOP in the kickstart copper list?
                     write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
 #ifdef COPPER_DEBUG
-                std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
 #endif
                 s_.copper_inst_ofs = 0; // Fetch next instruction
             }
         }
 #ifdef BPL_DMA_DEBUG
-        static int rem_pixels = 0;
+        static int rem_pixelsO = 0, rem_pixelsE = 0;
 #endif
+        if (!(s_.hpos & 1) && s_.bpl1dat_written) {
+#ifdef BPL_DMA_DEBUG
+            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Making BPL data available";
+            if (s_.bpldata_avail) {
+                std::cout << " Warning: data not used flags=" << hexfmt(s_.bpldata_avail);
+            }
+            std::cout << "\n";
+#endif
+            static_assert(sizeof(s_.bpldat_temp) == sizeof(s_.bpldat));
+            memcpy(s_.bpldat_temp, s_.bpldat, sizeof(s_.bpldat_temp));
+
+            s_.bpldata_avail = 3;
+            s_.bpl1dat_written = false;
+        }
 
         if (s_.vpos >= vblank_end_vpos && disp_pixel < graphics_width) {
             uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel];
@@ -680,8 +694,7 @@ public:
 
 #ifdef BPL_DMA_DEBUG
                 if ((s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
-                    std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ")"
-                              << " Display starting (nbpls=" << hexfmt(nbpls) << ") virt_pixel=" << hexfmt(virt_pixel) << "\n";
+                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
 #endif
 
                 auto one_pixel = [&]() {
@@ -693,11 +706,11 @@ public:
                     }
 
 #ifdef BPL_DMA_DEBUG
-                    rem_pixels--;
-                    if (rem_pixels < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                        std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ")"
-                                  << " Out of pixels! virt_pixel=" << hexfmt(virt_pixel) << "\n";
-                        rem_pixels = 0;
+                    rem_pixelsO--;
+                    rem_pixelsE--;
+                    if ((rem_pixelsO|rem_pixelsE) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixelsO << " E=" << rem_pixelsE << "\n";
+                        rem_pixelsO = rem_pixelsE = 0;
                     }
 #endif
                     return rgb4_to_8(s_.color[index]);
@@ -719,47 +732,36 @@ public:
             }
         }
 
-        if (s_.bpldat_reload2) {
-            // Two stages seems to be needed?
+        if (s_.bpldata_avail) {
+            const uint8_t mask = s_.bplcon0 & BPLCON0F_HIRES ? 7 : 15;
+
+            if ((s_.bpldata_avail & 1) && (s_.bplcon1 & mask) == (s_.hpos & mask)) {
+                for (int i = 0; i < 6; i += 2)
+                    s_.bpldat_shift[i] = s_.bpldat_temp[i];
+                s_.bpldata_avail &= ~1;
 #ifdef BPL_DMA_DEBUG
-            if ((s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ")"
-                          << " Reloading virt_pixel=" << hexfmt(virt_pixel);
-                if (rem_pixels)
-                    std::cout << " Warning: discarding " << rem_pixels << " pixels!";
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (shift=$" << hexfmt(s_.bplcon1 & mask, 1) << ")";
+                if (rem_pixelsO)
+                    std::cout << " Warning discarded " << rem_pixelsO;
                 std::cout << "\n";
+                rem_pixelsO = 16;
+#endif
             }
-
-            rem_pixels = 16;
-#endif
-            static_assert(sizeof(s_.bpldat_shift) == sizeof(s_.bpldat_temp2));
-            memcpy(s_.bpldat_shift, s_.bpldat_temp2, sizeof(s_.bpldat_shift));
-            s_.bpldat_reload2 = false;
-        }
-
-        if (s_.bpldat_reload) {
-            // TODO: playfield2
-            uint8_t mask = !!(s_.bplcon0 & BPLCON0F_HIRES) ? 0x7 : 0xf;
-            uint8_t delay = s_.bplcon1 & mask;
-            if ((s_.hpos & mask) == delay) {
-                static_assert(sizeof(s_.bpldat_temp2) == sizeof(s_.bpldat_temp));
-                memcpy(s_.bpldat_temp2, s_.bpldat_temp, sizeof(s_.bpldat_temp));
+            if ((s_.bpldata_avail & 2) && ((s_.bplcon1 >> 4) & mask) == (s_.hpos & mask)) {
+                for (int i = 1; i < 6; i += 2)
+                    s_.bpldat_shift[i] = s_.bpldat_temp[i];
+                s_.bpldata_avail &= ~2;
 #ifdef BPL_DMA_DEBUG
-                if ((s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                    std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ")"
-                              << " Moving to temp2 virt_pixel=" << hexfmt(virt_pixel) << " delay=" << hexfmt(delay) << " mask=" << hexfmt(mask) << "\n";
-                }
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (shift=$" << hexfmt((s_.bplcon1 >> 4) & mask, 1) << ")";
+                if (rem_pixelsE)
+                    std::cout << " Warning discarded " << rem_pixelsE;
+                std::cout << "\n";
+                rem_pixelsE = 16;
 #endif
-
-                assert(!s_.bpldat_reload2);
-                s_.bpldat_reload = false;
-                s_.bpldat_reload2 = true;
             }
         }
 
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
-            const uint16_t colclock = s_.hpos >> 1;
-
             auto do_dma = [&mem = this->mem_](uint32_t& pt) {
                 const auto val = mem.read_u16(pt);
                 pt += 2;
@@ -783,20 +785,14 @@ public:
 
                     if (bpl >= 0 && bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0)) {
 #ifdef BPL_DMA_DEBUG
-                        std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ")" << " BPL " << bpl << " DMA virt_pixel=" << hexfmt(virt_pixel) << "\n";
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " BPL " << bpl << " DMA\n";
 #endif
                         s_.bpldat[bpl] = do_dma(s_.bplpt[bpl]);
                         if (bpl == 0) {
-                            static_assert(sizeof(s_.bpldat_temp) == sizeof(s_.bpldat));
-                            memcpy(s_.bpldat_temp, s_.bpldat, sizeof(s_.bpldat));
-#ifdef BPL_DMA_DEBUG
-                            std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ")"
-                                      << " Moving to temp virt_pixel=" << hexfmt(virt_pixel);
-                            if (s_.bpldat_reload)
-                                std::cout << " Warning shift register was not reloaded";
-                            std::cout << "\n";
+#ifdef BPL_DMA_DEBUG                            
+                            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Data available -- bpldat1_written = " << s_.bpl1dat_written << " bpldata_avail = " << hexfmt(s_.bpldata_avail) << (s_.bpl1dat_written ? " Warning!" : "") << "\n";
 #endif
-                            s_.bpldat_reload = true;
+                            s_.bpl1dat_written = true;
                         }
                         break;
                     }
@@ -810,7 +806,7 @@ public:
 
 #ifdef COPPER_DEBUG
                     if (s_.copper_inst_ofs == 2)
-                        std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
 #endif
                     if (s_.copper_inst[0] == 0 && s_.copper_inst[1] == 0) {
 #ifdef COPPER_DEBUG
@@ -841,17 +837,16 @@ public:
             s_.hpos = 0;
             // XXX
             memset(s_.bpldat_shift, 0, sizeof(s_.bpldat_shift));
+            memset(s_.bpldat_temp, 0, sizeof(s_.bpldat_temp));
+            s_.bpl1dat_written = false;
+            s_.bpldata_avail = 0;
 #ifdef BPL_DMA_DEBUG
-            rem_pixels = 0 ;
+            rem_pixelsO = rem_pixelsE = 0;
 #endif
 
             cia_.increment_tod_counter(1);
             if ((s_.dmacon & (DMAF_MASTER|DMAF_RASTER)) == (DMAF_MASTER|DMAF_RASTER) && vert_disp) {
                 for (int bpl = 0; bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0); ++bpl) {
-#ifdef BPL_DMA_DEBUG
-                    std::cout << "vpos=$" << s_.vpos << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(0,4) << ")"
-                              << " Adding mod " << (bpl & 1 ? s_.bplmod2 : s_.bplmod1) << " to BPL " << bpl << " [$" << hexfmt(s_.bplpt[bpl]) << "] -> $" << hexfmt(s_.bplpt[bpl] + (bpl & 1 ? s_.bplmod2 : s_.bplmod1)) <<   "  virt_pixel=" << hexfmt(virt_pixel) << "\n";
-#endif
                     s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;
                 }
             }
