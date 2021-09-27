@@ -131,7 +131,7 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
     if (inst.type == inst_type::ILLEGAL && iwords[0] != illegal_instruction_num)
         os << "DC.W\t$" << hexfmt(iwords[0]);
     else
-        os << std::setw(4) << std::left << inst.name;
+        os << std::setw(inst.nea ? 4 : 0) << std::left << inst.name;
 
     unsigned eaw = 1;
 
