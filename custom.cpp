@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <cassert>
+#include <utility>
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
@@ -105,6 +106,112 @@ enum regnum {
 #undef REG_NUM
 };
 
+constexpr uint16_t DMAB_SETCLR   = 15; // Set/clear control bit. Determines if bits written with a 1 get set or cleared.Bits written with a zero are unchanged.
+constexpr uint16_t DMAB_BLTDONE  = 14; // Blitter busy status bit (read only) 
+constexpr uint16_t DMAB_BLTNZERO = 13; // Blitter logic zero status bit  (read only).
+constexpr uint16_t DMAB_BLITHOG  = 10; // Blitter DMA priority (over CPU micro) 
+constexpr uint16_t DMAB_MASTER   =  9; // Enable all DMA below
+constexpr uint16_t DMAB_RASTER   =  8; // Bitplane DMA enable
+constexpr uint16_t DMAB_COPPER   =  7; // Copper DMA enable
+constexpr uint16_t DMAB_BLITTER  =  6; // Blitter DMA enable
+constexpr uint16_t DMAB_SPRITE   =  5; // Sprite DMA enable
+constexpr uint16_t DMAB_DISK     =  4; // Disk DMA enable
+constexpr uint16_t DMAB_AUD3     =  3; // Audio channel 3 DMA enable
+constexpr uint16_t DMAB_AUD2     =  2; // Audio channel 2 DMA enable
+constexpr uint16_t DMAB_AUD1     =  1; // Audio channel 1 DMA enable
+constexpr uint16_t DMAB_AUD0     =  0; // Audio channel 0 DMA enable
+
+constexpr uint16_t DMAF_SETCLR   = 1 << DMAB_SETCLR;
+constexpr uint16_t DMAF_BLTDONE  = 1 << DMAB_BLTDONE;
+constexpr uint16_t DMAF_BLTNZERO = 1 << DMAB_BLTNZERO;
+constexpr uint16_t DMAF_BLITHOG  = 1 << DMAB_BLITHOG;
+constexpr uint16_t DMAF_MASTER   = 1 << DMAB_MASTER;
+constexpr uint16_t DMAF_RASTER   = 1 << DMAB_RASTER;
+constexpr uint16_t DMAF_COPPER   = 1 << DMAB_COPPER;
+constexpr uint16_t DMAF_BLITTER  = 1 << DMAB_BLITTER;
+constexpr uint16_t DMAF_SPRITE   = 1 << DMAB_SPRITE;
+constexpr uint16_t DMAF_DISK     = 1 << DMAB_DISK;
+constexpr uint16_t DMAF_AUD3     = 1 << DMAB_AUD3;
+constexpr uint16_t DMAF_AUD2     = 1 << DMAB_AUD2;
+constexpr uint16_t DMAF_AUD1     = 1 << DMAB_AUD1;
+constexpr uint16_t DMAF_AUD0     = 1 << DMAB_AUD0;
+
+
+constexpr uint16_t INTB_SETCLR  = 15; // Set/Clear control bit. Determines if bits written with a 1 get set or cleared. Bits written with a zero are allways unchanged
+constexpr uint16_t INTB_INTEN   = 14; // Master interrupt (enable only)
+constexpr uint16_t INTB_EXTER   = 13; // External interrupt
+constexpr uint16_t INTB_DSKSYNC = 12; // Disk re-SYNChronized
+constexpr uint16_t INTB_RBF     = 11; // serial port Receive Buffer Full
+constexpr uint16_t INTB_AUD3    = 10; // Audio channel 3 block finished
+constexpr uint16_t INTB_AUD2    =  9; // Audio channel 2 block finished
+constexpr uint16_t INTB_AUD1    =  8; // Audio channel 1 block finished
+constexpr uint16_t INTB_AUD0    =  7; // Audio channel 0 block finished
+constexpr uint16_t INTB_BLIT    =  6; // Blitter finished
+constexpr uint16_t INTB_VERTB   =  5; // start of Vertical Blank
+constexpr uint16_t INTB_COPER   =  4; // Coprocessor
+constexpr uint16_t INTB_PORTS   =  3; // I/O Ports and timers
+constexpr uint16_t INTB_SOFTINT =  2; // software interrupt request
+constexpr uint16_t INTB_DSKBLK  =  1; // Disk Block done
+constexpr uint16_t INTB_TBE     =  0; // serial port Transmit Buffer Empty
+
+constexpr uint16_t INTF_SETCLR  = 1 << INTB_SETCLR;
+constexpr uint16_t INTF_INTEN   = 1 << INTB_INTEN;
+constexpr uint16_t INTF_EXTER   = 1 << INTB_EXTER;
+constexpr uint16_t INTF_DSKSYNC = 1 << INTB_DSKSYNC;
+constexpr uint16_t INTF_RBF     = 1 << INTB_RBF;
+constexpr uint16_t INTF_AUD3    = 1 << INTB_AUD3;
+constexpr uint16_t INTF_AUD2    = 1 << INTB_AUD2;
+constexpr uint16_t INTF_AUD1    = 1 << INTB_AUD1;
+constexpr uint16_t INTF_AUD0    = 1 << INTB_AUD0;
+constexpr uint16_t INTF_BLIT    = 1 << INTB_BLIT;
+constexpr uint16_t INTF_VERTB   = 1 << INTB_VERTB;
+constexpr uint16_t INTF_COPER   = 1 << INTB_COPER;
+constexpr uint16_t INTF_PORTS   = 1 << INTB_PORTS;
+constexpr uint16_t INTF_SOFTINT = 1 << INTB_SOFTINT;
+constexpr uint16_t INTF_DSKBLK  = 1 << INTB_DSKBLK;
+constexpr uint16_t INTF_TBE     = 1 << INTB_TBE;
+
+/*
+                 BIT#     BPLCON0    BPLCON1    BPLCON2
+                 ----     --------   --------   --------
+                 15       HIRES       X           X
+                 14       BPU2        X           X
+                 13       BPU1        X           X
+                 12       BPU0        X           X
+                 11       HOMOD       X           X
+                 10       DBLPF       X           X
+                 09       COLOR       X           X
+                 08       GAUD        X           X
+                 07        X         PF2H3        X
+                 06        X         PF2H2      PF2PRI
+                 05        X         PF2H1      PF2P2
+                 04        X         PF2H0      PF2P1
+                 03       LPEN       PF1H3      PF2P0
+                 02       LACE       PF1H2      PF1P2
+                 01       ERSY       PF1H1      PF1P1
+                 00        X         PF1H0      PF1P0 */
+constexpr uint16_t BPLCON0B_HIRES = 15; // High-resolution (70 ns pixels)
+constexpr uint16_t BPLCON0B_BPU2  = 14; // Bitplane use code 000-110 (NONE through 6 inclusive)
+constexpr uint16_t BPLCON0B_BPU1  = 13; // 
+constexpr uint16_t BPLCON0B_BPU0  = 12; // 
+constexpr uint16_t BPLCON0B_HOMOD = 11; // Hold-and-modify mode (1 = Hold-and-modify mode (HAM); 0 = Extra Half Brite (EHB) if HAM=0 and BPU=6 and DBLPF=0 then bitplane 6 controls an intensity reduction in the other five bitplanes)
+constexpr uint16_t BPLCON0B_DBLPF = 10; // Double playfield (PF1=odd PF2=even bitplanes)
+constexpr uint16_t BPLCON0B_COLOR =  9; // Composite video COLOR enable
+constexpr uint16_t BPLCON0B_GUAD  =  8; // Genlock audio enable (muxed on BKGND pin during vertical blanking
+constexpr uint16_t BPLCON0B_LPEN  =  3; // Light pen enable (reset on power up)
+constexpr uint16_t BPLCON0B_LACE  =  2; // Interlace enable (reset on power up)
+constexpr uint16_t BPLCON0B_ERSY  =  1; // External resync (HSYNC, VSYNC pads become inputs) (reset on power up)
+
+constexpr uint16_t BPLCON0F_HIRES = 1 << BPLCON0B_HIRES;
+constexpr uint16_t BPLCON0F_BPU   = 7 << BPLCON0B_BPU0;
+constexpr uint16_t BPLCON0F_HOMOD = 1 << BPLCON0B_HOMOD;
+constexpr uint16_t BPLCON0F_DBLPF = 1 << BPLCON0B_DBLPF;
+constexpr uint16_t BPLCON0F_COLOR = 1 << BPLCON0B_COLOR;
+constexpr uint16_t BPLCON0F_GUAD  = 1 << BPLCON0B_GUAD;
+constexpr uint16_t BPLCON0F_LPEN  = 1 << BPLCON0B_LPEN;
+constexpr uint16_t BPLCON0F_LACE  = 1 << BPLCON0B_LACE;
+constexpr uint16_t BPLCON0F_ERSY  = 1 << BPLCON0B_ERSY;
+
 // 454 virtual Lores pixels
 // 625 lines/frame (interlaced)
 // https://retrocomputing.stackexchange.com/questions/44/how-to-obtain-256-arbitrary-colors-with-limitation-of-64-per-line-in-amiga-ecs
@@ -146,8 +253,27 @@ constexpr uint32_t rgb4_to_8(const uint16_t rgb4)
 struct custom_state {
     uint16_t hpos; // Resolution is in low-res pixels
     uint16_t vpos;
+    uint16_t bpldat_shift[6];
+    uint8_t bpldat_shift_pixels;
 
-    uint16_t color[32];   // $180..$1C0
+    uint32_t copper_pt;
+    uint16_t copper_inst[2];
+    uint8_t copper_inst_ofs;
+
+    uint32_t coplc[2];
+    uint16_t diwstrt;
+    uint16_t diwstop;
+    uint16_t ddfstrt;
+    uint16_t ddfstop;
+    uint16_t dmacon;
+    uint16_t intena;
+    uint16_t intreq;
+    uint32_t bplpt[6];
+    uint16_t bplcon0;
+    int16_t  bplmod1; // odd planes
+    int16_t  bplmod2; // even planes
+    uint16_t bpldat[6];
+    uint16_t color[32]; // $180..$1C0
 };
 
 }
@@ -155,9 +281,9 @@ struct custom_state {
 class custom_handler::impl : public memory_area_handler {
 public:
     explicit impl(memory_handler& mem_handler)
-        : mem_handler_ { mem_handler }
+        : mem_ { mem_handler }
     {
-        mem_handler_.register_handler(*this, 0xDFF000, 0x1000);
+        mem_.register_handler(*this, 0xDFF000, 0x1000);
         reset();
     }
 
@@ -165,6 +291,10 @@ public:
     {
         memset(gfx_buf_, 0, sizeof(gfx_buf_));
         memset(&s_, 0, sizeof(s_));
+        // Indefinte wait
+        s_.copper_inst[0] = 0xffff;
+        s_.copper_inst[1] = 0xfffe;
+        s_.copper_inst_ofs = 2; // Don't fetch new instructions until vblank
     }
 
     void step()
@@ -172,17 +302,116 @@ public:
         // First readble hpos that's interpreted as being on a new line is $005 (since it's resolution is half that of lowres pixels -> 20) 
         const unsigned virt_pixel = s_.hpos * 2 + 20;
         const unsigned disp_pixel = virt_pixel - hires_min_pixel;
+        const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < (0x100 | s_.diwstop >> 8);
+        const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
+
+        if (s_.copper_inst_ofs == 2) {
+            if (s_.copper_inst[0] & 1) {
+                // Wait/skip
+                if (s_.copper_inst[0] != 0xffff || s_.copper_inst[1] != 0xfffe) {
+                    std::cout << "TODO: Copper wait $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << "\n";
+                    assert(0);
+                }
+            } else if ((s_.hpos & 1)) {
+                // The copper is activate DMA on odd memory cycles
+                // TODO: Check which register is accessed ($20+ is ok, $10+ ok only with copper danger)
+                // TODO: Does this consume a DMA slot? (it steals it from the CPU at least)
+                const auto reg = s_.copper_inst[0] & 0x1ff;
+                write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+                s_.copper_inst_ofs = 0; // Fetch next instruction
+            }
+        }
 
         if (s_.vpos >= vblank_end_vpos && disp_pixel < graphics_width) {
             uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel];
             assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
-            // TODO: Interlace and hires
-            row[0] = row[1] = row[0 + graphics_width] = row[1 + graphics_width] = rgb4_to_8(s_.color[0]);
+
+            if (vert_disp && horiz_disp) {
+                const uint8_t nbpls = (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0;
+
+                if (!s_.bpldat_shift_pixels) {
+                    for (int i = 0; i < nbpls; ++i)
+                        s_.bpldat_shift[i] = s_.bpldat[i];
+                    s_.bpldat_shift_pixels = 16;
+                }
+
+                auto one_pixel = [&]() {
+                    uint8_t index = 0;
+                    for (int i = 0; i < nbpls; ++i) {
+                        if (s_.bpldat_shift[i] & 0x8000)
+                            index |= 1 << i;
+                        s_.bpldat_shift[i] <<= 1;
+                    }
+
+                    assert(s_.bpldat_shift_pixels);
+                    --s_.bpldat_shift_pixels;
+                    return rgb4_to_8(s_.color[index]);
+                };
+
+                if (s_.bplcon0 & BPLCON0F_HIRES) {
+                    row[0] = one_pixel();
+                    row[1] = one_pixel();
+                } else {
+                    row[0] = row[1] = one_pixel();
+                }
+            } else {
+                row[0] = row[1] = rgb4_to_8(s_.color[0]);
+            }
+
+            if (!(s_.bplcon0 & BPLCON0F_LACE)) {
+                row[0 + graphics_width] = row[0];
+                row[1 + graphics_width] = row[1];
+            }
+        }
+
+        if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
+            const uint16_t colclock = s_.hpos >> 1;
+
+            auto do_dma = [&mem = this->mem_](uint32_t& pt) {
+                const auto val = mem.read_u16(pt);
+                pt += 2;
+                return val;
+            };
+
+            do {
+                // Refresh
+                if (colclock < 8 && !(colclock & 0))
+                    break;
+
+                // TODO: Disk, Audio
+
+                // Display
+                if ((s_.dmacon & DMAF_RASTER) && vert_disp
+                    // Note: hack - comparing colclock-7 with ddfstop since ddfstop/d8 is the latest point a new 8-word transfer can be started
+                    && colclock >= std::max<uint16_t>(0x18, s_.ddfstrt) && (colclock-7) <= std::min<uint16_t>(0xD8, s_.ddfstop)) {
+                    constexpr uint8_t lores_bpl_sched[8] = { 0, 4, 6, 2, 0, 3, 5, 1 };
+                    constexpr uint8_t hires_bpl_sched[8] = { 4, 3, 2, 1, 4, 3, 2, 1 };
+                    const int bpl = (s_.bplcon0 & BPLCON0F_HIRES ? hires_bpl_sched : lores_bpl_sched)[colclock & 7] - 1;
+
+                    if (bpl >= 0 && bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0)) {
+                        //std::cout << "hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ")" << " BPL DMA shift_pixels=" << (int)s_.bpldat_shift_pixels << "\n";
+                        s_.bpldat[bpl] = do_dma(s_.bplpt[bpl]);
+                        break;
+                    }
+                }
+
+                // TODO: Sprite
+                // TODO: Copper
+                if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2) {
+                    s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
+                }
+                
+                // TODO: Blitter
+            } while (0);
         }
 
         if (++s_.hpos == hpos_per_line) {
             s_.hpos = 0;
+            assert(s_.bpldat_shift_pixels == 0);
+            // TODO: bplmod if in disp area
             if (++s_.vpos == vpos_per_field) {
+                s_.copper_pt = s_.coplc[0];
+                s_.copper_inst_ofs = 0;
                 s_.vpos = 0;
             }
         }
@@ -229,14 +458,88 @@ public:
     }
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
+        //std::cerr << "Write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
+        auto write_partial = [offset, val](uint32_t& r) {
+            if (offset & 2) {
+                assert(!(val & 1));
+                r = (r & 0xffff0000) | val;
+            }
+            else
+                r = val << 16 | (r & 0xffff);
+        };
+        auto setclr = [](uint16_t& r, uint16_t val) {
+            const bool set = !!(val & 0x8000);
+            val &= 0x7fff;
+            r &= ~val;
+            if (set)
+                r |= val;
+            else
+                r &= ~val;
+
+        };
+
+        if (offset >= COP1LCH && offset <= COP2LCL) {
+            write_partial(s_.coplc[(offset - COP1LCH) / 4]);
+            assert(offset == COP1LCH || offset == COP1LCL);
+            return;
+        }
+        if (offset >= BPL1PTH && offset <= BPL6PTL) {
+            write_partial(s_.bplpt[(offset - BPL1PTH) / 4]);
+            return;
+        }
         if (offset >= COLOR00 && offset <= COLOR31) {
             s_.color[(offset-COLOR00)/2] = val;
             return;
         }
 
         switch (offset) {
-        case SERDAT:
+        case SERDAT: // $018
             std::cerr << "[CUSTOM] Serial output ($" << hexfmt(val) << ") '" << (isprint(val & 0xff) ? static_cast<char>(val & 0xff) : ' ') << "'\n";
+            return;
+        case DIWSTRT: // $08E
+            s_.diwstrt = val;
+            return;
+        case DIWSTOP: // $090
+            s_.diwstop = val;
+            return;
+        case DDFSTRT: // $092
+            s_.ddfstrt = val;
+            return;
+        case DDFSTOP: // $094
+            s_.ddfstop = val;
+            return;
+        case DMACON:  // $096
+            val &= ~(1 << 14 | 1 << 13 | 1 << 12 | 1 << 11); // Mask out read only/unused bits
+            setclr(s_.dmacon, val);
+            assert(!(s_.dmacon & (DMAF_BLITTER | DMAF_SPRITE | DMAF_DISK | DMAF_AUD3 | DMAF_AUD2 | DMAF_AUD1 | DMAF_AUD0)));
+            return;
+        case INTENA:  // $09A
+            setclr(s_.intena, val);
+            return;
+        case INTREQ:  // $09C
+            setclr(s_.intreq, val);
+            return;
+        case BPLCON0: // $100
+            assert(!(val & ~(BPLCON0F_HIRES | BPLCON0F_BPU | BPLCON0F_COLOR)));
+            assert((val & BPLCON0F_BPU) >> BPLCON0B_BPU0 < 2);
+            s_.bplcon0 = val;
+            return;
+        case BPLCON1: // $102
+            assert(val == 0);
+            return;
+        case BPLCON2: // $104
+            assert(val == 0);
+            return;
+        case BPLCON3: // $106
+            assert(val == 0);
+            return;
+        case BPLMOD1: // $108
+            assert(val == 0);
+            s_.bplmod1 = val;
+            return;
+        case BPLMOD2: // $10A
+            assert(val == 0);
+            s_.bplmod2 = val;
             return;
         }
         std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
@@ -252,7 +555,7 @@ public:
     }
 
 private:
-    memory_handler& mem_handler_;
+    memory_handler& mem_;
     uint32_t gfx_buf_[graphics_width * graphics_height];
     custom_state s_;
 };
