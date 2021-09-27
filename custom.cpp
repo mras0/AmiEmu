@@ -832,6 +832,8 @@ struct custom_state {
     bool bltinpoly;
     uint32_t bltdpt;
     uint8_t blitline_ashift;
+    uint16_t blitline_a;
+    uint16_t blitline_b;
     bool blitline_sign;
     bool blitline_dot_this_line;
     bool blitfirst;
@@ -1088,15 +1090,15 @@ public:
             s_.bltdpt = cnt ? s_.bltpt[2] : s_.bltpt[3];
             s_.bltdwrite = !(s_.bltcon1 & BC1F_ONEDOT) || !s_.blitline_dot_this_line;
             s_.bltdat[2] = chip_read(s_.bltpt[2]);
-            s_.bltbhold = s_.bltdat[1] & 1 ? 0xFFFF : 0;
-            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> s_.blitline_ashift, s_.bltbhold, s_.bltdat[2]);
+            s_.bltbhold = s_.blitline_b & 1 ? 0xFFFF : 0;
+            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.blitline_a & s_.bltafwm) >> s_.blitline_ashift, s_.bltbhold, s_.bltdat[2]);
             s_.bltpt[0] += s_.blitline_sign ? s_.bltmod[1] : s_.bltmod[0];
             s_.blitline_dot_this_line = true;
 
             s_.update_blitter_line();
 
             s_.blitline_sign = static_cast<int16_t>(s_.bltpt[0]) < 0;
-            s_.bltdat[1] = rol(s_.bltdat[1], 1);
+            s_.blitline_b = rol(s_.blitline_b, 1);
             if (s_.bltdwrite)
                 chip_write(s_.bltdpt, s_.bltdat[3]);
         }
@@ -1227,15 +1229,15 @@ public:
             s_.blitfirst = false;
             s_.bltdwrite = !(s_.bltcon1 & BC1F_ONEDOT) || !s_.blitline_dot_this_line;
             s_.bltdat[2] = chip_read(s_.bltpt[2]);
-            s_.bltbhold = s_.bltdat[1] & 1 ? 0xFFFF : 0;
-            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> s_.blitline_ashift, s_.bltbhold, s_.bltdat[2]);
+            s_.bltbhold = s_.blitline_b & 1 ? 0xFFFF : 0;
+            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.blitline_a & s_.bltafwm) >> s_.blitline_ashift, s_.bltbhold, s_.bltdat[2]);
             s_.bltpt[0] += s_.blitline_sign ? s_.bltmod[1] : s_.bltmod[0];
             s_.blitline_dot_this_line = true;
 
             s_.update_blitter_line();
 
             s_.blitline_sign = static_cast<int16_t>(s_.bltpt[0]) < 0;
-            s_.bltdat[1] = rol(s_.bltdat[1], 1);
+            s_.blitline_b = rol(s_.blitline_b, 1);
 
             dma = true;
             break;
@@ -1447,6 +1449,8 @@ public:
 
             // Do not reset blitline_ashift/blitline_sign here (vAmigaTS timing1l)
             s_.blitline_dot_this_line = false;
+            s_.blitline_a = s_.bltdat[0];
+            s_.blitline_b = ror(s_.bltdat[1], s_.bltcon1 >> BC1_BSHIFTSHIFT);
         }
 
         if (DEBUG_BLITTER) {
