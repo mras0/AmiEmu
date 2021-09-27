@@ -432,6 +432,7 @@ int main(int argc, char* argv[])
                     const auto& s = cpu.state();
                     g.set_debug_memory(mem.ram(), custom.get_regs());
                     g.set_debug_windows_visible(true);
+                    g.update_image(custom.frame());
                     cpu.show_state(std::cout);
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {

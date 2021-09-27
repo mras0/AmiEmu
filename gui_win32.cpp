@@ -547,6 +547,7 @@ private:
     HWND parent_ = nullptr;
     HWND last_focus_ = nullptr;
     HWND color_edit_[maxpalette];
+    HWND color_preview_[maxpalette];
 
     palette_edit_dialog(bool& done, uint16_t* pal, const std::vector<uint16_t>& custom)
         : done_ { done }
@@ -575,13 +576,21 @@ private:
                 CreateWindow(L"STATIC", temp, WS_CHILD | WS_VISIBLE, xpos, ypos, w, h, hwnd, nullptr, hInstance, nullptr);
                 xpos += w + xmargin;
                 wsprintfW(temp, L"$%03X", pal_[n]);
-                color_edit_[n] = CreateWindow(L"EDIT", temp, WS_CHILD | WS_VISIBLE | WS_TABSTOP, xpos, ypos, w, h, hwnd, reinterpret_cast<HMENU>(intptr_t(100) + n), hInstance, nullptr);
+                color_edit_[n] = CreateWindow(L"EDIT", temp, WS_CHILD | WS_VISIBLE | WS_TABSTOP, xpos, ypos, w-32, h, hwnd, reinterpret_cast<HMENU>(intptr_t(100) + n), hInstance, nullptr);
+                color_preview_[n] = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE, xpos + w - 32, ypos, 32, h, hwnd, reinterpret_cast<HMENU>(intptr_t(1000) + n), hInstance, nullptr);
                 xpos += w + xmargin;
             }
             ypos += h + ymargin;
         }
-        CreateWindow(L"BUTTON", L"&Ok", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, xmargin, ypos, w, h, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
-        CreateWindow(L"BUTTON", L"&Cancel", WS_CHILD | WS_TABSTOP | WS_VISIBLE, 2*xmargin+w, ypos, w, h, hwnd, reinterpret_cast<HMENU>(IDCANCEL), hInstance, nullptr);
+        const int button_w = 100;
+        int x = xmargin;
+        CreateWindow(L"BUTTON", L"&Ok", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, xmargin, ypos, button_w, h, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
+        x += button_w + xmargin;
+        CreateWindow(L"BUTTON", L"&Cancel", WS_CHILD | WS_TABSTOP | WS_VISIBLE, x, ypos, button_w, h, hwnd, reinterpret_cast<HMENU>(IDCANCEL), hInstance, nullptr);
+        x += button_w + xmargin;
+        CreateWindow(L"BUTTON", L"&From custom", WS_CHILD | WS_TABSTOP | WS_VISIBLE, x, ypos, button_w, h, hwnd, reinterpret_cast<HMENU>(300), hInstance, nullptr);
+        x += button_w + xmargin;
+        CreateWindow(L"BUTTON", L"&Default", WS_CHILD | WS_TABSTOP | WS_VISIBLE, x, ypos, button_w, h, hwnd, reinterpret_cast<HMENU>(301), hInstance, nullptr);
 
         SetFocus(color_edit_[0]);
 
@@ -593,6 +602,18 @@ private:
         EnableWindow(parent_, TRUE);
         done_ = true;
         DestroyWindow(hwnd);
+    }
+
+    static constexpr int invalid_color_value = -1;
+    int color_value_from_control(int i)
+    {
+        char temp[256];
+        GetWindowTextA(color_edit_[i], temp, sizeof(temp));
+        unsigned val = ~0U;
+        if (temp[0] != '$' || !sscanf(temp + 1, "%x", &val) || val > 0xfff) {
+            return invalid_color_value;
+        }
+        return val;
     }
 
     LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -611,10 +632,10 @@ private:
             if (id == IDOK && code == BN_CLICKED) {
                 uint16_t newpal[maxpalette];
                 for (int i = 0; i < maxpalette; ++i) {
-                    char temp[256];
-                    GetWindowTextA(color_edit_[i], temp, sizeof(temp));
-                    unsigned val = ~0U;
-                    if (temp[0] != '$' || !sscanf(temp + 1, "%x", &val) || val > 0xfff) {
+                    int val = color_value_from_control(i);
+                    if (val == invalid_color_value) {
+                        char temp[256];
+                        GetWindowTextA(color_edit_[i], temp, sizeof(temp));
                         wchar_t msg[512];
                         wsprintfW(msg, L"COLOR%2d value \"%S\" is invalid", i, temp);
                         MessageBox(hwnd, msg, L"Invalid color value", MB_ICONSTOP);
@@ -626,11 +647,38 @@ private:
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
             } else if (id == IDCANCEL && code == BN_CLICKED) {
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
+            } else if (id == 300 && code == BN_CLICKED) {
+                for (int i = 0; i < maxpalette; ++i) {
+                    char temp[256];
+                    sprintf(temp, "$%03X", custom_[0x180/2 + i]);
+                    SetWindowTextA(color_edit_[i], temp);
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (id == 301 && code == BN_CLICKED) {
+                for (int i = 0; i < maxpalette; ++i) {
+                    char temp[256];
+                    sprintf(temp, "$%03X", rgb8_to_4(default_palette[i]));
+                    SetWindowTextA(color_edit_[i], temp);
+                }
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (id >= 100 && id < 100 + maxpalette && code == EN_UPDATE) {
+                InvalidateRect(color_preview_[id - 100], nullptr, TRUE);
             }
             break;
         }
         case WM_CTLCOLORSTATIC: {
             HDC hdc = reinterpret_cast<HDC>(wParam);
+
+            if (int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam)); id >= 1000) {
+                const auto col = color_value_from_control(id - 1000);
+                if (col != invalid_color_value) {
+                    COLORREF col8 = rgb4_to_8(static_cast<uint16_t>(col));
+                    SetDCBrushColor(hdc, col8);
+                    SetBkColor(hdc, col8);
+                    return reinterpret_cast<LRESULT>(GetStockObject(DC_BRUSH));
+                }
+            }
+
             SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
             return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
         }
