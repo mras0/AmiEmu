@@ -71,6 +71,7 @@ add_executable(amiemu
     debug.cpp debug.h
     wavedev_win32.cpp wavedev.h
     exprom.asm
+    rtc.cpp rtc.h
     ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
     )
 set_source_files_properties(exprom.asm PROPERTIES HEADER_FILE_ONLY TRUE)

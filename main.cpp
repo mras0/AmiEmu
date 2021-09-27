@@ -25,6 +25,7 @@
 #include "debug.h"
 #include "wavedev.h"
 #include "asm.h"
+#include "rtc.h"
 
 namespace {
 
@@ -773,6 +774,8 @@ int main(int argc, char* argv[])
             fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
             autoconf.add_device(*fast_ram);
         }
+
+        real_time_clock rtc { mem };
 
         m68000 cpu { mem };
 
