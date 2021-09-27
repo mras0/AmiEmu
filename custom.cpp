@@ -453,6 +453,7 @@ struct custom_state {
     uint16_t bpldat_shift[6];
     uint16_t bpldat_temp[6];
     bool bpl1dat_written;
+    bool bpl1dat_written_this_line;
     uint8_t bpldata_avail;
     uint32_t ham_color;
     ddfstate ddfst;
@@ -869,7 +870,7 @@ public:
             for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
                 if (get_u16(&s_.mfm_track[i * 2]) == s_.dsksync) {
 #ifdef DISK_DMA_DEBUG
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Disk sync word ($" << hexfmt(s_.dsksync) << " matches at word pos $" << hexfmt(i) << "\n";
+                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(i) << "\n";
 #endif
                     s_.mfm_pos = i + 1;
                     s_.intreq |= INTF_DSKSYNC;
@@ -985,24 +986,26 @@ public:
                     spriteidx[spr] = idx;
                 }
 
-                // Sprite 0 has highest priority, 7 lowest
-                for (uint8_t spr = 0; spr < 8; ++spr) {
-                    if (!(spr & 1) && (s_.sprctl[spr + 1] & 0x80)) {
-                        // Attached sprite
-                        const uint8_t idx = spriteidx[spr] | spriteidx[spr + 1] << 2;
-                        if (idx) {
-                            active_sprite = 16 + idx;
+                // Sprites are only visible after write to BPL1DAT
+                if (s_.bpl1dat_written_this_line) {
+                    // Sprite 0 has highest priority, 7 lowest
+                    for (uint8_t spr = 0; spr < 8; ++spr) {
+                        if (!(spr & 1) && (s_.sprctl[spr + 1] & 0x80)) {
+                            // Attached sprite
+                            const uint8_t idx = spriteidx[spr] | spriteidx[spr + 1] << 2;
+                            if (idx) {
+                                active_sprite = 16 + idx;
+                                active_sprite_group = spr >> 1;
+                                break;
+                            }
+                            ++spr; // Skip next sprite
+                        } else if (spriteidx[spr]) {
+                            active_sprite = 16 + (spr >> 1) * 4 + spriteidx[spr];
                             active_sprite_group = spr >> 1;
                             break;
                         }
-                        ++spr; // Skip next sprite
-                    } else if (spriteidx[spr]) {
-                        active_sprite = 16 + (spr >> 1) * 4 + spriteidx[spr];
-                        active_sprite_group = spr >> 1;
-                        break;
                     }
                 }
-
 
                 auto one_pixel = [&]() {
                     uint8_t pf1 = 0, pf2 = 0;
@@ -1222,6 +1225,7 @@ public:
 #endif
 
                             s_.bpl1dat_written = true;
+                            s_.bpl1dat_written_this_line = true;
                         }
                         break;
                     }
@@ -1284,6 +1288,7 @@ public:
             memset(s_.bpldat_shift, 0, sizeof(s_.bpldat_shift));
             memset(s_.bpldat_temp, 0, sizeof(s_.bpldat_temp));
             s_.bpl1dat_written = false;
+            s_.bpl1dat_written_this_line = false;
             s_.bpldata_avail = 0;
 #ifdef BPL_DMA_DEBUG
             rem_pixelsO = rem_pixelsE = 0;
@@ -1405,6 +1410,10 @@ public:
             const int bpl = (offset - BPL1DAT) / 2;
             // XXX: Also set bpldat_reload?
             s_.bpldat_temp[bpl] = s_.bpldat[bpl] = val;
+            if (bpl == 0) {
+                s_.bpl1dat_written = true;
+                s_.bpl1dat_written_this_line = true;
+            }
             return;
         }
         if (offset >= SPR0PTH && offset <= SPR7PTL) {
@@ -1421,7 +1430,7 @@ public:
                 s_.sprctl[spr] = val;
                 s_.spr_armed[spr] = false;
                 s_.spr_dma_states[spr] = sprite_dma_state::stopped;
-                if (s_.sprite_vpos_start(spr) < s_.sprite_vpos_end(spr)) {
+                if (s_.sprite_vpos_start(spr) < s_.sprite_vpos_end(spr) && s_.sprite_vpos_start(spr) >= s_.vpos) {
 #ifdef SPRITE_DMA_DEBUG
                     std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Setting active waiting for VPOS=$" << hexfmt(s_.sprite_vpos_start(spr)) << " end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
 #endif

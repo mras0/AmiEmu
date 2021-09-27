@@ -103,6 +103,10 @@ std::tuple<bool, uint32_t, uint32_t> get_addr_and_lines(const std::vector<std::s
 
 uint32_t disasm_stmts(memory_handler& mem, uint32_t start, uint32_t count)
 {
+    if (start & 1) {
+        std::cout << "PC at odd address $" << hexfmt(start) << "\n";
+        return 0;
+    }
     uint32_t addr = start;
     while (count--) {
         uint16_t iw[max_instruction_words];
@@ -398,6 +402,7 @@ int main(int argc, char* argv[])
                             break;
                         } else if (args[0] == "m") {
                             auto [valid, addr, lines] = get_addr_and_lines(args, hexdump_addr, 20);
+                            addr &= ~1;
                             if (valid) {
                                 std::vector<uint8_t> data(lines * 16);
                                 for (size_t i = 0; i < lines * 8; ++i)
