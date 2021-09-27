@@ -52,16 +52,16 @@ constexpr const inst_desc insts[] = {
 //
     //{"ORI.B #I, CCR"     , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" },
     //{"ORI.W #I, SSR"     , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" },
-    {"ORI"               , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I", block_An|block_Imm },
+    {"ORI"               , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     //{"ANDI.B #I, CCR"    , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
     //{"ANDI.W #I, SR"     , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" },
-    {"ANDI"              , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I", block_An|block_Imm },
-    {"SUBI"              , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I", block_An|block_Imm },
-    {"ADDI"              , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I", block_An|block_Imm },
+    {"ANDI"              , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"SUBI"              , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"ADDI"              , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     //{"EORI.B #I, CCR"    , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
     //{"EORI.W #I, SR"     , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" },
-    {"EORI"              , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I", block_An|block_Imm },
-    {"CMPI"              , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I", block_An|block_Imm },
+    {"EORI"              , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"CMPI"              , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"BTST"              , "B L" , "0 0 0 0 1 0 0 0 0 0 M     Xn   " , "B N" },
     {"BCHG"              , "B L" , "0 0 0 0 1 0 0 0 0 1 M     Xn   " , "B N" },
     {"BCLR"              , "B L" , "0 0 0 0 1 0 0 0 1 0 M     Xn   " , "B N" },
@@ -71,11 +71,11 @@ constexpr const inst_desc insts[] = {
     {"BCLR"              , "B L" , "0 0 0 0 Dn    1 1 0 M     Xn   " , "  N" },
     {"BSET"              , "B L" , "0 0 0 0 Dn    1 1 1 M     Xn   " , "  N" },
     //{"MOVEP"             , " WL" , "0 0 0 0 Dn    1 DxSz0 0 1 An   " , "W D" },
-    {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   ", 0 },
-    {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   ", 0 },
+    {"MOVEA"             , " WL" , "0 0 Sy  An    0 0 1 M     Xn   " , "   " , 0 },
+    {"MOVE"              , "BWL" , "0 0 Sy  Xn    M     M     Xn   " , "   " , 0 },
     //{"MOVE.W SR, #1"     , " W " , "0 1 0 0 0 0 0 0 1 1 M     Xn   " , "   " },
     //{"MOVE.B #1, CCR"    , "B  " , "0 1 0 0 0 1 0 0 1 1 M     Xn   " , "   " },
-    {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   ", block_An, 0|ea_sr << 8 }, // Move to SR
+    {"MOVE"              , " W " , "0 1 0 0 0 1 1 0 1 1 M     Xn   " , "   " , block_An, 0|ea_sr << 8 }, // Move to SR
     {"NEGX"              , "BWL" , "0 1 0 0 0 0 0 0 Sx  M     Xn   " , "   " },
     {"CLR"               , "BWL" , "0 1 0 0 0 0 1 0 Sx  M     Xn   " , "   " },
     {"NEG"               , "BWL" , "0 1 0 0 0 1 0 0 Sx  M     Xn   " , "   " },
@@ -83,9 +83,9 @@ constexpr const inst_desc insts[] = {
     {"EXT"               , " WL" , "0 1 0 0 1 0 0 0 1 Sz0 0 0 Dn   " , "   " },
     {"NBCD"              , "B  " , "0 1 0 0 1 0 0 0 0 0 M     Xn   " , "   " },
     {"SWAP"              , " W " , "0 1 0 0 1 0 0 0 0 1 0 0 0 Dn   " , "   " },
-    {"PEA"               , "  L" , "0 1 0 0 1 0 0 0 0 1 M     Xn   " , "   ", 0b0011011 },
+    {"PEA"               , "  L" , "0 1 0 0 1 0 0 0 0 1 M     Xn   " , "   " , 0b0011011 },
     {"ILLEGAL"           , "   " , "0 1 0 0 1 0 1 0 1 1 1 1 1 1 0 0" , "   " },
-    {"TAS"               , "B  " , "0 1 0 0 1 0 1 0 1 1 M     Xn   " , "   ", block_An | block_Imm },
+    {"TAS"               , "B  " , "0 1 0 0 1 0 1 0 1 1 M     Xn   " , "   " , block_An | block_Imm },
     {"TST"               , "BWL" , "0 1 0 0 1 0 1 0 Sx  M     Xn   " , "   " },
     {"TRAP"              , "   " , "0 1 0 0 1 1 1 0 0 1 0 0 Data4  " , "   " },
     {"LINK"              , " W " , "0 1 0 0 1 1 1 0 0 1 0 1 0 An   " , "   " },
@@ -98,13 +98,13 @@ constexpr const inst_desc insts[] = {
     {"RTS"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 0 1" , "   " },
     {"TRAPV"             , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 1 0" , "   " },
     {"RTR"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 1 1" , "   " },
-    {"JSR"               , "   " , "0 1 0 0 1 1 1 0 1 0 M     Xn   " , "   " },
-    {"JMP"               , "   " , "0 1 0 0 1 1 1 0 1 1 M     Xn   " , "   " },
-    {"MOVEM"             , " WL" , "0 1 0 0 1 Dy0 0 1 SzM     Xn   " , "W M", block_An | block_Dn | block_Imm },
+    {"JSR"               , "   " , "0 1 0 0 1 1 1 0 1 0 M     Xn   " , "   " , block_An | block_Dn | block_Imm | (1<<3) | (1<<4) },
+    {"JMP"               , "   " , "0 1 0 0 1 1 1 0 1 1 M     Xn   " , "   " , block_An | block_Dn | block_Imm | (1<<3) | (1<<4) },
+    {"MOVEM"             , " WL" , "0 1 0 0 1 Dy0 0 1 SzM     Xn   " , "W M" , block_An | block_Dn | block_Imm},
     {"LEA"               , "  L" , "0 1 0 0 An    1 1 1 M     Xn   " , "   " },
     {"CHK"               , " W " , "0 1 0 0 Dn    1 1 0 M     Xn   " , "   " },
-    {"ADDQ"              , "BWL" , "0 1 0 1 Data3 0 Sx  M     Xn   " , "   ", 0 },
-    {"SUBQ"              , "BWL" , "0 1 0 1 Data3 1 Sx  M     Xn   " , "   ", 0 },
+    {"ADDQ"              , "BWL" , "0 1 0 1 Data3 0 Sx  M     Xn   " , "   " , 0 },
+    {"SUBQ"              , "BWL" , "0 1 0 1 Data3 1 Sx  M     Xn   " , "   " , 0 },
     {"Scc"               , "B  " , "0 1 0 1 Cond    1 1 M     Xn   " , "   " },
     {"DBcc"              , " W " , "0 1 0 1 Cond    1 1 0 0 1 Dn   " , "W D" },
     {"BRA"               , "BW " , "0 1 1 0 0 0 0 0 Displacement   " , "W d" },
@@ -115,29 +115,29 @@ constexpr const inst_desc insts[] = {
     {"DIVS"              , " W " , "1 0 0 0 Dn    1 1 1 M     Xn   " , "   " },
     {"SBCD"              , "B  " , "1 0 0 0 Xn    1 0 0 0 0 m Xn   " , "   " },
     {"OR"                , "BWL" , "1 0 0 0 Dn    DzSx  M     Xn   " , "   " },
-    {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   ", 0 },
+    {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   " , 0 },
     {"SUBX"              , "BWL" , "1 0 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
-    {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   ", 0 },
+    {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   " , 0 },
     {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " },
     {"CMPM"              , "BWL" , "1 0 1 1 An    1 Sx  0 0 1 An   " , "   " },
     {"CMP"               , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " },
-    {"CMPA"              , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   ", 0 },
+    {"CMPA"              , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   " , 0 },
     {"MULU"              , " W " , "1 1 0 0 Dn    0 1 1 M     Xn   " , "   " },
     {"MULS"              , " W " , "1 1 0 0 Dn    1 1 1 M     Xn   " , "   " },
     {"ABCD"              , "B  " , "1 1 0 0 Xn    1 0 0 0 0 m Xn   " , "   " },
-    {"EXG"               , "  L" , "1 1 0 0 Xn    1 ME  0 0 MeXn   " , "   ", 0 },
+    {"EXG"               , "  L" , "1 1 0 0 Xn    1 ME  0 0 MeXn   " , "   " , 0 },
     {"AND"               , "BWL" , "1 1 0 0 Dn    DzSx  M     Xn   " , "   " },
-    {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   ", 0 },
+    {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   " , 0 },
     {"ADDX"              , "BWL" , "1 1 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
-    {"ADDA"              , " WL" , "1 1 0 1 An    Sz1 1 M     Xn   " , "   ", 0},
-    {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " },
-    {"LSd"               , "BWL" , "1 1 1 0 0 0 1 d 1 1 M     Xn   " , "   " },
-    {"ROXd"              , "BWL" , "1 1 1 0 0 1 0 d 1 1 M     Xn   " , "   " },
-    {"ROd"               , "BWL" , "1 1 1 0 0 1 1 d 1 1 M     Xn   " , "   " },
-    {"ASd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 0 Dn   " , "   " },
-    {"LSd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 1 Dn   " , "   " },
-    {"ROXd"              , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 0 Dn   " , "   " },
-    {"ROd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 1 Dn   " , "   " },
+    {"ADDA"              , " WL" , "1 1 0 1 An    Sz1 1 M     Xn   " , "   " , 0},
+    {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
+    {"LSd"               , "BWL" , "1 1 1 0 0 0 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
+    {"ROXd"              , "BWL" , "1 1 1 0 0 1 0 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
+    {"ROd"               , "BWL" , "1 1 1 0 0 1 1 d 1 1 M     Xn   " , "   " , block_An | block_Imm },
+    {"ASd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 0 Dn   " , "   " , block_An | block_Imm },
+    {"LSd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr0 1 Dn   " , "   " , block_An | block_Imm },
+    {"ROXd"              , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 0 Dn   " , "   " , block_An | block_Imm },
+    {"ROd"               , "BWL" , "1 1 1 0 Data3 d Sx  Mr1 1 Dn   " , "   " , block_An | block_Imm },
 };
 
 #define FIELDS(X)      \
@@ -249,6 +249,7 @@ struct instruction_info {
     opsize osize = opsize::none;
     uint8_t nea;
     uint8_t ea[2];
+    uint8_t ea_words;
     uint8_t data;
     uint8_t extra;
 };
@@ -286,6 +287,7 @@ void output_plain_with_imm(uint16_t inst, const char* name, const char* imm)
 //        break;
     case 'W':
         ai.osize = opsize::w;
+        ++ai.ea_words;
         break;
 //    case 'L':
 //        ai.osize = opsize::l;
@@ -462,6 +464,42 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                 assert(!"Not implemented");
             } else {
                 ai.ea[ai.nea++] = static_cast<uint8_t>(desc.fixed_ea >> 8);
+            }
+        }
+
+        ai.ea_words = 0;
+        if (ai.extra & extra_disp_flag)
+            ++ai.ea_words;
+        for (int i = 0; i < ai.nea; ++i) {
+            switch (ai.ea[i] >> 3) {
+                case 0b101: // (d16, An)
+                case 0b110: // (d8, An, Xn)
+                    ++ai.ea_words;
+                    break;
+                case 0b111:
+                    switch (ai.ea[i] & 7) {
+                        case 0b000: // (addr.W)
+                            ++ai.ea_words;
+                            break;
+                        case 0b001: // (addr.L)
+                            ai.ea_words += 2;
+                            break;
+                        case 0b010: // (d16, PC)
+                            ++ai.ea_words;
+                            break;
+                        case 0b011: // (d8, PC, Xn)
+                            ++ai.ea_words;
+                            break;
+                        case 0b100: // immmediate
+                            assert(ai.osize != opsize::none);
+                            ai.ea_words += ai.osize == opsize::l ? 2 : 1;
+                            break;
+                        }
+                    break;
+                case 0b1000:
+                    if (ai.ea[i] == ea_reglist)
+                        ++ai.ea_words;
+                    break;
             }
         }
 
@@ -825,9 +863,10 @@ int main(int argc, char* argv[])
 
         auto n = "\"" + ai.name + "\"";
         out << "/* " << hexfmt(static_cast<uint16_t>(i)) << " */ { ";
-        out << "inst_type::" << std::left << std::setw(10) << ai.type << ", " << std::left << std::setw(12) << n << ", opsize::" << std::left << std::setw(5) << ai.osize;
-        out << ", " << static_cast<int>(ai.nea);
-        out << ", { 0x" << hexfmt(ai.ea[0]) << ", 0x" << hexfmt(ai.ea[1]) << "}, 0x" << hexfmt(ai.data) << ", 0x" << hexfmt(ai.extra);
+        out << "inst_type::" << std::left << std::setw(10) << ai.type << ", " << std::left << std::setw(12) << n << ", opsize::" << std::left << std::setw(5) << ai.osize << ", ";
+        out << (1+ai.ea_words) << ", " << static_cast<int>(ai.nea);
+        out << ", { 0x" << hexfmt(ai.ea[0]) << ", 0x" << hexfmt(ai.ea[1]) << "}, ";
+        out << "0x" << hexfmt(ai.data) << ", 0x" << hexfmt(ai.extra);
         out << " },\n";
     }
 }

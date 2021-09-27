@@ -8,6 +8,7 @@
 
 #include "ioutil.h"
 #include "instruction.h"
+#include "disasm.h"
 
 std::vector<uint8_t> read_file(const std::string& path)
 {
@@ -78,104 +79,6 @@ private:
     std::vector<uint8_t> rom_data_;
 };
 
-enum ea_m {
-    ea_m_Dn            = 0b000, // Dn
-    ea_m_An            = 0b001, // An
-    ea_m_A_ind         = 0b010, // (An)
-    ea_m_A_ind_post    = 0b011, // (An)+
-    ea_m_A_ind_pre     = 0b100, // -(An)
-    ea_m_A_ind_disp16  = 0b101, // (d16, An)
-    ea_m_A_ind_index   = 0b110, // (d8, An, Xn)
-    ea_m_Other         = 0b111, // (Other)
-
-    ea_m_inst_data     = 0b1000, // Hack value from mktab
-};
-
-enum ea_other {
-    ea_other_abs_w     = 0b000, // (addr.W)
-    ea_other_abs_l     = 0b001, // (addr.L)
-    ea_other_pc_disp16 = 0b010, // (d16, PC)
-    ea_other_pc_index  = 0b011, // (d8, PC, Xn)
-    ea_other_imm       = 0b100,
-};
-
-unsigned ea_extra_words(uint8_t ea, opsize size)
-{
-    switch (ea >> 3) {
-    case ea_m_Dn:
-    case ea_m_An:
-    case ea_m_A_ind:
-    case ea_m_A_ind_post:
-    case ea_m_A_ind_pre:
-        return 0;
-    case ea_m_A_ind_disp16:
-        return 1;
-    case ea_m_A_ind_index:
-        return 1; // more if bit 8 is 1... Not supported on 68000 though?
-    case ea_m_Other:
-        switch (ea & 7) {
-        case ea_other_abs_w:
-            return 1;
-        case ea_other_abs_l:
-            return 2;
-        case ea_other_pc_disp16:
-            return 1;
-        case ea_other_pc_index:
-            break;
-        case ea_other_imm:
-            assert(size != opsize::none);
-            return size == opsize::l ? 2 : 1;
-        }
-        break;
-    case ea_m_inst_data:
-        if (ea == ea_reglist)
-            return 1;
-        return 0;
-    }
-    std::cout << "Unsupported EA: 0x" << hexfmt(ea) << " M=0b" << binfmt(ea>>3, 5) << " Xn=0b" << binfmt(ea&7,3) << "\n";
-    assert(0);
-    return 0;
-}
-
-
-
-std::string reg_list_string(uint16_t list, bool reverse)
-{
-    // postincrement a7..d0 (bit 15..0) reversed for predecrement mode
-    // d0..d7a0..a7
-    bool first = true;
-    int last_reg = -1;
-    std::string res;
-
-    auto reg_str = [](int reg) -> std::string {
-        assert(reg >= 0 && reg < 16);
-        return (reg < 8 ? "D" : "A") + std::to_string(reg & 7);
-    };
-    for (int reg = 0; reg < 16; ++reg) {
-        const int bit = reverse ? 15-reg : reg;
-        if (list & (1 << bit)) {
-            if (last_reg < 0) {
-                last_reg = reg;
-            }
-        } else if (last_reg != -1) {
-            if (first) {
-                first = false;
-            } else {
-                res += '/';
-            }
-
-            res += reg_str(last_reg);
-            if (last_reg != reg - 1) {
-                res += '-';
-                res += reg_str(reg - 1);
-            }
-            last_reg = -1;
-        }
-    }
-    assert(last_reg == -1); // TODO: Handle this...
-    return res;
-}
-
 int main()
 {
     try {
@@ -186,165 +89,21 @@ int main()
         std::cout << "Initial SP=" << hexfmt(initial_sp) << " PC=" << hexfmt(initial_pc) << "\n";
         uint32_t pc = initial_pc;
 
-        constexpr const unsigned max_inst_words = 4; // XXX Up to 11 according to manual, but might not be supported on 68k
         for (;;) {
             const auto start_pc = pc;
-            const auto iword = mem.read_u16(pc);
-            uint16_t eawords[10];
+            uint16_t iwords[max_instruction_words];
+            iwords[0] = mem.read_u16(pc);
             pc += 2;
 
-            const auto& inst = instructions[iword];
+            const auto& inst = instructions[iwords[0]];
+            assert(inst.ilen <= std::size(iwords));
 
-            unsigned ea_words = 0;
-            for (int i = 0; i < inst.nea; ++i) {
-                ea_words += ea_extra_words(inst.ea[i], inst.size);
-            }
-            if (inst.extra & extra_disp_flag)
-                ++ea_words;
-            assert(ea_words <= 10);
-            std::cout << hexfmt(start_pc) << "\t" << hexfmt(iword);
-            for (unsigned i = 0; i < ea_words; ++i) {
-                eawords[i] = mem.read_u16(pc);
+            for (unsigned i = 1; i < inst.ilen; ++i) {
+                iwords[i] = mem.read_u16(pc);
                 pc += 2;
-                std::cout << " " << hexfmt(eawords[i]);
-            }
-            for (unsigned i = ea_words; i < max_inst_words; ++i) {
-                std::cout << "     ";
-            }
-            std::cout << "\t" << inst.name;
-
-            unsigned eaw = 0;
-            for (unsigned i = 0; i < inst.nea; ++i) {
-                std::cout << (i == 0 ? "\t" : ", ");
-                const auto ea = inst.ea[i];
-                switch (ea >> 3) {
-                case ea_m_Dn:
-                    std::cout << "D" << (ea & 7);
-                    break;
-                case ea_m_An:
-                    std::cout << "A" << (ea & 7);
-                    break;
-                case ea_m_A_ind:
-                    std::cout << "(A" << (ea & 7) << ")";
-                    break;
-                case ea_m_A_ind_post:
-                    std::cout << "(A" << (ea & 7) << ")+";
-                    break;
-                case ea_m_A_ind_pre:
-                    std::cout << "-(A" << (ea & 7) << ")";
-                    break;
-                case ea_m_A_ind_disp16: {
-                    assert(eaw < ea_words);
-                    int16_t n = eawords[eaw++];
-                    std::cout << "$";
-                    if (n < 0) {
-                        std::cout << "-";
-                        n = -n;
-                    }
-                    std::cout << hexfmt(static_cast<uint16_t>(n));
-                    std::cout << "(A" << (ea & 7) << ")";
-                    break;
-                }
-                case ea_m_A_ind_index: {
-                    assert(eaw < ea_words);
-                    const auto extw = eawords[eaw++];
-                    if (extw & (7 << 8)) {
-                        std::cout << "Full extension word/scale not supported\n";
-                        assert(0);
-                    } else {
-                        auto disp = static_cast<int8_t>(extw & 255);
-                        std::cout << "$";
-                        if (disp < 0) {
-                            std::cout << "-";
-                            disp = -disp;
-                        }
-                        std::cout << hexfmt(static_cast<uint8_t>(disp)) << "(A" << (ea & 7) << ",";
-                        std::cout << ((extw & (1 << 15)) ? "A" : "D") << ((extw>>12)&7) << "." << (((extw>>11)&1)?"L":"W");
-                        std::cout << ")";
-                        break;
-                    }
-                }
-                case ea_m_Other:
-                    switch (ea & 7) {
-                    case ea_other_abs_w:
-                        assert(eaw < ea_words);
-                        std::cout << "$";
-                        std::cout << hexfmt(eawords[eaw++]);
-                        std::cout << ".W";
-                        break;
-                    case ea_other_abs_l:
-                        assert(eaw + 1 < ea_words);
-                        std::cout << "$";
-                        std::cout << hexfmt(eawords[eaw++]);
-                        std::cout << hexfmt(eawords[eaw++]);
-                        std::cout << ".L";
-                        break;
-                    case ea_other_pc_disp16: {
-                        assert(eaw < ea_words);
-                        int16_t n = eawords[eaw++];
-                        std::cout << "$";
-                        if (n < 0) {
-                            std::cout << "-";
-                            n = -n;
-                        }
-                        std::cout << hexfmt(static_cast<uint16_t>(n));
-                        std::cout << "(PC)";
-                        break;
-                    }
-                    case ea_other_imm:
-                        std::cout << "#$";
-                        if (inst.size == opsize::l) {
-                            assert(eaw + 1 < ea_words);
-                            std::cout << hexfmt(eawords[eaw++]);
-                            std::cout << hexfmt(eawords[eaw++]);
-                        } else {
-                            assert(eaw < ea_words);
-                            if (inst.size == opsize::b)
-                                std::cout << hexfmt(static_cast<uint8_t>(eawords[eaw++]));
-                            else
-                                std::cout << hexfmt(eawords[eaw++]);
-                        }
-                        break;
-                    default:
-                        std::cout << "\nTODO: Handle EA other=0x" << hexfmt(ea&3) << "\n";
-                        assert(0);
-                    }
-                    break;
-                case ea_m_inst_data:
-                    if (ea == ea_sr) {
-                        std::cout << "SR";
-                        break;
-                    } else if (ea == ea_ccr) {
-                        std::cout << "CCR";
-                        break;
-                    } else if (ea == ea_reglist) {
-                        assert(eaw < ea_words);
-                        assert(inst.nea == 2);
-                        const auto list = eawords[eaw++];
-                        // Note: reversed for predecrement
-                        std::cout << reg_list_string(list, i == 0 && (inst.ea[1] >> 3) == ea_m_A_ind_pre);
-                        break;
-                    }
-
-                    if (inst.extra & extra_disp_flag) {
-                        assert(ea == ea_disp);
-                        assert(eaw < ea_words);
-                        int16_t n = eawords[eaw++];
-                        std::cout << "$" << hexfmt(start_pc + 2 + n);
-                    } else if (ea == ea_disp) {
-                        std::cout << "$" << hexfmt(start_pc + 2 + static_cast<int8_t>(inst.data));
-                    } else {
-                        std::cout << "#$" << hexfmt(inst.data);
-                    }
-                    break;
-                default:
-                    std::cout << "TODO: Handle EA=0x" << hexfmt(ea) << "\n";
-                    assert(0);
-                }
             }
 
-            assert(eaw == ea_words);
-
+            disasm(std::cout, start_pc, iwords, inst.ilen);
             std::cout << "\n";
 
             if (inst.type == inst_type::ILLEGAL)

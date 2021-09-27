@@ -34,6 +34,6 @@ add_custom_command(
   DEPENDS mktab
   )
 
-add_executable(amiemu main.cpp instruction.cpp instruction.h ${CMAKE_CURRENT_BINARY_DIR}/instruction_table.h)
+add_executable(amiemu main.cpp instruction.cpp instruction.h disasm.cpp disasm.h ${CMAKE_CURRENT_BINARY_DIR}/instruction_table.h)
 target_include_directories(amiemu PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(amiemu PRIVATE utils)
