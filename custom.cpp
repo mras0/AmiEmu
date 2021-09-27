@@ -910,6 +910,7 @@ public:
         const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
         const uint16_t colclock = s_.hpos >> 1;
 
+        uint8_t spriteidx[8];
         for (uint8_t spr = 0; spr < 8; ++spr) {
             if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_waiting && s_.sprite_vpos_start(spr) == s_.vpos) {
                 if (DEBUG_SPRITE)
@@ -923,10 +924,21 @@ public:
                 s_.spr_dma_states[spr] = sprite_dma_state::fetch_ctl;
             } else if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_active && s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == s_.hpos) {
                 if (DEBUG_SPRITE)
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Armed and HPOS matches!\n";
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Armed and HPOS ($" << hexfmt(s_.sprite_hpos_start(spr)) << ") matches!\n";
                 s_.spr_hold_a[spr] = s_.sprdata[spr];
                 s_.spr_hold_b[spr] = s_.sprdatb[spr];
                 s_.spr_hold_cnt[spr] = 16;
+            }
+
+            spriteidx[spr] = 0;
+            if (s_.spr_hold_cnt[spr]) {
+                if (s_.spr_hold_a[spr] & 0x8000)
+                    spriteidx[spr] |= 1;
+                if (s_.spr_hold_b[spr] & 0x8000)
+                    spriteidx[spr] |= 2;
+                s_.spr_hold_a[spr] <<= 1;
+                s_.spr_hold_b[spr] <<= 1;
+                --s_.spr_hold_cnt[spr];
             }
         }
 
@@ -958,23 +970,8 @@ public:
                     DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
 
 
-                uint8_t spriteidx[8];
                 uint8_t active_sprite = 0;
                 uint8_t active_sprite_group = 8;
-
-                for (uint8_t spr = 0; spr < 8; ++spr) {
-                    uint8_t idx = 0;
-                    if (s_.spr_hold_cnt[spr]) {
-                        if (s_.spr_hold_a[spr] & 0x8000)
-                            idx |= 1;
-                        if (s_.spr_hold_b[spr] & 0x8000)
-                            idx |= 2;
-                        s_.spr_hold_a[spr] <<= 1;
-                        s_.spr_hold_b[spr] <<= 1;
-                        --s_.spr_hold_cnt[spr];
-                    }
-                    spriteidx[spr] = idx;
-                }
 
                 // Sprites are only visible after write to BPL1DAT
                 if (s_.bpl1dat_written_this_line) {
