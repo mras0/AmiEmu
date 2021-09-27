@@ -42,25 +42,40 @@ int main(int argc, char* argv[])
         const unsigned steps_per_update = 10000;
         unsigned steps_to_update = 0;
 
-        uint64_t stop_inst = ~0ULL;
-        while (cpu.instruction_count() != stop_inst) {
+        std::vector<gui::event> events;        
+        for (bool quit = false; !quit;) {
             try {
+                if (!events.empty()) {
+                    auto evt = events[0];
+                    events.erase(events.begin());
+                    switch (evt.type) {
+                    case gui::event_type::quit:
+                        quit = true;
+                        break;
+                    case gui::event_type::keyboard:
+                        cias.keyboard_event(evt.keyboard.pressed, evt.keyboard.scancode);
+                        break;
+                    default:
+                        assert(0);
+                    }
+                }
+
                 cpu.step(custom.current_ipl());
                 custom.step();
-                if (auto f = custom.new_frame())
+
+                if (auto f = custom.new_frame()) {
                     g.update_image(f);
-                //if (cpu.instruction_count() == 34020703 - 10)
-                //    cpu.trace(&std::cout);
-                //if (cpu.state().pc == 0xFC0C00) {
-                //    cpu.trace(&std::cout);
-                //    stop_inst = cpu.instruction_count() + 5;
-                //}
-                //
+                    goto update;
+                }
                 if (!steps_to_update--) {
-                    if (!g.update())
-                        break;
+                update:
+                    auto new_events = g.update();
+                    assert(events.empty()); // events are comming too fast to process
+                    events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
                 }
+                //if (cpu.instruction_count() == 34289275 - 10)
+                //    cpu.trace(&std::cout);
             } catch (...) {
                 cpu.show_state(std::cerr);
                 throw;

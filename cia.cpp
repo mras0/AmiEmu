@@ -49,15 +49,46 @@ enum regnum {
     crb     = 0xF, // Control register B
 };
 
+// interrupt control register bit numbers
+constexpr uint8_t CIAICRB_TA     = 0;
+constexpr uint8_t CIAICRB_TB     = 1;
+constexpr uint8_t CIAICRB_ALRM   = 2;
+constexpr uint8_t CIAICRB_SP     = 3;
+constexpr uint8_t CIAICRB_FLG    = 4;
+constexpr uint8_t CIAICRB_IR     = 7; // Reading
+constexpr uint8_t CIAICRB_SETCLR = 7; // Writing
+
+// interrupt control register masks
+constexpr uint8_t CIAICRF_TA     = 1 << CIAICRB_TA;
+constexpr uint8_t CIAICRF_TB     = 1 << CIAICRB_TB;
+constexpr uint8_t CIAICRF_ALRM   = 1 << CIAICRB_ALRM;
+constexpr uint8_t CIAICRF_SP     = 1 << CIAICRB_SP;
+constexpr uint8_t CIAICRF_FLG    = 1 << CIAICRB_FLG;
+constexpr uint8_t CIAICRF_IR     = 1 << CIAICRB_IR;
+constexpr uint8_t CIAICRF_SETCLR = 1 << CIAICRB_SETCLR;
+
+// control register A bit numbers
+
+constexpr uint8_t CIACRAB_START   = 0; // 1 = start Timer A, 0 - stop Timer A. This bit is automatically reset(= 0) when underflow occurs during one - shot mode.
+constexpr uint8_t CIACRAB_PBON    = 1; // 1 = Timer A output on PB6, 0 = PB6 is normal operation.
+constexpr uint8_t CIACRAB_OUTMODE = 2; // 1 = toggle, 0 = pulse.
+constexpr uint8_t CIACRAB_RUNMODE = 3; // 1 = one-shot mode, 0 = continuous mode.
+constexpr uint8_t CIACRAB_LOAD    = 4; // 1 = force load (this ia a strobe input, there ia no data storage; bit 4 will always read back a zero and writing a 0 has no effect.)
+constexpr uint8_t CIACRAB_INMODE  = 5; // 1 = Timer A count positive CNT tranition, 0 = Timer A counts 02 pules.
+constexpr uint8_t CIACRAB_SPMODE  = 6; // 1 = Serial port=output (CNT is the source of the shift clock)
+constexpr uint8_t CIACRAB_TODIN   = 7; // 
+
+// control register A register masks
+
+constexpr uint8_t CIACRAF_START   = 1 << CIACRAB_START;
+constexpr uint8_t CIACRAF_PBON    = 1 << CIACRAB_PBON;
+constexpr uint8_t CIACRAF_OUTMODE = 1 << CIACRAB_OUTMODE;
+constexpr uint8_t CIACRAF_RUNMODE = 1 << CIACRAB_RUNMODE;
+constexpr uint8_t CIACRAF_LOAD    = 1 << CIACRAB_LOAD;
+constexpr uint8_t CIACRAF_INMODE  = 1 << CIACRAB_INMODE;
+constexpr uint8_t CIACRAF_SPMODE  = 1 << CIACRAB_SPMODE;
+constexpr uint8_t CIACRAF_TODIN   = 1 << CIACRAB_TODIN;
 #if 0
-/* interrupt control register bit numbers */
-#define CIAICRB_TA 0
-#define CIAICRB_TB 1
-#define CIAICRB_ALRM 2
-#define CIAICRB_SP 3
-#define CIAICRB_FLG 4
-#define CIAICRB_IR 7
-#define CIAICRB_SETCLR 7
 
 /* control register A bit numbers */
 #define CIACRAB_START 0
@@ -78,15 +109,6 @@ enum regnum {
 #define CIACRBB_INMODE0 5
 #define CIACRBB_INMODE1 6
 #define CIACRBB_ALARM 7
-
-/* interrupt control register masks */
-#define CIAICRF_TA (1L << CIAICRB_TA)
-#define CIAICRF_TB (1L << CIAICRB_TB)
-#define CIAICRF_ALRM (1L << CIAICRB_ALRM)
-#define CIAICRF_SP (1L << CIAICRB_SP)
-#define CIAICRF_FLG (1L << CIAICRB_FLG)
-#define CIAICRF_IR (1L << CIAICRB_IR)
-#define CIAICRF_SETCLR (1L << CIAICRB_SETCLR)
 
 /* control register A register masks */
 #define CIACRAF_START (1L << CIACRAB_START)
@@ -182,6 +204,7 @@ enum regnum {
 #define CIAF_DSKDIREC (1L << 1)
 #define CIAF_DSKSTEP (1L << 0)
 
+
 #endif
 
 }
@@ -194,11 +217,26 @@ public:
         : mem_handler_ { mem_handler }
         , rom_handler_ { rom_handler }
     {
-        assert(get_port_output(0, 0) == 0xff);
+        assert(s_[0].port_value(0) == 0xff);
         // Since all ports are set to input, OVL in CIA pra is high -> OVL set
         mem_handler_.register_handler(*this, 0xBF0000, 0x10000);
         rom_handler_.set_overlay(true);
         reset();
+    }
+
+    void step()
+    {
+        for (int i = 0; i < 2; ++i) {
+            //auto& s = s_[i];
+            // TODO: Increment timers
+
+        }
+
+        if (kbd_buffer_head_ != kbd_buffer_tail_ && kbd_ack_ && !(s_[0].cr[0] & CIACRAF_SPMODE)) {
+            kbd_ack_ = false;
+            s_[0].sdrdata = kbd_buffer_[kbd_buffer_tail_++ % sizeof(kbd_buffer_)];
+            s_[0].trigger_int(CIAICRB_SP);
+        }
     }
 
     uint8_t read_u8(uint32_t addr, uint32_t) override
@@ -233,26 +271,69 @@ public:
         assert(0);
     }
 
+    uint8_t active_irq_mask() const
+    {
+        return (!!(s_[0].icrdata & CIAICRF_IR)) | (!!(s_[1].icrdata & CIAICRF_IR)) << 1;
+    }
+
     void increment_tod_counter(uint8_t cia)
     {
         assert(cia < 2);
-        ++counters_[cia];
+        ++s_[cia].counter;
+    }
+
+    void keyboard_event(bool pressed, uint8_t raw)
+    {
+        assert(raw <= 0x7f);
+        // Bit0: 1=down/0=up, Bit1..7: ~scancore (i.e. bitwise not)
+        if (static_cast<uint8_t>(kbd_buffer_head_ - kbd_buffer_tail_) >= sizeof(kbd_buffer_))
+            throw std::runtime_error { "Keyboard buffer overflow" }; // FIXME
+        kbd_buffer_[(kbd_buffer_head_++) % sizeof(kbd_buffer_)] = (pressed & 1) | (~raw) << 1;
     }
 
 private:
     memory_handler& mem_handler_;
     rom_area_handler& rom_handler_;
-    uint8_t regs_[2][16];
-    uint32_t counters_[2];
-    uint32_t counter_latches_[2];
+    struct state {
+        uint8_t ports[2];
+        uint8_t ddr[2];
+        uint8_t cr[2];
+        uint8_t icrmask;
+        uint8_t icrdata;
+        uint8_t sdrdata;
+
+        uint32_t counter;
+        uint32_t counter_latch;
+
+
+        uint8_t port_value(uint8_t port) const
+        {
+            assert(port < 2);
+            return (ports[port] & ddr[port]) | (0xff & ~ddr[port]);
+        }
+
+        void trigger_int(uint8_t icrbit)
+        {
+            assert(icrbit <= CIAICRB_FLG);
+            uint8_t mask = 1 << icrbit;
+            if (icrmask & mask)
+                mask |= CIAICRF_IR;
+            icrdata |= mask;
+        }
+
+    } s_[2];
+    uint8_t kbd_buffer_[8];
+    uint8_t kbd_buffer_head_;
+    uint8_t kbd_buffer_tail_;
+    bool kbd_ack_;
 
     static constexpr uint32_t latch_active_mask = 0x8000'0000;
 
     void reset()
     {
-        memset(regs_, 0, sizeof(regs_));
-        memset(counters_, 0, sizeof(counters_));
-        memset(counter_latches_, 0, sizeof(counter_latches_));
+        memset(s_, 0, sizeof(s_));
+        kbd_buffer_head_ =  kbd_buffer_tail_ = 0;
+        kbd_ack_ = true;
     }
 
     static constexpr bool valid_address(uint32_t addr)
@@ -268,24 +349,35 @@ private:
     uint8_t handle_read(uint8_t idx, uint8_t reg)
     {
         assert(idx < 2 && reg < 16);
+        auto& s = s_[idx];
         switch (reg) {
         case pra:
         case prb:
             //std::cerr << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
-            return regs_[idx][reg];
+            return s.port_value(reg - pra);
         case ddra:
         case ddrb:
-            return regs_[idx][reg];
+            return s.ddr[reg-ddra];
         case todlo: {
-            const uint8_t val = (counter_latches_[idx] & latch_active_mask ? counter_latches_[idx] : counters_[idx]) & 0xff;
-            counter_latches_[idx] = 0; // Latch disabled
+            const uint8_t val = (s.counter_latch & latch_active_mask ? s.counter_latch : s.counter) & 0xff;
+            s.counter_latch = 0; // Latch disabled
             return val;
         }
         case todmid:
-            return ((counter_latches_[idx] & latch_active_mask ? counter_latches_[idx] : counters_[idx]) >> 8) & 0xff;
+            return ((s.counter_latch & latch_active_mask ? s.counter_latch : s.counter) >> 8) & 0xff;
         case todhi:
-            counter_latches_[idx] = latch_active_mask | (counters_[idx] & 0xffffff);
-            return (counter_latches_[idx] >> 16) & 0xff;
+            s.counter_latch = latch_active_mask | (s.counter & 0xffffff);
+            return (s.counter_latch >> 16) & 0xff;
+        case sdr:
+            return s.sdrdata;
+        case icr: {
+            const uint8_t val = s.icrdata;
+            s.icrdata = 0; // All bits are cleared on read
+            return val;
+        }
+        case cra:
+        case crb:
+            return s.cr[reg - cra];
         default:
             std::cerr << "[CIA] TODO: Handle read from CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
         }
@@ -295,14 +387,39 @@ private:
     void handle_write(uint8_t idx, uint8_t reg, uint8_t val)
     {
         assert(idx < 2 && reg < 16);
-        const uint8_t port_a_before = get_port_output(idx, 0);
+        auto& s = s_[idx];
+        const uint8_t port_a_before = s.port_value(0);
 
         switch (reg) {
         case pra:
         case prb:
+            s.ports[reg - pra] = val;
+            break;
         case ddra:
         case ddrb:
-            regs_[idx][reg] = val;
+            s.ddr[reg - ddra] = val;
+            break;
+        case sdr:
+            if (!(s.cr[0] & CIACRAF_SPMODE))
+                throw std::runtime_error { "SR not in output mode?" };
+            assert(s.cr[0] & CIACRAF_SPMODE); // SDR must be in output mode
+            kbd_ack_ = true;
+            s.sdrdata = val;
+            break; // Ignore value written (probably keyboard handshake)
+        case icr: {
+            const bool set = !!(val & CIAICRF_SETCLR);
+            auto& r = s.icrmask;
+            val &= 0x7f;
+            r &= ~val;
+            if (set)
+                r |= val;
+            else
+                r &= ~val;
+            break;
+        }
+        case cra:
+            assert(!(val & ~(CIACRAF_SPMODE))); // Not tested
+            s.cr[reg - cra] = val;
             break;
         default:
             std::cerr << "[CIA] Ignoring write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
@@ -310,7 +427,7 @@ private:
         }
 
         if (idx == 0) {
-            const uint8_t port_a_after = get_port_output(idx, 0);
+            const uint8_t port_a_after = s.port_value(0);
             const uint8_t port_a_diff = port_a_before ^ port_a_after;
             // OVL changed
             if (port_a_diff & 1)
@@ -320,12 +437,6 @@ private:
         }
     }
 
-    uint8_t get_port_output(uint8_t idx, uint8_t port)
-    {
-        assert(idx < 2 && port < 2);
-        const uint8_t ddr = regs_[idx][ddra + port];
-        return (regs_[idx][pra + port] & ddr) | (0xff & ~ddr);
-    }
 };
 
 cia_handler::cia_handler(memory_handler& mem_handler, rom_area_handler& rom_handler)
@@ -335,7 +446,22 @@ cia_handler::cia_handler(memory_handler& mem_handler, rom_area_handler& rom_hand
 
 cia_handler::~cia_handler() = default;
 
+void cia_handler::step()
+{
+    impl_->step();
+}
+
+uint8_t cia_handler::active_irq_mask() const
+{
+    return impl_->active_irq_mask();
+}
+
 void cia_handler::increment_tod_counter(uint8_t cia)
 {
     impl_->increment_tod_counter(cia);
+}
+
+void cia_handler::keyboard_event(bool pressed, uint8_t raw)
+{
+    impl_->keyboard_event(pressed, raw);
 }

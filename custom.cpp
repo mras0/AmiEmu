@@ -58,6 +58,22 @@
     X(BPL4DAT , 0x116 , 1) /* Bitplane 4 data (parallel-to-serial convert)            */ \
     X(BPL5DAT , 0x118 , 1) /* Bitplane 5 data (parallel-to-serial convert)            */ \
     X(BPL6DAT , 0x11A , 1) /* Bitplane 6 data (parallel-to-serial convert)            */ \
+    X(SPR0PTH , 0x120 , 1) /* Sprite 0 pointer (high 3 bits)                          */ \
+    X(SPR0PTL , 0x122 , 1) /* Sprite 0 pointer (low 15 bits)                          */ \
+    X(SPR1PTH , 0x124 , 1) /* Sprite 1 pointer (high 3 bits)                          */ \
+    X(SPR1PTL , 0x126 , 1) /* Sprite 1 pointer (low 15 bits)                          */ \
+    X(SPR2PTH , 0x128 , 1) /* Sprite 2 pointer (high 3 bits)                          */ \
+    X(SPR2PTL , 0x12A , 1) /* Sprite 2 pointer (low 15 bits)                          */ \
+    X(SPR3PTH , 0x12C , 1) /* Sprite 3 pointer (high 3 bits)                          */ \
+    X(SPR3PTL , 0x12E , 1) /* Sprite 3 pointer (low 15 bits)                          */ \
+    X(SPR4PTH , 0x130 , 1) /* Sprite 4 pointer (high 3 bits)                          */ \
+    X(SPR4PTL , 0x132 , 1) /* Sprite 4 pointer (low 15 bits)                          */ \
+    X(SPR5PTH , 0x134 , 1) /* Sprite 5 pointer (high 3 bits)                          */ \
+    X(SPR5PTL , 0x136 , 1) /* Sprite 5 pointer (low 15 bits)                          */ \
+    X(SPR6PTH , 0x138 , 1) /* Sprite 6 pointer (high 3 bits)                          */ \
+    X(SPR6PTL , 0x13A , 1) /* Sprite 6 pointer (low 15 bits)                          */ \
+    X(SPR7PTH , 0x13C , 1) /* Sprite 7 pointer (high 3 bits)                          */ \
+    X(SPR7PTL , 0x13E , 1) /* Sprite 7 pointer (low 15 bits)                          */ \
     X(COLOR00 , 0x180 , 1) /* Color table 00                                          */ \
     X(COLOR01 , 0x182 , 1) /* Color table 01                                          */ \
     X(COLOR02 , 0x184 , 1) /* Color table 02                                          */ \
@@ -305,6 +321,8 @@ public:
 
     void step()
     {
+        // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
+
         // First readble hpos that's interpreted as being on a new line is $005 (since it's resolution is half that of lowres pixels -> 20) 
         const unsigned virt_pixel = s_.hpos * 2 + 20;
         const unsigned disp_pixel = virt_pixel - hires_min_pixel;
@@ -322,7 +340,7 @@ public:
                 const auto he = s_.copper_inst[1] & 0xfe;
 
                 if ((s_.vpos & ve) >= (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he)) {
-                    std::cout << "Wait done $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
+                    //std::cout << "Wait done $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
                     s_.copper_inst_ofs = 0; // Fetch next instruction
                 }
 
@@ -413,6 +431,8 @@ public:
                 }
 
                 // TODO: Sprite
+                assert(!(s_.dmacon & DMAF_SPRITE));
+
                 // Copper
                 if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2) {
                     s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
@@ -423,13 +443,23 @@ public:
             } while (0);
         }
 
+        // CIA tick rate is 1/10th of (base) CPU speed
+        if (s_.hpos % 10 == 0) {
+            cia_.step();
+            const auto irq_mask = cia_.active_irq_mask();
+            if (irq_mask & 1)
+                s_.intreq |= INTF_PORTS;
+            if (irq_mask & 2)
+                s_.intreq |= INTF_EXTER;
+        }
+
         if (++s_.hpos == hpos_per_line) {
             s_.hpos = 0;
             s_.bpldat_shift_pixels = 0; // Any remaining pixels are lost, force re-read of bpldat
             cia_.increment_tod_counter(1);
             if ((s_.dmacon & DMAF_RASTER) && vert_disp) {
                 for (int bpl = 0; bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0); ++bpl) {
-                    assert(!(bpl & 1 ? s_.bplmod2 : s_.bplmod1));
+                    assert(!(bpl & 1 ? s_.bplmod2 : s_.bplmod1)); // Untested
                     s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;                    
                 }
             }
@@ -460,6 +490,9 @@ public:
             return (s_.vpos >> 8)&1;
         case VHPOSR:  // $006
             return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
+        case POTGOR:  // $016
+            // Don't spam in DiagROM
+            return 0xff;
         case SERDATR: // $018
             // Don't spam in DiagROM
             return 0xff;
@@ -526,6 +559,10 @@ public:
         }
         if (offset >= BPL1DAT && offset <= BPL6DAT) {
             s_.bpldat[(offset - BPL1DAT) / 2] = val;
+            return;
+        }
+        if (offset >= SPR0PTH && offset <= SPR7PTL) {
+            //write_partial(s_.sprpt[(offset - SPR0PTH) / 4]);
             return;
         }
         if (offset >= COLOR00 && offset <= COLOR31) {
