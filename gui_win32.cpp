@@ -1533,7 +1533,7 @@ private:
                     SetTextColor(ps.hdc, act.write ? RGB(n, 0, 0) : RGB(n, n, n));
                     char msg[16];
                     n = _snprintf(msg, sizeof(msg), "DF%d: $%02X", i, act.track);
-                    TextOutA(ps.hdc, 30 + 100 * i, height_ + 5, msg, n);
+                    TextOutA(ps.hdc, 30 + 100 * i, height_ * gfx_scale + 5, msg, n);
                 }
             }
 
