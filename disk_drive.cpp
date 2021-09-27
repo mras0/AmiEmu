@@ -207,7 +207,7 @@ public:
             dest += MFM_SECTOR_SIZE_WORDS*2;
         }
         // gap
-        memset(dest, 0xaa, MFM_TRACK_SIZE_WORDS * 2 - 2 * MFM_SECTOR_SIZE_WORDS * NUMSECS);
+        memset(dest, 0xaa, MFM_GAP_SIZE_WORDS * 2);
     }
 
     void set_disk_activity_handler(const disk_activity_handler& handler)

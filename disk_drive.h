@@ -15,6 +15,7 @@ constexpr uint8_t DSKF_ALL        = 0xf << 2;
 
 constexpr uint16_t MFM_SECTOR_SIZE_WORDS = 0x220;  // Number of words in a MFM sector
 constexpr uint16_t MFM_TRACK_SIZE_WORDS  = 0x1900; // Number of words in a MFM track
+constexpr uint16_t MFM_GAP_SIZE_WORDS    = 0x1900 - 11 * MFM_SECTOR_SIZE_WORDS;
 
 class state_file;
 

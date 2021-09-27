@@ -1622,11 +1622,19 @@ public:
             cia_.active_drive().read_mfm_track(s_.mfm_track);
             s_.dskread = true;
             s_.dskwait = 0;
-            // If the program requests a full track, give it in order (buggy loaders, e.g. desert dream)
-            // But e.g. Rink-A-Dink (using a Rob Northen loader) to be able to do a short read (of the sector)
-            // and then the next sector will be the subsequent one (more or less)
-            if (nwords >= MFM_TRACK_SIZE_WORDS)
-                s_.mfm_pos = 0;
+
+            // TODO: More correct drive emulation. (Probably with real speed, but we still want "turbo" mode supported)
+            // 
+            // Note: This is tricky, so be sure to retest if making changes
+            // Zool expects to be able to start a new read with no gap between sectors (i.e. don't advance mfmpos any more here)
+            // Rink-a-dink (using a Rob Northen loader) expects to be able to do a short read of $20 words (the header) and then the subsequent sector knowing its number
+            // RSI Mega demo 1 is also picky - Reads $18c9 words (less than a full track) and doesn't like it if it can't get a good "fit"
+            // Other loaders that have been troublesome:  batman, obliterator, james pond 1, speedball 2, desert dream
+            // Flower/Anarchy doesn't work if floppy speed is > 100%
+            if (nwords >= MFM_TRACK_SIZE_WORDS - MFM_GAP_SIZE_WORDS)
+                s_.mfm_pos = 0; // If the loader is able to handle a full track (minus the gap) then give it a clean fit to work around any issues
+            else
+                s_.mfm_pos %= MFM_TRACK_SIZE_WORDS; // Otherwise let it think that it's processing data as fast as possible (no gaps)
             return false;
         }
 
