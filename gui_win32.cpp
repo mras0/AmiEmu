@@ -327,6 +327,12 @@ public:
         SetFocus(hwnd_);
     }
 
+    ~impl()
+    {
+        if (hwnd_)
+            DestroyWindow(hwnd_);
+    }
+
     std::vector<event> update()
     {
         MSG msg;

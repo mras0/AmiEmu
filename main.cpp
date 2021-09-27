@@ -344,7 +344,7 @@ int main(int argc, char* argv[])
                         std::cout << "DF0: Ejecting\n";
                         df0.insert_disk(std::vector<uint8_t>()); // Eject any existing disk
                         if (evt.disk_inserted.filename[0]) {
-                            disk_chosen_countdown = 2'000'000;
+                            disk_chosen_countdown = 25; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
                             std::cout << "Reading " << evt.disk_inserted.filename << "\n";
                             pending_disk = read_file(evt.disk_inserted.filename);
                         }
@@ -440,6 +440,12 @@ int main(int argc, char* argv[])
 
                 if (auto f = custom.new_frame()) {
                     g.update_image(f);
+                    if (disk_chosen_countdown) {
+                        if (--disk_chosen_countdown == 0) {
+                            std::cout << "DF0: Inserting disk\n";
+                            df0.insert_disk(std::move(pending_disk));
+                        }
+                    }
                     goto update;
                 }
                 if (!steps_to_update--) {
@@ -450,12 +456,6 @@ int main(int argc, char* argv[])
                     assert(events.empty()); // events are comming too fast to process
                     events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
-                }
-                if (disk_chosen_countdown) {
-                    if (--disk_chosen_countdown == 0) {
-                        std::cout << "DF0: Inserting disk\n";
-                        df0.insert_disk(std::move(pending_disk));
-                    }
                 }
             } catch (const std::exception& e) {
 #ifdef TRACE_LOG
