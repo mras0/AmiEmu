@@ -781,6 +781,10 @@ struct custom_state {
     uint16_t ddfcycle;
     uint16_t ddfend;
     bool long_frame;
+    uint16_t bplmod1_pending;
+    uint16_t bplmod2_pending;
+    uint8_t bplmod1_countdown;
+    uint8_t bplmod2_countdown;
 
     bool rmb_pressed;
     uint8_t cur_mouse_x;
@@ -2182,6 +2186,19 @@ public:
             s_.bltblockingcpu = 0;
         }
 
+        if (!(s_.hpos & 1) && (s_.bplmod1_countdown|s_.bplmod2_countdown)) {
+            if (s_.bplmod1_countdown && --s_.bplmod1_countdown == 0) {
+                if (DEBUG_BPL)
+                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPLMOD1 change taking effect new=$" << hexfmt(s_.bplmod1_pending) << " old=$" << hexfmt(s_.bplmod1) << "\n";
+                s_.bplmod1 = s_.bplmod1_pending;
+            }
+            if (s_.bplmod2_countdown && --s_.bplmod2_countdown == 0) {
+                if (DEBUG_BPL)
+                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPLMOD2 change taking effect new=$" << hexfmt(s_.bplmod2_pending) << " old=$" << hexfmt(s_.bplmod2) << "\n";
+                s_.bplmod2 = s_.bplmod2_pending;
+            }
+        }
+
         if (s_.copstate == copper_state::jmp_delay1 && !copper_dma && !(s_.hpos & 3)) {
             // vAmigaTS jump1b test
             // http://eab.abime.net/showpost.php?p=832397&postcount=118
@@ -2617,10 +2634,25 @@ public:
         case BPLCON3: // $106
             return;
         case BPLMOD1: // $108
-            s_.bplmod1 = val & 0xfffe;
+            val &= 0xfffe;
+            // BPLxMOD changes (by copper atleast) only take effect 2 CCKs later
+            // vAmigaTS Agnus/BPLMOD/bplmod1-3
+            if (val != s_.bplmod1 || val != s_.bplmod1_pending) {
+                if (s_.bplmod1_countdown)
+                    DBGOUT << "Untested: Countdown already in progress while changing BPL1MOD\n";
+                s_.bplmod1_pending = val;
+                s_.bplmod1_countdown = 2;
+            }
             return;
         case BPLMOD2: // $10A
-            s_.bplmod2 = val & 0xfffe;
+            val &= 0xfffe;
+            // See comment for BPL1MOD
+            if (val != s_.bplmod2 || val != s_.bplmod2_pending) {
+                if (s_.bplmod2_countdown)
+                    DBGOUT << "Untested: Countdown already in progress while changing BPL2MOD\n";
+                s_.bplmod2_pending = val;
+                s_.bplmod2_countdown = 2;
+            }
             return;
         case BPLCON4: // $10C:
         case 0x0F8:  // BPL7PTH
@@ -2685,7 +2717,6 @@ private:
     // bitplane debugging (don't need to be saved)
     int rem_pixels_odd_;
     int rem_pixels_even_;
-
 
     uint16_t chip_read(uint32_t addr)
     {
@@ -2866,7 +2897,6 @@ uint16_t custom_handler::impl::internal_read(uint16_t reg)
         return s_.bplcon1;
     case BPLCON2:
         return s_.bplcon2;
-    //case BPLCON3:
     case BPLMOD1:
         return s_.bplmod1;
     case BPLMOD2:
