@@ -56,9 +56,9 @@
     X(BLTDPTH  , 0x054 , 1) /* Blitter pointer to destination D (high 3 bits)          */ \
     X(BLTDPTL  , 0x056 , 1) /* Blitter pointer to destination D (low 15 bits)          */ \
     X(BLTSIZE  , 0x058 , 1) /* Blitter start and size (window width,height)            */ \
-    X(BLTCON0L , 0x05A , 1) /* Blitter control 0, lower 8 bits (minterms)              */ \
-    X(BLTSIZV  , 0x05C , 1) /* Blitter V size (for 15 bit vertical size)               */ \
-    X(BLTSIZH  , 0x05E , 1) /* Blitter H size and start (for 11 bit H size)            */ \
+    X(BLTCON0L , 0x05A , 1) /* Blitter control 0, lower 8 bits (minterms) (ECS only)   */ \
+    X(BLTSIZV  , 0x05C , 1) /* Blitter V size (for 15 bit vertical size) (ECS only)    */ \
+    X(BLTSIZH  , 0x05E , 1) /* Blitter H size and start (for 11 bit H size) (ECS only) */ \
     X(BLTCMOD  , 0x060 , 1) /* Blitter modulo for source C                             */ \
     X(BLTBMOD  , 0x062 , 1) /* Blitter modulo for source B                             */ \
     X(BLTAMOD  , 0x064 , 1) /* Blitter modulo for source A                             */ \
@@ -2417,7 +2417,6 @@ public:
     {
         offset &= 0xffe;
 
-        //std::cerr << "Write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
         auto write_partial = [offset, &val](uint32_t& r) {
             if (offset & 2) {
                 //assert(!(val & 1)); // Blitter pointers (and modulo) ignore bit0
@@ -2537,13 +2536,6 @@ public:
         }
 
         switch (offset) {
-        case BLTDDAT: // $000
-        case DMACONR: // $002
-        case VPOSR:   // $004
-        case VHPOSR:  // $006
-        case INTREQR: // $01E
-            // Don't spam if RMW instructions used for these registers
-            return;
         case DSKPTH: // $020:
             s_.dskpt = val << 16 | (s_.dskpt & 0xffff);
             if (DEBUG_DISK)
@@ -2588,10 +2580,6 @@ public:
                 serial_data_handler_(numbits, val & ((1 << numbits) - 1));
             }
             return;
-        case SERPER:  // $032
-        case POTGO:   // $034 
-        case JOYTEST: // $036
-            return;   // Ignore for now
         case BLTCON0:
             s_.bltcon0 = val;
             s_.blitline_ashift = s_.bltcon0 >> BC0_ASHIFTSHIFT;
@@ -2635,8 +2623,6 @@ public:
         case BLTBMOD:
             s_.bltmod[1] = val & ~1U;
             return;
-        case 0x068: // ??
-            return;
         case BLTAMOD:
             s_.bltmod[0] = val & ~1U;
             return;
@@ -2658,10 +2644,6 @@ public:
         case BLTADAT:
             s_.bltdat[0] = val;
             return;
-        case 0x076: // ?
-        case 0x078: // SPRHDAT (AGA)
-        case 0x07A: // BPLHDAT (AGA)
-            return; // Ignore for now
         case DSKSYNC: // $07E
             s_.dsksync = val;
             return;
@@ -2711,8 +2693,6 @@ public:
         case BPLCON2: // $104
             s_.bplcon2 = val;
             return;
-        case BPLCON3: // $106
-            return;
         case BPLMOD1: // $108
             val &= 0xfffe;
             // BPLxMOD changes (by copper atleast) only take effect 2 CCKs later
@@ -2734,22 +2714,55 @@ public:
                 s_.bplmod2_countdown = 2;
             }
             return;
-        case BPLCON4: // $10C:
-        case 0x0F8:  // BPL7PTH
-        case 0x0FA:  // BPL7PTL
-        case 0x0FC:  // BPL8PTH
-        case 0x0FE:  // BPL8PTL
-        case 0x11C:  // BPL7DAT
-        case 0x11E:  // BPL8DAT
-        case 0x1C0:  // HTOTAL (ignored unless VARBEAMEN=1)
-        case 0x1C8:  // VTOTAL
-        case 0x1CC:  // VBSTRT
-        case 0x1CE:  // VBSTOP
+
+        //
+        // Ignored registers
+        //
+
+        // Don't spam if RMW instructions used for R/O registers
+        case BLTDDAT:  // $000
+        case DMACONR:  // $002
+        case VPOSR:    // $004
+        case VHPOSR:   // $006
+        case INTREQR:  // $01E
+
+        // These should be implemented at some point
+        case SERPER:   // $032
+        case POTGO:    // $034
+        case JOYTEST:  // $036
+
+        case BLTCON0L: // $05A (avoid spamming warnings in Cryptoburners - The Hunt for 7th October)
+        case 0x068:    // ??
+        case 0x076:    // ?
+        case 0x078:    // SPRHDAT (AGA)
+        case 0x07A:    // BPLHDAT (AGA)
+        case 0x0F8:    // BPL7PTH
+        case 0x0FA:    // BPL7PTL
+        case 0x0FC:    // BPL8PTH
+        case 0x0FE:    // BPL8PTL
+        case BPLCON3:  // $106
+        case BPLCON4:  // $10C
+        case 0x11C:    // BPL7DAT
+        case 0x11E:    // BPL8DAT
+        case 0x1C0:    // HTOTAL (ignored unless VARBEAMEN=1)
+        case 0x1C8:    // VTOTAL
+        case 0x1CC:    // VBSTRT
+        case 0x1CE:    // VBSTOP
         case BEAMCON0: // $1DC
-        case DIWHIGH: // $1E4
-        case FMODE:   // $1FC
-        case 0x1fe:   // NO-OP
+        case DIWHIGH:  // $1E4
+        case FMODE:    // $1FC
+        case 0x1fe:    // NO-OP
+            if (debug_flags) // Don't ignore if debugging is enabled
+                break;
             return;
+        }
+
+        static uint8_t warned[0x100];
+        if (!debug_flags && offset < 0x200) {
+            if (warned[offset >> 1] == 0xff)
+                return;
+            if (++warned[offset >> 1] == 0xff)
+                std::cerr << "Disabling warnings for writes to " << custom_regname(offset) << "\n";
         }
         std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << custom_regname(offset) << ")"
                   << " val $" << hexfmt(val) << "\n";
