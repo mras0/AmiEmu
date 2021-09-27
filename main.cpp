@@ -403,8 +403,10 @@ int main(int argc, char* argv[])
             if (!cpu_active)
                 return;
             assert(size == 1 || size == 2); (void)size;
-            if (addr >= min_rom_addr)
+            if (addr >= min_rom_addr) {
+                cycles_todo += 4;
                 return;
+            }
             cycles_todo += 2;
             do_all_custom_cylces();
             while (!custom_step.free_chip_cycle) {
@@ -701,8 +703,6 @@ unknown_command:
                         cstep(false);
                     } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
                 }
-                else
-                    do_all_custom_cylces();
     
 #ifdef TRACE_LOG
                 if (cpu.instruction_count() == trace_start_inst) {
