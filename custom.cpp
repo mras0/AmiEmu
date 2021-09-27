@@ -505,16 +505,10 @@ public:
             s_.bltpt[2] -= s_.bltmod[2];
         };
 
-
         for (uint16_t cnt = 0; cnt < s_.blth; ++cnt) {
             const uint32_t addr = s_.bltpt[2];
-            // blitter_read
             s_.bltdat[2] = mem_.read_u16(addr);
-
-		    // blitter_line
             s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> ashift, (s_.bltdat[1] & 1) ? 0xFFFF : 0, s_.bltdat[2]);
-
-            // blitter_line_proc
             s_.bltpt[0] += sign ? s_.bltmod[1] : s_.bltmod[0];
 
             if (!sign) {
@@ -543,11 +537,7 @@ public:
             } 
 
             sign = static_cast<int16_t>(s_.bltpt[0]) <= 0;
-
-
-            // blitter_nxline
             s_.bltdat[1] = rol(s_.bltdat[1], 1);
-            // blitter_write
             // First pixel is written to D
             mem_.write_u16(cnt ? addr : s_.bltpt[3], s_.bltdat[3]);
         }
@@ -890,7 +880,6 @@ public:
         };
 
         if (offset >= COP1LCH && offset <= COP2LCL) {
-            std::cerr << "Update register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
             if (offset == COP2LCL && !val) {
                 std::cerr << "HACK: Ignoring write of 0 to COP2LCL\n";
                 return;
@@ -924,6 +913,8 @@ public:
                 serial_data_handler_(numbits, val & ((1 << numbits) - 1));
             }
             return;
+        case POTGO: // $034 
+            return; // Ignore for now
         case BLTCON0:
             s_.bltcon0 = val;
             return;
@@ -990,8 +981,7 @@ public:
             s_.copper_inst_ofs = 0;
             s_.copper_pt = s_.coplc[1];
             TODO_ASSERT(s_.copper_pt);
-            //pause_copper();
-            break;
+            return;
         case DIWSTRT: // $08E
             s_.diwstrt = val;
             return;
@@ -1028,7 +1018,7 @@ public:
         case BPLCON1: // $102
             return;
         case BPLCON2: // $104
-            break;
+            return; // Ignore for now
         case BPLCON3: // $106
             return;
         case BPLMOD1: // $108
