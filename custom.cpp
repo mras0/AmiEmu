@@ -881,7 +881,7 @@ public:
     {
         cia_.show_debug_state(os);
         os << "DSK PT: " << hexfmt(s_.dskpt) << " LEN: " << hexfmt(s_.dsklen_act) << " ADK: " << hexfmt(s_.adkcon) << " SYNC: " << hexfmt(s_.dsksync) << "\n";
-        os << "DMACON: " << hexfmt(s_.dmacon) << " INTENA: " << hexfmt(s_.intena) << " INTREQ: " << hexfmt(s_.intreq) << " VPOS: " << hexfmt(s_.vpos) << " HPOS: " << hexfmt(s_.hpos) << "\n";
+        os << "DMACON: " << hexfmt(s_.dmacon) << " INTENA: " << hexfmt(s_.intena) << " INTREQ: " << hexfmt(s_.intreq) << " VPOS: " << hexfmt(s_.vpos) << " HPOS: " << hexfmt(s_.hpos) << " (DMA: " << hexfmt(s_.hpos>>1,2) << ")\n";
         os << "INT: " << hexfmt(s_.intena & s_.intreq, 4) << " IPL: " << hexfmt(current_ipl()) << "\n";
         os << "COP1LC: " << hexfmt(s_.coplc[0]) << " COP2LC: " << hexfmt(s_.coplc[1]) << " COPPTR: " << hexfmt(s_.copper_pt) << "\n";
         os << "DIWSTRT: " << hexfmt(s_.diwstrt) << " DIWSTOP: " << hexfmt(s_.diwstop) << " DDFSTRT: " << hexfmt(s_.ddfstrt) << " DDFSTOP: " << hexfmt(s_.ddfstop) << "\n";
@@ -1993,6 +1993,11 @@ public:
         switch (offset) {
         case BLTDDAT: // $000
             return; // Dummy address
+        case DMACONR: // $002
+        case VPOSR:   // $004
+        case VHPOSR:  // $006
+            // Don't spam if RMW instructions used for these registers
+            return;
         case DSKPTH: // $020:
             s_.dskpt = val << 16 | (s_.dskpt & 0xffff);
             if (DEBUG_DISK)

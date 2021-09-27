@@ -371,6 +371,7 @@ int main(int argc, char* argv[])
         constexpr uint32_t invalid_pc = ~0U;
         enum {wait_none, wait_next_inst, wait_exact_pc, wait_non_rom_pc, wait_vpos} wait_mode = wait_none;
         uint32_t wait_arg = 0;
+        std::vector<uint32_t> breakpoints;
         bool debug_mode = false;
         custom_handler::step_result custom_step {};
         m68000::step_result cpu_step {}; // Records memory/cycle "deficit" of CPU compared to custom chips
@@ -424,6 +425,7 @@ int main(int argc, char* argv[])
                     g.set_debug_windows_visible(true);
                     g.update_image(custom_step.frame);
                     cpu.show_state(std::cout);
+                    disasm_stmts(mem, cpu_step.current_pc, 1);
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
                         std::string line;
@@ -447,8 +449,25 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "e") {
                             custom.show_registers(std::cout);
                         } else if (args[0] == "f") {
-                            wait_mode = wait_non_rom_pc;
-                            break;
+                            if (args.size() > 1) {
+                                auto [valid, pc] = from_hex(args[1]);
+                                if (valid && !(pc & 1)) {
+                                    if (auto it = std::find(breakpoints.begin(), breakpoints.end(), pc); it != breakpoints.end()) {
+                                        breakpoints.erase(it);
+                                        std::cout << "Breakpoint removed\n";
+                                    } else {
+                                        breakpoints.push_back(pc);
+                                    }
+                                } else {
+                                    std::cerr << "Invalid address\n";
+                                }
+                            } else {
+                                wait_mode = wait_non_rom_pc;
+                                break;
+                            }
+                        } else if (args[0] == "fd") {
+                            breakpoints.clear();
+                            std::cout << "All breakpoints deleted\n";
                         } else if (args[0] == "g") {
                             break;
                         } else if (args[0] == "m") {
@@ -508,6 +527,52 @@ int main(int argc, char* argv[])
                                 }
                             } else {
                                 std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
+                            }
+                        } else if (args[0] == "W") {
+                            if (args.size() > 2) {
+                                auto [avalid, address] = from_hex(args[1]);
+                                if (avalid) {
+                                    for (uint32_t i = 2; i < args.size(); ++i) {
+                                        const auto& a = args[i];
+                                        uint8_t size = 0;
+                                        if (a.length() == 2)
+                                            size = 1;
+                                        else if (a.length() == 4)
+                                            size = 2;
+                                        else if (a.length() == 8)
+                                            size = 4;
+                                        else {
+                                            std::cerr << "Invalid length for value \"" << a << "\n";
+                                            break;
+                                        }
+                                        auto [dvalid, data] = from_hex(args[i]);
+                                        if (!dvalid) {
+                                            std::cerr << "Invalid value \"" << a << "\n";
+                                            break;
+                                        }
+                                        if (size > 1 && (address & 1)) {
+                                            std::cerr << "Won't write to odd address " << hexfmt(address) << "\n";
+                                            break;
+                                        }
+                                        switch (size) {
+                                        case 1:
+                                            mem.write_u8(address, static_cast<uint8_t>(data));
+                                            break;
+                                        case 2:
+                                            mem.write_u16(address, static_cast<uint16_t>(data));
+                                            break;
+                                        case 4:
+                                            mem.write_u32(address, data);
+                                            break;
+                                        }
+                                        std::cout << "Wrote $" << hexfmt(data, size * 2) << " to $" << hexfmt(address) << "\n";
+                                        address += size;
+                                    }
+                                } else {
+                                    std::cerr << "Invalid adddress\n";
+                                }
+                            } else {
+                                std::cerr << "Missing arguments address, value(s)\n";
                             }
                         } else if (args[0] == "write_mem") {
                             if (args.size() > 1) {
@@ -595,10 +660,14 @@ unknown_command:
                     mem.track_mem_access(nullptr);
                     assert(cpu_step.clock_cycles >= 4 * cpu_step.mem_accesses); 
                    
-                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu.state().pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu.state().pc < 0xf00000)) {
+                    if (wait_mode == wait_next_inst || (wait_mode == wait_exact_pc && cpu_step.current_pc == wait_arg) || (wait_mode == wait_non_rom_pc && cpu_step.current_pc < 0xf00000)) {
                         g.set_active(false);
                         debug_mode = true;
                         wait_mode = wait_none;
+                    } else if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
+                        g.set_active(false);
+                        debug_mode = true;
+                        std::cout << "Breakpoint hit\n";
                     }
 
                     // Only count chip accesses (for now, this is everything non-rom)

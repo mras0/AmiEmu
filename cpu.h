@@ -166,6 +166,8 @@ public:
     ~m68000();
 
     struct step_result {
+        uint32_t last_pc;
+        uint32_t current_pc;
         uint8_t clock_cycles;
         uint8_t mem_accesses;
     };
