@@ -51,6 +51,17 @@ target_link_libraries(test68k PRIVATE utils m68k)
 add_executable(testasm testasm.cpp)
 target_link_libraries(testasm PRIVATE utils m68k)
 
+add_executable(m68kasm m68kasm.cpp)
+target_link_libraries(m68kasm PRIVATE utils m68k)
+
+set(EXPROM_BASE 40)
+
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
+  COMMAND m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm -ofmt header -org ${EXPROM_BASE} -o ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
+  DEPENDS m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm
+  )
+
 add_executable(amiemu
     main.cpp
     cia.cpp cia.h
@@ -59,5 +70,10 @@ add_executable(amiemu
     gui_win32.cpp gui.h
     debug.cpp debug.h
     wavedev_win32.cpp wavedev.h
+    exprom.asm
+    ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
     )
+set_source_files_properties(exprom.asm PROPERTIES HEADER_FILE_ONLY TRUE)
 target_link_libraries(amiemu PRIVATE utils m68k)
+target_include_directories(amiemu PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(amiemu PRIVATE EXPROM_BASE=0x${EXPROM_BASE})

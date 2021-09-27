@@ -98,3 +98,28 @@ std::string trim(const std::string& line)
         ;
     return line.substr(s, e + 1 - s);
 }
+
+
+std::pair<bool, uint32_t> from_hex(const char* s)
+{
+    if (!*s)
+        return { false, 0 };
+    uint32_t val = 0;
+    char c;
+    int len = 0;
+    while ((c = *s++) != '\0') {
+        if (++len > 8)
+            return { false, 0 };
+        uint32_t d;
+        if (c >= '0' && c <= '9')
+            d = c - '0';
+        else if (c >= 'A' && c <= 'F')
+            d = c - 'A' + 10;
+        else if (c >= 'a' && c <= 'f')
+            d = c - 'a' + 10;
+        else
+            return { false, 0 };
+        val = val << 4 | d;
+    }
+    return { true, val };
+}
