@@ -8,6 +8,8 @@
 
 //#define KEYBOARD_DEBUG
 
+// Additional info here: https://ist.uwaterloo.ca/~schepers/MJK/cia6526.html (A Software Model of the CIA6526 - Wolfgang Lorenz)
+
 namespace {
 
 // CIAA Port A: /FIR1 /FIR0  /RDY /TK0  /WPRO /CHNG /LED  OVL
@@ -155,6 +157,9 @@ constexpr uint8_t CIAF_DSKSTEP  = 1 << CIAB_DSKSTEP;
 
 constexpr uint8_t CIAF_ALL_DSKSEL = CIAF_DSKSEL0 | CIAF_DSKSEL1 | CIAF_DSKSEL2 | CIAF_DSKSEL3;
 
+// Two clocks after bit 0 in the CRA has been set to 1, the timer will start counting from its current value back to zero
+constexpr uint8_t cia_start_delay = 2;
+
 #if 0
 
 /* control register B INMODE masks */
@@ -218,6 +223,11 @@ public:
             auto& s = s_[i];
             for (int t = 0; t < 2; ++t) {
                 if (s.cr[t] & CIACRAF_START) {
+                    if (s.start_delay[t]) {
+                        --s.start_delay[t];
+                        continue;
+                    }
+
                     if (--s.timer_val[t] == 0) {
                         s.timer_val[t] = s.timer_latch[t];
                         if (s.cr[t] & CIACRAF_RUNMODE)
@@ -380,6 +390,7 @@ private:
 
         uint16_t timer_latch[2];
         uint16_t timer_val[2];
+        uint8_t start_delay[2];
 
         uint8_t port_input[2];
 
@@ -396,6 +407,31 @@ private:
             if (icrmask & mask)
                 mask |= CIAICRF_IR;
             icrdata |= mask;
+        }
+
+        void tbhi_write(uint8_t index, uint8_t tbhi_val)
+        {
+            assert(index < 2);
+            auto& latch = timer_latch[index];
+            auto& val = timer_val[index];
+            auto& creg = cr[index];
+
+            latch = (latch & 0xff) | tbhi_val << 8;
+
+            // The timer latch is loaded into the timer on any timer underflow, on a force load, or following a write to the high byte of the prescalar
+            // // while the timer is stopped. If the timer is running, a write to the high byte will load the timer latch but not the counter.
+            // (HW reference manual)
+
+            if (!(creg & CIACRBF_START))
+                val = latch;
+
+            // In one-shot mode, a write to timer-high (register 5 for timer A, register 7 for Timer B) will transfer the timer latch to the counter and initiate
+            // counting regardless of the start bit.
+            if (creg & CIACRBF_RUNMODE) {
+                val = latch; // Start timer
+                creg |= CIACRBF_START;
+                start_delay[index] = cia_start_delay + 1;
+            }
         }
 
     } s_[2];
@@ -511,22 +547,13 @@ private:
             s.timer_latch[0] = (s.timer_latch[0] & 0xff00) | val;
             break;
         case tahi:
-            s.timer_latch[0] = (s.timer_latch[0] & 0xff) | val << 8;
-            if (s.cr[0] & CIACRAF_RUNMODE) {
-                // In one-shot mode, a write to timer-high (register 5 for timer A, register 7 for Timer B) will transfer the timer latch to the counter and initiate counting regardless of the start bit.
-                s.timer_val[0] = s.timer_latch[0]; // Start timer
-                s.cr[0] |= CIACRAF_START;
-            }
+            s.tbhi_write(0, val);
             break;
         case tblo:
             s.timer_latch[1] = (s.timer_latch[1] & 0xff00) | val;
             break;
         case tbhi:
-            s.timer_latch[1] = (s.timer_latch[1] & 0xff) | val << 8;
-            if (s.cr[1] & CIACRBF_RUNMODE) {
-                s.timer_val[1] = s.timer_latch[1]; // Start timer
-                s.cr[1] |= CIACRBF_START;
-            }
+            s.tbhi_write(1, val);
             break;
         case todlo:
             if (s.cr[1] & CIACRBF_ALARM)
@@ -566,11 +593,10 @@ private:
             break;
         }
         case cra:
-            assert(!(val & (CIACRAF_PBON | CIACRAF_OUTMODE | CIACRAF_INMODE))); // Not tested
-            if (val & CIACRAF_LOAD) {
-                val &= ~CIACRAF_LOAD;
-                s.timer_val[0] = s.timer_latch[0];
+            if (val & (CIACRAF_PBON | CIACRAF_OUTMODE | CIACRAF_INMODE)) {
+                std::cerr << "[CIA] Warning: Unsupported write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
             }
+
             if (idx == 0 && !(s.cr[0] & CIACRAF_SPMODE) && (val & CIACRAF_SPMODE)) {
                 if (!kbd_.ack_) {
 #ifdef KEYBOARD_DEBUG
@@ -579,13 +605,17 @@ private:
                     kbd_.ack_ = true;
                 }
             }
-            s.cr[reg - cra] = val;
-            break;
+            goto cr_common;
         case crb:
-            assert(!(val & (CIACRBF_PBON | CIACRBF_OUTMODE | CIACRBF_INMODE0 | CIACRBF_INMODE1))); // Not tested
+            if (val & (CIACRBF_PBON | CIACRBF_OUTMODE | CIACRBF_INMODE0 | CIACRBF_INMODE1)) {
+                std::cerr << "[CIA] Warning: Unsupported write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
+            }
+cr_common:
+            if ((val & CIACRAF_START) && !(s.cr[reg - cra] & CIACRAF_START))
+                s.start_delay[reg - cra] = cia_start_delay;
             if (val & CIACRAF_LOAD) {
                 val &= ~CIACRAF_LOAD;
-                s.timer_val[1] = s.timer_latch[1];
+                s.timer_val[reg - cra] = s.timer_latch[reg - cra];
             }
             s.cr[reg - cra] = val;
             break;
