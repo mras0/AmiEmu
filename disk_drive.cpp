@@ -4,9 +4,8 @@
 #include "ioutil.h"
 #include "memory.h"
 
-#include <iostream>
-
 namespace {
+
 constexpr uint16_t NUMSECS        = 11;                  // sectors per track
 constexpr uint16_t TD_SECTOR      = 512;                 // bytes per sector
 constexpr uint16_t TRACK_SIZE     = NUMSECS*TD_SECTOR;   // bytes per track
@@ -53,7 +52,7 @@ public:
 
     void insert_disk(std::vector<uint8_t>&& data)
     {
-        if (data.size() != DISK_SIZE) {
+        if (data.size() != 0 && data.size() != DISK_SIZE) {
             throw std::runtime_error { "Invalid disk size $" + hexstring(data.size()) };
         }
         data_ = std::move(data);
@@ -62,13 +61,15 @@ public:
     uint8_t cia_state() const
     {
         uint8_t flags = DSKF_ALL;
-        if (data_.empty())
-            flags &= ~DSKF_CHANGE;
-        if (cyl_ == 0)
-            flags &= ~DSKF_TRACK0;
-        // TODO: DSKF_PROT
-        if (motor_)
-            flags &= ~DSKF_RDY;
+        if (data_.empty()) {
+            flags &= ~(DSKF_CHANGE | DSKF_TRACK0);
+        } else {
+            if (cyl_ == 0)
+                flags &= ~DSKF_TRACK0;
+            flags &= ~DSKF_PROT;
+            if (motor_)
+                flags &= ~DSKF_RDY;
+        }
         return flags;
     }
     
@@ -101,7 +102,8 @@ public:
         // Lower side=first
         const uint8_t tracknum = !side_ + cyl_ * 2;
 
-        //std::cout << "[DISK] Reading track " << (int)tracknum << "\n";
+        if (disk_activity_handler_)
+            disk_activity_handler_(tracknum, false);
 
         for (uint8_t sec = 0; sec < NUMSECS; ++sec) {
             const uint8_t* raw_data = &data_[(tracknum * NUMSECS + sec) * TD_SECTOR];
@@ -130,12 +132,19 @@ public:
         }
     }
 
+    void set_disk_activity_handler(const disk_activity_handler& handler)
+    {
+        assert(!disk_activity_handler_);
+        disk_activity_handler_ = handler;
+    }
+
 private:
     std::vector<uint8_t> data_;
     bool motor_ = false;
     bool side_ = false;      // false = upper head, true = lower head
     bool seek_dir_ = false;  // false = towards center, true = towards outside (0 is the outermost cylinder)
     uint8_t cyl_ = 0;
+    disk_activity_handler disk_activity_handler_;
 };
 
 disk_drive::disk_drive()
@@ -173,4 +182,9 @@ void disk_drive::dir_step()
 void disk_drive::read_mfm_track(uint8_t* dest, uint16_t wordcount)
 {
     impl_->read_mfm_track(dest, wordcount);
+}
+
+void disk_drive::set_disk_activity_handler(const disk_activity_handler& handler)
+{
+    impl_->set_disk_activity_handler(handler);
 }

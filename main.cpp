@@ -195,6 +195,10 @@ int main(int argc, char* argv[])
             }
         };
 
+        df0.set_disk_activity_handler([](uint8_t track, bool write) {
+            std::cout << "DF0: " << (write ? "Write" : "Read") << " track $" << hexfmt(track) << "\n";
+        });
+
 #ifdef TRACE_LOG
         std::ostringstream oss;
         constexpr size_t pc_log_size = 0x1000;
@@ -207,6 +211,8 @@ int main(int argc, char* argv[])
         unsigned steps_to_update = 0;
         int trace_cnt = -1;
         std::vector<gui::event> events;
+        std::vector<uint8_t> pending_disk;
+        uint32_t disk_chosen_countdown = 0;
         for (bool quit = false; !quit;) {
             try {
                 if (!events.empty()) {
@@ -227,6 +233,15 @@ int main(int argc, char* argv[])
                         break;
                     case gui::event_type::mouse_move:
                         custom.mouse_move(evt.mouse_move.dx, evt.mouse_move.dy);
+                        break;
+                    case gui::event_type::disk_inserted:
+                        std::cout << "DF0: Ejecting\n";
+                        df0.insert_disk(std::vector<uint8_t>()); // Eject any existing disk
+                        if (evt.disk_inserted.filename[0]) {
+                            disk_chosen_countdown = 2'000'000;
+                            std::cout << "Reading " << evt.disk_inserted.filename << "\n";
+                            pending_disk = read_file(evt.disk_inserted.filename);
+                        }
                         break;
                     default:
                         assert(0);
@@ -260,6 +275,12 @@ int main(int argc, char* argv[])
                     assert(events.empty()); // events are comming too fast to process
                     events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
+                }
+                if (disk_chosen_countdown) {
+                    if (--disk_chosen_countdown == 0) {
+                        std::cout << "DF0: Inserting disk\n";
+                        df0.insert_disk(std::move(pending_disk));
+                    }
                 }
                 const int trace_len = 50;
                 //f 00fc0f54

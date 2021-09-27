@@ -7,6 +7,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#include <commdlg.h>
 
 namespace {
 
@@ -130,6 +131,24 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
  
     return map;
 }();
+
+gui::disk_inserted_event browse_for_file(HWND hwnd, const char* zz_filter)
+{
+    OPENFILENAMEA ofn;
+    gui::disk_inserted_event evt;
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    evt.filename[0] = 0;
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = zz_filter;
+    ofn.lpstrFile = evt.filename;
+    ofn.nMaxFile = sizeof(evt.filename);
+    ofn.Flags = OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameA(&ofn))
+        evt.filename[0] = 0;
+    return evt;
+}
 
 struct gdi_deleter {
     //using pointer = HGDIOBJ;
@@ -472,14 +491,28 @@ private:
             return 0;
         case WM_SYSKEYDOWN:
         case WM_KEYDOWN:
-            if (!(lParam & 0x4000'0000))
+            if (!(lParam & 0x4000'0000) && wParam != VK_F11 && wParam != VK_F12)
                 enqueue_keyboard_event(true, wParam, lParam);
             return 0;
         case WM_SYSKEYUP:
         case WM_KEYUP:
             if (wParam == VK_F4 && GetKeyState(VK_MENU) < 0)
                 PostQuitMessage(0);
-            enqueue_keyboard_event(false, wParam, lParam);
+            else if (wParam == VK_F11) {
+                // For now do nothing
+            }
+            else if (wParam == VK_F12) {
+                const bool was_captured = mouse_captured_;
+                if (was_captured)
+                    release_mouse();
+                event evt;
+                evt.type = event_type::disk_inserted;
+                evt.disk_inserted = browse_for_file(hwnd_, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0");
+                events_.push_back(evt);
+                if (was_captured)
+                    capture_mouse();
+            } else
+                enqueue_keyboard_event(false, wParam, lParam);
             return 0;
         case WM_LBUTTONDOWN:
             enqueue_mouse_button_event(true, true);

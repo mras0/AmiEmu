@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <vector>
+#include <functional>
 #include <stdint.h>
 
 // Matches CIAF_...
@@ -17,6 +18,8 @@ public:
     explicit disk_drive();
     ~disk_drive();
 
+    using disk_activity_handler = std::function<void (uint8_t track, bool write)>;
+
     void insert_disk(std::vector<uint8_t>&& data);
     uint8_t cia_state() const;
 
@@ -24,6 +27,7 @@ public:
     void set_side_dir(bool side, bool dir);
     void dir_step();
     void read_mfm_track(uint8_t* dest, uint16_t wordcount);
+    void set_disk_activity_handler(const disk_activity_handler& handler);
 
 private:
     class impl;

@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <vector>
+#include <string>
 #include <stdint.h>
 
 class gui {
@@ -15,6 +16,7 @@ public:
         keyboard,
         mouse_button,
         mouse_move,
+        disk_inserted,
     };
     struct keyboard_event {
         bool pressed;
@@ -28,12 +30,16 @@ public:
         int dx;
         int dy;
     };
+    struct disk_inserted_event {
+        char filename[260];
+    };
     struct event {
         event_type type;
         union {
             keyboard_event keyboard;
             mouse_button_event mouse_button;
             mouse_move_event mouse_move;
+            disk_inserted_event disk_inserted;
         };
     };
 
