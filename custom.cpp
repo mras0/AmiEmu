@@ -759,46 +759,6 @@ public:
         const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
         const uint16_t colclock = s_.hpos >> 1;
 
-        if (s_.copper_inst_ofs == 2) {
-            if (s_.copper_inst[0] & 1) {
-                // Wait/skip
-                const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
-                const auto hp = s_.copper_inst[0] & 0xfe;
-                const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
-                const auto he = s_.copper_inst[1] & 0xfe;
-
-                if (!(s_.copper_inst[1] & 0x8000) && !(s_.dmacon & DMAF_BLTDONE)) {
-                    // Blitter wait
-                } else if ((s_.vpos & ve) >= (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he)) {
-#ifdef COPPER_DEBUG
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
-#endif
-                    s_.copper_inst_ofs = 0; // Fetch next instruction
-                    if (s_.copper_inst[1] & 1) {
-                        // SKIP instruction. Actually reads next instruction, but does nothing?
-#ifdef COPPER_DEBUG
-                        std::cout << "Warning: SKIP processed\n";
-#endif
-                        assert(0);
-                    }
-
-                }
-
-                //std::cout << "Wait $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
-            } else if ((s_.hpos & 1)) {
-                // The copper is activate DMA on odd memory cycles
-                // TODO: Check which register is accessed ($20+ is ok, $10+ ok only with copper danger)
-                // TODO: Does this consume a DMA slot? (it steals it from the CPU at least)
-                const auto reg = s_.copper_inst[0] & 0x1ff;
-                if (reg != 0 || s_.copper_inst[1] != 0) // Seems to be used as a kind of NOP in the kickstart copper list?
-                    write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
-#ifdef COPPER_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
-#endif
-                s_.copper_inst_ofs = 0; // Fetch next instruction
-            }
-        }
-
         for (uint8_t spr = 0; spr < 8; ++spr) {
             if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_waiting && s_.sprite_vpos_start(spr) == s_.vpos) {
 #ifdef SPRITE_DMA_DEBUG
@@ -977,7 +937,7 @@ public:
 
             do {
                 // Refresh
-                if (colclock == 0xE1 || colclock == 1 || colclock == 3 || colclock == 5)
+                if (colclock == 0xE3 || colclock == 1 || colclock == 3 || colclock == 5)
                     break;
 
                 // Disk
@@ -996,6 +956,7 @@ public:
 
                     s_.intreq |= INTF_DSKBLK; // TODO: INTF_DSKSYNC etc..
                     s_.dsklen_act = 0;
+                    break;
                 }
 
                 // TODO: Audio
@@ -1070,23 +1031,25 @@ public:
                         std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " vpos_state=" << (int)s_.spr_vpos_states[spr] << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << regname(reg) << "\n";
 #endif
                         write_u16(0xdff000 | reg, reg, val);
+                        break;
                     }
                 }
 
-                // Copper
-                if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2) {
+                // Copper (uses only odd cycles)
+                // Hack: 0xE1 is not available for copper?
+                if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2 && (colclock & 1) && colclock != 0xE1) {
                     s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
-
 #ifdef COPPER_DEBUG
-                    if (s_.copper_inst_ofs == 2)
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
+                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Read copper instruction word $" << hexfmt(s_.copper_inst[s_.copper_inst_ofs-1]) << " from $" << hexfmt(s_.copper_pt-2) << "\n";
 #endif
-                    if (s_.copper_inst[0] == 0 && s_.copper_inst[1] == 0) {
+                    if (s_.copper_inst_ofs == 2 && s_.copper_inst[0] == 0 && s_.copper_inst[1] == 0) {
+                        // This hack can probably be removed if the copper is paused after writing to a "dangerous" register without COPPERDANG enabled
 #ifdef COPPER_DEBUG
                         std::cout << "Hack, halting copper after reading 0,0\n";
 #endif
                         pause_copper();
                     }
+                    break;
                 }
                 
                 // TODO: Blitter
@@ -1094,6 +1057,46 @@ public:
                     do_blit();
                 }
             } while (0);
+        }
+
+        if (s_.copper_inst_ofs == 2) {
+            // Each copper command takes 8 cycles (4 raster pos increments) to execute
+            // TODO: Wait actually uses an extra cycle (?)
+
+            if (s_.copper_inst[0] & 1) {
+                // Wait/skip
+                const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
+                const auto hp = s_.copper_inst[0] & 0xfe;
+                const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
+                const auto he = s_.copper_inst[1] & 0xfe;
+
+                if (!(s_.copper_inst[1] & 0x8000) && !(s_.dmacon & DMAF_BLTDONE)) {
+                    // Blitter wait
+                } else if ((s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he))) {
+#ifdef COPPER_DEBUG
+                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
+#endif
+                    s_.copper_inst_ofs = 0; // Fetch next instruction
+                    if (s_.copper_inst[1] & 1) {
+                        // SKIP instruction. Actually reads next instruction, but does nothing?
+#ifdef COPPER_DEBUG
+                        std::cout << "Warning: SKIP processed\n";
+#endif
+                        assert(0);
+                    }
+                }
+
+                //std::cout << "Wait $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
+            } else {
+                // TODO: Check which register is accessed ($20+ is ok, $10+ ok only with copper danger)
+                const auto reg = s_.copper_inst[0] & 0x1ff;
+                if (reg != 0 || s_.copper_inst[1] != 0) // Seems to be used as a kind of NOP in the kickstart copper list?
+                    write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+#ifdef COPPER_DEBUG
+                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
+#endif
+                s_.copper_inst_ofs = 0; // Fetch next instruction
+            }
         }
 
         // CIA tick rate is 1/10th of (base) CPU speed
