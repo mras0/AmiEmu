@@ -896,7 +896,10 @@ private:
             break;
         case interrupt_vector::trace:
             // Trace | 34(4 / 3) | 32 nn ns nS ns nV nv np np
-            add_cycles(34 - common_cycles);
+            if (inst_->type != inst_type::STOP)
+                add_cycles(34 - common_cycles);
+            else
+                add_cycles(30 - common_cycles);
             break;
         case interrupt_vector::level1:
         case interrupt_vector::level2:
@@ -1888,8 +1891,9 @@ private:
     void handle_STOP()
     {
         assert(inst_->nea == 1);
-        state_.sr = static_cast<uint16_t>(read_ea(0));
-        state_.stopped = true;
+        const auto orig_sr = state_.sr;
+        state_.sr = static_cast<uint16_t>(read_ea(0) & ~srm_illegal);
+        state_.stopped = !(orig_sr & srm_trace); // If tracing is enabled, drop through immediately
     }
 
     void handle_SUB()
