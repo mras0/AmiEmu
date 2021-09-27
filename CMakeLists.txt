@@ -23,7 +23,7 @@ if (WIN32)
     add_definitions("-DWIN32 -D_WIN32 -DUNICODE -D_UNICODE")
 endif()
 
-add_library(utils ioutil.cpp ioutil.h)
+add_library(utils ioutil.cpp ioutil.h color_util.h)
 
 add_executable(mktab mktab.cpp)
 target_link_libraries(mktab PRIVATE utils)

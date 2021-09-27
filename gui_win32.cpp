@@ -5,6 +5,8 @@
 #include <iostream>
 #include <thread>
 #include "ioutil.h"
+#include "color_util.h"
+#include "memory.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -161,16 +163,8 @@ struct gdi_deleter {
 };
 using font_ptr = std::unique_ptr<HFONT__, gdi_deleter>;
 
-constexpr uint32_t rgb4_to_8(const uint16_t rgb4)
-{
-    const uint32_t r = (rgb4 >> 8) & 0xf;
-    const uint32_t g = (rgb4 >> 4) & 0xf;
-    const uint32_t b = rgb4 & 0xf;
-    return r << 20 | r << 16 | g << 12 | g << 8 | b << 4 | b;
-}
-
-
-constexpr const uint32_t default_palette[32] = {
+constexpr int maxpalette = 32;
+constexpr const uint32_t default_palette[maxpalette] = {
     0x5D8AA8,
     0xF0F8FF,
     0xE32636,
@@ -521,12 +515,133 @@ private:
     }
 };
 
+class palette_edit_dialog : public window_base<palette_edit_dialog> {
+public:
+    static void run(HWND parent, uint16_t* pal, const std::vector<uint16_t>& custom)
+    {
+        bool done = false;
+        auto wnd = new palette_edit_dialog { done, pal, custom };
+        wnd->do_create(L"Edit palette", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
+
+        MSG msg = { 0 };
+        while (!done && GetMessage(&msg, nullptr, 0, 0)) {
+            if (!IsDialogMessage(wnd->handle(), &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        }
+
+        if (msg.message == WM_QUIT)
+            PostQuitMessage(static_cast<int>(msg.wParam));
+    }
+
+private:
+    friend window_base;
+    static constexpr const wchar_t* const class_name_ = L"palette_edit_dialog";
+    bool& done_;
+    uint16_t* pal_;
+    const std::vector<uint16_t>& custom_;
+    HWND parent_ = nullptr;
+    HWND last_focus_ = nullptr;
+    HWND color_edit_[maxpalette];
+
+    palette_edit_dialog(bool& done, uint16_t* pal, const std::vector<uint16_t>& custom)
+        : done_ { done }
+        , pal_ { pal }
+        , custom_ { custom }
+    {
+        assert(custom_.size() == 0x100);
+    }
+
+    bool on_create(HWND hwnd, const CREATESTRUCT& cs)
+    {
+        parent_ = cs.hwndParent;
+        EnableWindow(parent_, FALSE);
+
+        auto hInstance = GetModuleHandle(nullptr);
+        const int w = 85;
+        const int h = 20;
+        const int ncols = 4;
+        const int xmargin = 10;
+        const int ymargin = 10;
+        int ypos = ymargin;
+        for (int y = 0, n = 0; y < maxpalette / ncols; ++y) {
+            for (int x = 0, xpos = xmargin; x < ncols; ++x, ++n) {
+                wchar_t temp[256];
+                wsprintfW(temp, L"COLOR%02d", n);
+                CreateWindow(L"STATIC", temp, WS_CHILD | WS_VISIBLE, xpos, ypos, w, h, hwnd, nullptr, hInstance, nullptr);
+                xpos += w + xmargin;
+                wsprintfW(temp, L"$%03X", pal_[n]);
+                color_edit_[n] = CreateWindow(L"EDIT", temp, WS_CHILD | WS_VISIBLE | WS_TABSTOP, xpos, ypos, w, h, hwnd, reinterpret_cast<HMENU>(intptr_t(100) + n), hInstance, nullptr);
+                xpos += w + xmargin;
+            }
+            ypos += h + ymargin;
+        }
+        CreateWindow(L"BUTTON", L"&Ok", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, xmargin, ypos, w, h, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
+        CreateWindow(L"BUTTON", L"&Cancel", WS_CHILD | WS_TABSTOP | WS_VISIBLE, 2*xmargin+w, ypos, w, h, hwnd, reinterpret_cast<HMENU>(IDCANCEL), hInstance, nullptr);
+
+        SetFocus(color_edit_[0]);
+
+        return true;
+    }
+
+    void on_close(HWND hwnd)
+    {
+        EnableWindow(parent_, TRUE);
+        done_ = true;
+        DestroyWindow(hwnd);
+    }
+
+    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        switch (uMsg) {
+        case WM_ACTIVATE:
+            if (LOWORD(wParam) == WA_INACTIVE)
+                last_focus_ = GetFocus();
+            break;
+        case WM_SETFOCUS:
+            SetFocus(last_focus_);
+            break;
+        case WM_COMMAND: {
+            const auto id = LOWORD(wParam);
+            const auto code = HIWORD(wParam);
+            if (id == IDOK && code == BN_CLICKED) {
+                uint16_t newpal[maxpalette];
+                for (int i = 0; i < maxpalette; ++i) {
+                    char temp[256];
+                    GetWindowTextA(color_edit_[i], temp, sizeof(temp));
+                    unsigned val = ~0U;
+                    if (temp[0] != '$' || !sscanf(temp + 1, "%x", &val) || val > 0xfff) {
+                        wchar_t msg[512];
+                        wsprintfW(msg, L"COLOR%2d value \"%S\" is invalid", i, temp);
+                        MessageBox(hwnd, msg, L"Invalid color value", MB_ICONSTOP);
+                        return 0;
+                    }
+                    newpal[i] = val;
+                }
+                memcpy(pal_, newpal, sizeof(newpal));
+                SendMessage(hwnd, WM_CLOSE, 0, 0);
+            } else if (id == IDCANCEL && code == BN_CLICKED) {
+                SendMessage(hwnd, WM_CLOSE, 0, 0);
+            }
+            break;
+        }
+        case WM_CTLCOLORSTATIC: {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+            return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
+        }
+        }
+        return window_base::wndproc(hwnd, uMsg, wParam, lParam);
+    }
+};
+
 class memory_visualizer_window : public window_base<memory_visualizer_window> {
 public:
     static memory_visualizer_window* create(int x, int y)
     {
         std::unique_ptr<memory_visualizer_window> wnd { new memory_visualizer_window {} };
-        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, 800, 600, nullptr);
+        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, 800, 680, nullptr);
         return wnd.release();
     }
 
@@ -571,11 +686,12 @@ private:
         { L"Plane4", 0 },
         { L"Plane5", 0 },
     };
-    uint32_t palette_[32];
+    uint16_t palette_[32];
     static constexpr auto num_fields = sizeof(fields) / sizeof(*fields);
     bitmap_window* bitmap_window_;
     HWND field_combo_[num_fields];
     HWND update_button_;
+    HWND palette_button_;
     HWND last_focus_ = nullptr;
     std::vector<uint8_t> mem_;
     std::vector<uint16_t> custom_;
@@ -588,7 +704,8 @@ private:
     bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
         bitmap_window_ = bitmap_window::create(toolbar_width_, 0, fields[0].val, fields[0].val, hwnd);
-        memcpy(palette_, default_palette, sizeof(palette_));
+        for (int i = 0; i < 32; ++i)
+            palette_[i] = rgb8_to_4(default_palette[i]);
 
         const auto hInstance = GetModuleHandle(nullptr);
         const int w = toolbar_width_ - 2 * toolbar_margin_x;
@@ -609,10 +726,15 @@ private:
         }
 
         y += toolbar_margin_y;
-        update_button_ = CreateWindow(L"BUTTON", L"Update", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
+        update_button_ = CreateWindow(L"BUTTON", L"&Update", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
 
         y += toolbar_margin_y*2 + elem_y;
-        update_button_ = CreateWindow(L"BUTTON", L"From custom", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(300), hInstance, nullptr);
+        update_button_ = CreateWindow(L"BUTTON", L"From &custom", WS_CHILD | WS_VISIBLE | WS_TABSTOP, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(300), hInstance, nullptr);
+
+        y += toolbar_margin_y * 2 + elem_y;
+        palette_button_ = CreateWindow(L"BUTTON", L"&Palette", WS_CHILD | WS_VISIBLE | WS_TABSTOP, toolbar_margin_x, y, w, elem_y * 2, hwnd, reinterpret_cast<HMENU>(301), hInstance, nullptr);
+
+        SetFocus(field_combo_[0]);
 
         update();
 
@@ -640,13 +762,17 @@ private:
                 update();
             } else if (id == 300 && code == BN_CLICKED) {
                 update_from_custom();
+            } else if (id == 301 && code == BN_CLICKED) {
+                palette_edit_dialog::run(hwnd, palette_, custom_);
+                update();
             }
             break;
         }
-        case WM_KEYUP:
-            if (wParam == VK_RETURN)
-                std::cout << "Enter\n";
-            break;
+        case WM_CTLCOLORSTATIC: {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+            return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
+        }
         }
         return window_base::wndproc(hwnd, uMsg, wParam, lParam);
     }
@@ -703,7 +829,7 @@ private:
                     if ((x & 15) == 0) {
                         for (int p = 0; p < nbpls; ++p) {
                             pt[p] &= ptmask;
-                            data[p] = mem_[pt[p]] << 8 | mem_[pt[p] + 1];
+                            data[p] = get_u16(&mem_[pt[p]]);
                             pt[p] += 2;
                         }
                     }
@@ -715,7 +841,7 @@ private:
                         data[p] <<= 1;
                     }
 
-                    bitmap[x + y * width] = palette_[idx];
+                    bitmap[x + y * width] = rgb4_to_8(palette_[idx]);
                 }
 
                 for (int p = 0; p < nbpls; ++p)
@@ -740,7 +866,7 @@ private:
 
         // COLOR
         for (int i = 0; i < 32; ++i) {
-            palette_[i] = rgb4_to_8(custom_[0x180/2 + i]);
+            palette_[i] = custom_[0x180/2 + i];
         }
 
         const auto bplcon0 = custom_[0x100 / 2];

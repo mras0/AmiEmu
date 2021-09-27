@@ -2,6 +2,7 @@
 #include "ioutil.h"
 #include "cia.h"
 #include "debug.h"
+#include "color_util.h"
 
 #include <cassert>
 #include <utility>
@@ -380,14 +381,6 @@ static constexpr uint16_t sprite_dma_start_vpos = 25; // http://eab.abime.net/sh
 
 static_assert(graphics_width == hires_max_pixel - hires_min_pixel);
 static_assert(graphics_height == (vpos_per_field - vblank_end_vpos) * 2);
-
-constexpr uint32_t rgb4_to_8(const uint16_t rgb4)
-{
-    const uint32_t r = (rgb4 >> 8) & 0xf;
-    const uint32_t g = (rgb4 >> 4) & 0xf;
-    const uint32_t b = rgb4 & 0xf;
-    return r << 20 | r << 16 | g << 12 | g << 8 | b << 4 | b;
-}
 
 constexpr uint16_t blitter_func(uint8_t minterm, uint16_t a, uint16_t b, uint16_t c)
 {
