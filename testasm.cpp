@@ -64,6 +64,8 @@ void disasm_code(std::ostream& os, uint32_t start_pc, const std::vector<uint16_t
 
 bool simple_asm_tests()
 {
+    // TODO: Check invalid combinations
+
     const struct {
         const char* text;
         std::vector<uint16_t> code;
@@ -91,6 +93,49 @@ bool simple_asm_tests()
         { "move.w lab(pc), a0\nlab dc.w $4afc\n", { 0x307a, 0x0002, 0x4afc } },
         { "move.l lab(pc,d0.w), $12345678\nrts\nlab dc.w $4afc\n", { 0x23fb, 0x0008, 0x1234, 0x5678, 0x4e75, 0x4afc} },
         { "x: move.w x(pc), d0\n", {0x303a, 0xfffe} },
+        { "ADD.B #12, d0\n", { 0x0600, 0x000c } },
+        { "ADD.L #$12345678, 10(a0,d0.l)\n", { 0x06b0, 0x1234, 0x5678, 0x080a } },
+        { "ADD.W #$1234, a0\n", { 0xd0fc, 0x1234 } },
+        { "ADD.L #$12345678, a3\n", { 0xd7fc, 0x1234, 0x5678, } },
+        { "ADD.B (a0), d0\n", { 0xd010 } },
+        { "ADD.L d5, (a3)+\n", { 0xdb9b } },
+        { "ADD.L d2, d3\n", { 0xd682 } },
+        { "SUB.B #12, d0\n", { 0x0400, 0x000c } },
+        { "SUB.L #$12345678, 10(a0,d0.l)\n", { 0x04b0, 0x1234, 0x5678, 0x080a } },
+        { "SUB.W #$1234, a0\n", { 0x90fc, 0x1234 } },
+        { "SUB.L #$12345678, a3\n", { 0x97fc, 0x1234, 0x5678, } },
+        { "SUB.B (a0), d0\n", { 0x9010 } },
+        { "SUB.L d5, (a3)+\n", { 0x9b9b } },
+        { "SUB.L d2, d3\n", { 0x9682 } },
+        { "AND.B #$34, (a0)\n", { 0x0210, 0x0034 } },
+        { "AND.L #$1234, (a3)+\n", { 0x029b, 0x0000, 0x1234 } },
+        { "AND.W #42, 12(a2)\n", {0x026a, 0x002a, 0x000c } },
+        { "AND.L d4, -(a2)\n", { 0xc9a2 } },
+        { "AND.L d2, d3\n", { 0xc682 } },
+        { "EOR.B #$34, (a0)\n", { 0x0a10, 0x0034 } },
+        { "EOR.L #$1234, (a3)+\n", { 0x0a9b, 0x0000, 0x1234 } },
+        { "EOR.W d3, (a1)\n", { 0xb751 } },
+        { "EOR.L d4, -(a2)\n", { 0xb9a2 } },
+        { "EOR.L d2, d3\n", { 0xb583 } },
+        { "OR.B #$34, (a0)\n", { 0x0010, 0x0034 } },
+        { "OR.L #$1234, (a3)+\n", { 0x009b, 0x0000, 0x1234 } },
+        { "OR.L d4, -(a2)\n", { 0x89a2 } },
+        { "OR.L d2, d3\n", { 0x8682 } },
+        { "BCHG #7, d2\n", { 0x0842, 0x0007 } },
+        { "BCHG d0, (a2)\n", { 0x0152 } },
+        { "BCLR #7, d2\n", { 0x0882, 0x0007 } },
+        { "BCLR d0, (a2)\n", { 0x0192 } },
+        { "BSET #7, d2\n", { 0x08c2, 0x0007 } },
+        { "BSET d0, (a2)\n", { 0x01d2 } },
+        { "BTST #7, d2\n", { 0x0802, 0x0007 } },
+        { "BTST d0, (a2)\n", { 0x0112 } },
+        { "CMP.B (a1)+, d2\n", { 0xb419 } },
+        { "CMP.W (a1), a1\n", { 0xb2d1 } },
+        { "CMP.L #42, a2\n", { 0xb5fc, 0x0000, 0x002a } },
+        { "CMP.W #42, a2\n", { 0xb4fc, 0x002a } },
+        { "CMP.B #42, (a0)\n", { 0x0c10, 0x002a } },
+        { "CMP.L d0, d2\n", { 0xb480 } },
+        // also TODO: destination CCR
     };  
 
     for (const auto& tc : test_cases) {

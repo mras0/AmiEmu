@@ -14,9 +14,9 @@ constexpr uint8_t opsize_mask_none = 0;
 constexpr uint8_t opsize_mask_b    = 1 << 0;
 constexpr uint8_t opsize_mask_w    = 1 << 1;
 constexpr uint8_t opsize_mask_l    = 1 << 2;
-constexpr uint8_t opsize_mask_bw   = opsize_mask_b | opsize_mask_w; 
+constexpr uint8_t opsize_mask_bw   = opsize_mask_b | opsize_mask_w;
+constexpr uint8_t opsize_mask_bl   = opsize_mask_b | opsize_mask_l;
 constexpr uint8_t opsize_mask_bwl  = opsize_mask_b | opsize_mask_w | opsize_mask_l;
-
 
 constexpr bool range8(uint32_t val)
 {
@@ -29,11 +29,20 @@ constexpr bool range16(uint32_t val)
 }
 
 #define INSTRUCTIONS(X)        \
+    X(ADD   , bwl  , w    , 2) \
+    X(AND   , bwl  , w    , 2) \
+    X(BCHG  , bl   , none , 2) \
+    X(BCLR  , bl   , none , 2) \
+    X(BSET  , bl   , none , 2) \
+    X(BTST  , bl   , none , 2) \
     X(BRA   , bw   , none , 1) \
+    X(CMP   , bwl  , w    , 2) \
+    X(EOR   , bwl  , w    , 2) \
     X(MOVE  , bwl  , w    , 2) \
     X(MOVEQ , l    , l    , 2) \
+    X(OR    , bwl  , w    , 2) \
     X(RTS   , none , none , 0) \
-
+    X(SUB   , bwl  , w    , 2) \
 
 constexpr struct instruction_info_type {
     const char* const name;
@@ -618,6 +627,24 @@ operands_done:
         uint8_t iword_cnt = 1;
 
         switch (inst) {
+        case token_type::ADD:
+            iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0600, 0xD000);
+            break;
+        case token_type::AND:
+            iwords[0] = encode_binop(info, ea, osize, 0x0200, 0xC000);
+            break;
+        case token_type::BCHG:
+            iwords[0] = encode_bitop(info, ea, osize, 0x0840, 0x0140);
+            break;
+        case token_type::BCLR:
+            iwords[0] = encode_bitop(info, ea, osize, 0x0880, 0x0180);
+            break;
+        case token_type::BSET:
+            iwords[0] = encode_bitop(info, ea, osize, 0x08C0, 0x01C0);
+            break;
+        case token_type::BTST:
+            iwords[0] = encode_bitop(info, ea, osize, 0x0800, 0x0100);
+            break;
         case token_type::BRA: {
             if (ea[0].type >> ea_m_shift != ea_m_Other || (ea[0].type & 7) != ea_other_abs_l)
                 ASSEMBLER_ERROR("Unsupported operand to Bcc: " << ea_string(ea[0].type));
@@ -645,6 +672,13 @@ operands_done:
                 iwords[iword_cnt++] = disp & 0xffff;
             goto done;
         }
+        case token_type::CMP:
+            // Normal: 0xB000, Imm: 0x0C00
+            iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0C00, 0xB000);
+            break;
+        case token_type::EOR:
+            iwords[0] = encode_binop(info, ea, osize, 0x0A00, 0xB000);
+            break;
         case token_type::MOVE: {
             constexpr uint8_t size_encoding[4] = { 0b00, 0b01, 0b11, 0b10 };
             const auto sz = size_encoding[static_cast<uint8_t>(osize)];
@@ -659,8 +693,14 @@ operands_done:
             iwords[0] = 0x7000 | (ea[1].type & 7) << 9 | (ea[0].val & 0xff);
             goto done;
         }
+        case token_type::OR:
+            iwords[0] = encode_binop(info, ea, osize, 0x0000, 0x8000);
+            break;
         case token_type::RTS:
             iwords[0] = 0x4e75;
+            break;
+        case token_type::SUB:
+            iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0400, 0x9000);
             break;
         default:
             ASSEMBLER_ERROR("TODO: Encode " << info.name);
@@ -768,6 +808,61 @@ done:
             get_token();
         }
         skip_to_eol();
+    }
+
+    uint16_t encode_add_sub_cmp(const instruction_info_type& info, const ea_result* ea, opsize osize, uint16_t imm_code, uint16_t normal_code)
+    {
+        if (ea[1].type >> ea_m_shift == ea_m_An) {
+            if (osize == opsize::b)
+                ASSEMBLER_ERROR("Only word/long operations allowed with address destination");
+            return normal_code | 0x00C0 | (ea[1].type & 7) << 9 | (osize == opsize::l ? 0x100 : 0x000) | (ea[0].type & 0x3f);
+        }
+        return encode_binop(info, ea, osize, imm_code, normal_code);
+    }
+
+    uint16_t encode_binop(const instruction_info_type& info, const ea_result* ea, opsize osize, uint16_t imm_code, uint16_t normal_code)
+    {
+        constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
+
+        if (ea[0].type >> ea_m_shift == ea_m_An || ea[1].type >> ea_m_shift == ea_m_An)
+            ASSEMBLER_ERROR("Address register not allowed for " << info.name);
+        if (ea[0].type == ea_immediate)
+            return imm_code | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[1].type & 0x3f);
+        if (ea[0].type >> ea_m_shift != ea_m_Dn && ea[1].type >> ea_m_shift != ea_m_Dn)
+            ASSEMBLER_ERROR("Unsupported operands to " << info.name);
+        uint8_t eaidx;
+        if (imm_code == 0x0A00) {
+            // EOR (as opposed to CMP)
+            eaidx = ea[0].type >> ea_m_shift == ea_m_Dn ? 1 : 0;
+        } else {
+            eaidx = ea[1].type >> ea_m_shift == ea_m_Dn ? 0 : 1;
+        }
+        return normal_code | (ea[!eaidx].type & 7) << 9 | eaidx << 8 | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[eaidx].type & 0x3f);
+    }
+
+    uint16_t encode_bitop(const instruction_info_type& info, const ea_result* ea, opsize& osize, uint16_t imm_code, uint16_t dn_code)
+    {
+        if (ea[1].type >> ea_m_shift == ea_m_An)
+            ASSEMBLER_ERROR("Address register not allowed for " << info.name);
+
+        if (ea[1].type >> ea_m_shift == ea_m_Dn) {
+            if (osize == opsize::b)
+                ASSEMBLER_ERROR("Data register destination to " << info.name << " always has long size");
+            assert(osize == opsize::l || osize == opsize::none);
+        } else {
+            if (osize == opsize::l)
+                ASSEMBLER_ERROR("Memory destination to " << info.name << " always has byte size");
+            assert(osize == opsize::b || osize == opsize::none);
+        }
+
+        if (ea[0].type == ea_immediate) {
+            osize = opsize::b; // For encoding of the immediate
+            return imm_code | (ea[1].type & 0x3f);
+        } else if (ea[0].type >> ea_m_shift == ea_m_Dn) {
+            return dn_code | (ea[0].type & 7) << 9 | (ea[1].type & 0x3f);
+        } else {
+            ASSEMBLER_ERROR("First operand to " << info.name << " is illegal");
+        }
     }
 };
 
