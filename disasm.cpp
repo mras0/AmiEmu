@@ -144,6 +144,9 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
         }
     }
 
+    constexpr uint32_t invalid_pc_addr = ~0U;
+    uint32_t pc_addr = invalid_pc_addr;
+
     for (unsigned i = 0; i < inst.nea; ++i) {
         os << (i == 0 ? "\t" : ", ");
         const auto ea = inst.ea[i];
@@ -208,6 +211,8 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
             case ea_other_pc_disp16: {
                 assert(eaw < inst.ilen);
                 int16_t n = iwords[eaw++];
+                assert(pc_addr == invalid_pc_addr);
+                pc_addr = pc + (eaw - 1) * 2 + n;
                 os << "$";
                 if (n < 0) {
                     os << "-";
@@ -215,8 +220,6 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
                 }
                 os << hexfmt(static_cast<uint16_t>(n));
                 os << "(PC)";
-                if (inst.type == inst_type::JSR)
-                    os << " == $" << hexfmt(pc + (eaw - 1) * 2 + n);
                 break;
             }
             case ea_other_pc_index: {
@@ -291,6 +294,10 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
             }
             break;
         }
+    }
+
+    if (pc_addr != invalid_pc_addr) {
+        os << "\t ; PC addr=$" << hexfmt(pc_addr);
     }
 
     assert(eaw == inst.ilen);

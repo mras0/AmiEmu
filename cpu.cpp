@@ -993,7 +993,8 @@ private:
         case interrupt_vector::level6:
         case interrupt_vector::level7:
             // Interrupt | 44(5 / 3) | 42 n nn ns ni n - n nS ns nV nv np np
-            add_cycles(44 - common_cycles - 4); // Already fetched vector
+            // -4 removed to match timing of RAZOR1911-Voyage (VERY strict timing requirements)
+            add_cycles(44 - common_cycles/* - 4*/);
             break;
         case interrupt_vector::illegal_instruction:
         case interrupt_vector::privililege_violation:
@@ -1449,6 +1450,7 @@ private:
         const uint32_t l = read_ea(1);
         const uint32_t res = l ^ r;
         add_rmw_cycles();
+        prefetch(); // Prefetch happens before write (needed for Razor1911-Voyage, which uses EOR.W D5,(A2) to modify the following instruction!)
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
     }

@@ -1004,7 +1004,22 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "r") {
                             cpu.show_state(std::cout);
                         } else if (args[0] == "t") {
-                            wait_mode = wait_next_inst;
+                            wait_arg = ~0U;
+                            if (args.size() > 1) {
+                                auto fh = from_hex(args[1]);
+                                if (fh.first && fh.second > 0) {
+                                    wait_arg = fh.second - 1;
+                                } else {
+                                    std::cout << "Invalid argument (expected number of instructions)\n";
+                                }
+                            } else {
+                                wait_arg = 0;
+                            }
+                            if (wait_arg != ~0U) {
+                                wait_mode = wait_next_inst;
+                                if (wait_arg > 0)
+                                    cpu.trace(&std::cout);
+                            }
                             break;
                         } else if (args[0] == "trace_file") {
                             if (args.size() > 1) {
@@ -1242,6 +1257,10 @@ unknown_command:
                     case wait_none:
                         goto check_breakpoint;
                     case wait_next_inst:
+                        if (wait_arg) {
+                            --wait_arg;
+                            goto check_breakpoint;
+                        }
                         break;
                     case wait_exact_pc:
                         if (cpu_step.current_pc != wait_arg)
@@ -1268,6 +1287,7 @@ unknown_command:
                     }
 
                     active_debugger();
+                    cpu.trace(nullptr);
                     wait_mode = wait_none;
 
 check_breakpoint:
