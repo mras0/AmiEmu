@@ -2000,8 +2000,9 @@ public:
             const uint8_t mask = s_.bplcon0 & BPLCON0F_HIRES ? 7 : 15;
             const uint8_t delay1 = s_.bplcon1 & mask;
             const uint8_t delay2 = (s_.bplcon1 >> 4) & mask;
+            const uint8_t hp = (s_.hpos + 1) & mask; // The compared hpos seems to be advanced by one? (e.g. desert dream rotating logo box + vAmigaTS denise/bplcon1/timing4)
 
-            if ((s_.bpldata_avail & 1) && delay1 == (s_.hpos & mask)) {
+            if ((s_.bpldata_avail & 1) && delay1 == hp) {
                 for (int i = 0; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~1;
@@ -2014,7 +2015,7 @@ public:
                     rem_pixelsO = 16;
                 }
             }
-            if ((s_.bpldata_avail & 2) && delay2 == (s_.hpos & mask)) {
+            if ((s_.bpldata_avail & 2) && delay2 == hp) {
                 for (int i = 1; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~2;
