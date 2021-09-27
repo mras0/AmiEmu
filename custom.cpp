@@ -1467,7 +1467,7 @@ public:
             s_.copper_skip_next = false;
             s_.copstate = copper_state::read_inst;
             if (DEBUG_COPPER)
-                DBGOUT << "Wait done VP=$ " << hexfmt(vp, 2) << " VE=$ " << hexfmt(ve, 2) << " HP=$" << hexfmt(hp, 2) << " HE=$" << hexfmt(he) << " BFD=" << (s_.copper_inst[1] & 0x8000 ? 1 : 0) << "\n ";
+                DBGOUT << "Wait done VP=$" << hexfmt(vp, 2) << " VE=$" << hexfmt(ve, 2) << " HP=$" << hexfmt(hp, 2) << " HE=$" << hexfmt(he) << " BFD=" << (s_.copper_inst[1] & 0x8000 ? 1 : 0) << "\n";
         }
 
         return false;
@@ -2495,7 +2495,12 @@ public:
         case 0x0FA:  // BPL7PTL
         case 0x0FC:  // BPL8PTH
         case 0x0FE:  // BPL8PTL
+        case 0x11C:  // BPL7DAT
+        case 0x11E:  // BPL8DAT
         case 0x1C0:  // HTOTAL (ignored unless VARBEAMEN=1)
+        case 0x1C8:  // VTOTAL
+        case 0x1CC:  // VBSTRT
+        case 0x1CE:  // VBSTOP
         case BEAMCON0: // $1DC
         case DIWHIGH: // $1E4
         case FMODE:   // $1FC

@@ -691,7 +691,7 @@ public:
     static memory_visualizer_window* create(int x, int y)
     {
         std::unique_ptr<memory_visualizer_window> wnd { new memory_visualizer_window {} };
-        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW, x, y, 800, 800, nullptr);
+        wnd->do_create(L"Memory visualizer", WS_OVERLAPPEDWINDOW | WS_MINIMIZE, x, y, 800, 800, nullptr);
         return wnd.release();
     }
 
