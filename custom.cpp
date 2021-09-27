@@ -2327,7 +2327,9 @@ public:
         offset &= 0xffe;
 
         // V(H)POSR is shifted compared to the actual value (this is needed for the winuae cputest cycle accuracy tests)
-        constexpr uint16_t hpos_cycle_shift = 3;
+        // WinUAE uses a shift of 3, but this doesn't work with vAmigaTS tests (e.g. copbpl1) where an unstable image is created when trying to sync horizonatally
+        // This is probably due to when the value is "sample" (actually read) in the interaction between the CPU and custom chip stepping
+        constexpr uint16_t hpos_cycle_shift = 2; //3;
         constexpr uint16_t hpos_max = (hpos_per_line >> 1);
 
         switch (offset) {
@@ -2361,10 +2363,8 @@ public:
                     if (++v >= vpos_per_field)
                         v = 0;
             }
-            // Need to return hpos == 0 for many vamiga tests
-            #if 1 // cputest cycle exact requires this
+            // cputest cycle exact requires this
             h = (h + 1) % hpos_max;
-            #endif
             return static_cast<uint16_t>((v & 0xff) << 8 | h);
         }
         case DSKDATR: // $008

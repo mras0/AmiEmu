@@ -624,6 +624,8 @@ int main(int argc, char* argv[])
         constexpr uint32_t invalid_pc = ~0U;
         enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_rtx, wait_non_rom_pc, wait_vpos, wait_frames } wait_mode = wait_none;
         uint32_t wait_arg = 0;
+        uint32_t chip_cycles_count = 0, cpu_cycles_count = 0;
+        uint32_t last_vhpos = 0;
         std::vector<uint32_t> breakpoints;
         bool debug_mode = false;
         custom_handler::step_result custom_step {};
@@ -692,6 +694,8 @@ int main(int argc, char* argv[])
             custom_step = custom.step(cpu_waiting, cpu_step.current_pc);
             cpu_active = cpu_was_active;
 
+            ++chip_cycles_count;
+
             // HACK: Delay IPL change from Paula by 3 CCKs.
             // Reality is more complicated: https://github.com/dirkwhoffmann/vAmiga/issues/274
             // And below isn't correct if Paula IPL changes between delay start and end, but let's see...
@@ -747,6 +751,7 @@ int main(int argc, char* argv[])
             while (cycles_todo >= cmdline_args.cpu_scale) {
                 cstep(false);
                 cycles_todo -= cmdline_args.cpu_scale;
+                cpu_cycles_count += cmdline_args.cpu_scale;
             }
         };
 
@@ -912,8 +917,17 @@ int main(int argc, char* argv[])
                     g.set_debug_memory(mem.ram(), custom.get_regs());
                     g.set_debug_windows_visible(true);
                     g.update_image(custom_step.frame);
+
+                    // Match Winuae output
+                    // Cycles: 8 Chip, 16 CPU. (V=0 H=31 -> V=0 H=39)
+                    const uint32_t vhpos = custom_step.vpos << 8 | custom_step.hpos >> 1;
+                    std::cout << "Cycles: " << (chip_cycles_count >> 1) << " Chip, " << cpu_cycles_count << " CPU. (V=" << (last_vhpos >> 8) << " H=" << (last_vhpos & 0xff) << " -> V=" << (vhpos >> 8) << " H=" << (vhpos & 0xff) << ")\n";
+                    last_vhpos = vhpos;
+                    chip_cycles_count = cpu_cycles_count = 0;
+
                     cpu.show_state(std::cout);
                     disasm_stmts(mem, cpu_step.current_pc, 1);
+
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
                         std::string line;
