@@ -1299,14 +1299,20 @@ private:
     {
         assert(inst_->nea == 2 && inst_->size == opsize::w && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
         const auto d = read_ea(0);
+        auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
         (void)calc_ea(1);
         if (!d) {
             //  Divide by Zero      | 38(4/3)+ |36         nn nn    ns ns nS nV nv np np
+            uint8_t ccr = 0;
+            if ((reg >> 16) == 0)
+                ccr = srm_z;
+            else if (reg & 0x80000000)
+                ccr = srm_n;
+            state_.update_sr(srm_ccr_no_x, ccr);
             do_trap(interrupt_vector::zero_divide);
             return;
         }
              
-        auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
         add_cycles(72); // Best case: 76/ Worst case 136/140
         const auto q = reg / d;
         const auto r = reg % d;
@@ -1331,6 +1337,7 @@ private:
         (void)calc_ea(1);
         if (!d) {
             //  Divide by Zero      | 38(4/3)+ |36         nn nn    ns ns nS nV nv np np
+            state_.update_sr(srm_ccr_no_x, srm_z);
             do_trap(interrupt_vector::zero_divide);
             return;
         }
