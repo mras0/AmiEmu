@@ -632,7 +632,6 @@ int main(int argc, char* argv[])
         bool new_frame = false;
         bool cpu_active = false;
         uint32_t cycles_todo = 0;
-        uint32_t idle_count = 0;
         std::mutex audio_mutex_;
         std::condition_variable audio_buffer_ready_cv;
         std::condition_variable audio_buffer_played_cv;
@@ -1236,7 +1235,6 @@ unknown_command:
                    
                 if (cpu_step.stopped) {
                     do {
-                        ++idle_count;
                         cstep(false);
                     } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
                 } else {
@@ -1281,7 +1279,6 @@ check_breakpoint:
                     if (cpu_step.instruction == reset_instruction_num)
                         reset = true;
                     do_all_custom_cylces();
-                    idle_count = 0;
                 }
 
 #ifdef TRACE_LOG
@@ -1313,10 +1310,14 @@ check_breakpoint:
                         }
                     }
                     if (cmdline_args.test_mode) {
-                        if (!memcmp(custom_step.frame, testmode_data.data(), testmode_data.size() * 4)) {
-                            if (cpu.state().instruction_count >= testmode_min_instructions && idle_count > 100'000 && ++testmode_cnt >= testmode_stable_frames) {
-                                const auto ts = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-                                std::string filename = "c:/temp/test" + ts + ".ppm";
+                        if (!memcmp(custom_step.frame, testmode_data.data(), testmode_data.size() * 4) || cpu.state().instruction_count >= 50'000'000) {
+                            if (cpu.state().instruction_count >= testmode_min_instructions && ++testmode_cnt >= testmode_stable_frames) {
+                                auto ts = cmdline_args.df0;
+                                ts.erase(0, ts.find_last_of("/\\")+1);
+                                ts.erase(ts.find(".adf"));
+                                ts += "_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+
+                                std::string filename = "c:/temp/" + ts + ".ppm";
                                 {
                                     std::ofstream out { filename, std::ofstream::binary };
                                     out << "P6\n" << graphics_width << " " << graphics_height << "\n255\n";
@@ -1327,7 +1328,7 @@ check_breakpoint:
                                     }
                                 }
 
-                                auto pngname = "c:/temp/test" + ts + ".png";
+                                auto pngname = "c:/temp/" + ts + ".png";
                                 auto cmd = "c:/Tools/ImageMagick/convert " + filename + " " + pngname;
                                 system(cmd.c_str());
                                 _unlink(filename.c_str());
