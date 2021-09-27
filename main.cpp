@@ -10,6 +10,7 @@
 #include "cia.h"
 #include "custom.h"
 #include "cpu.h"
+#include "disk_drive.h"
 #include "gui.h"
 
 #if 0
@@ -66,9 +67,11 @@ int main(int argc, char* argv[])
         //const char* const rom_file = "../../rom.bin";
         //const char* const rom_file = "../../aros.rom";
         //const char* const rom_file = "../../Misc/simple-amiga-rom/out/rom.bin";
+        disk_drive df0 {};
+        disk_drive* drives[max_drives] = { &df0 };
         memory_handler mem { 1U << 20 };
         rom_area_handler rom { mem, read_file(rom_file) };
-        cia_handler cias { mem, rom };
+        cia_handler cias { mem, rom, drives };
         custom_handler custom { mem, cias };
 
         //const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
@@ -83,6 +86,8 @@ int main(int argc, char* argv[])
             else
                 throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
         }
+
+        df0.insert_disk(read_file("../../Misc/AmigaWorkbench/Workbench13.adf"));
 
         //rom_tag_scan(rom.rom());
 
@@ -198,14 +203,14 @@ int main(int argc, char* argv[])
                     events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
                 }
-                const int trace_len = 2;
+                const int trace_len = 1000;
                 //f 00fc0f54
                 // w 0 dff058 2 w
                 //if (cpu.state().pc == 0x00FE8DCE) {
                 //    cpu.trace(&std::cout);
                 //    trace_cnt = trace_len;
                 //}
-                //if (cpu.instruction_count() == 3583987-trace_len) {
+                //if (cpu.instruction_count() == 6433261-10) {
                 //    cpu.trace(&std::cout);
                 //    trace_cnt = trace_len+1;
                 //}

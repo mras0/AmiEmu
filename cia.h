@@ -3,10 +3,11 @@
 
 #include <memory>
 #include "memory.h"
+#include "disk_drive.h"
 
 class cia_handler {
 public:
-    explicit cia_handler(memory_handler& mem_handler, rom_area_handler& rom_handler);
+    explicit cia_handler(memory_handler& mem_handler, rom_area_handler& rom_handler, disk_drive* dfs[max_drives]);
     ~cia_handler();
 
     // Call with frequency equal to timer tick rate (.715909 Mhz NTSC; .709379 Mhz PAL) == Base CPU freq / 10
@@ -16,6 +17,7 @@ public:
     void increment_tod_counter(uint8_t cia);
     void keyboard_event(bool pressed, uint8_t raw);
     bool power_led_on() const;
+    disk_drive& active_drive(); // For DMA
 
 private:
     class impl;

@@ -46,5 +46,6 @@ std::string binstring(T n, int w = static_cast<int>(sizeof(T) * 8))
 }
 
 std::vector<uint8_t> read_file(const std::string& path);
+void hexdump(std::ostream& os, const uint8_t* data, size_t size);
 
 #endif

@@ -262,18 +262,6 @@ bool run_tests()
     return true;
 }
 
-void hexdump(const uint8_t* data, size_t size)
-{
-    for (size_t i = 0; i < size;) {
-        const size_t here = std::min(size - i, size_t(16));
-
-        for (size_t j = 0; j < here; ++j)
-            std::cout << hexfmt(data[i + j]) << ' ';
-        std::cout << "\n";
-        i += here;
-    }
-}
-
 class winuae_test_file {
 public:
     explicit winuae_test_file(const fs::path& p)

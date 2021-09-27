@@ -10,6 +10,7 @@
 
 //#define COPPER_DEBUG
 //#define BPL_DMA_DEBUG
+//#define DISK_DMA_DEBUG
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
@@ -422,12 +423,18 @@ constexpr T ror(T val, unsigned amt)
 }
 
 struct custom_state {
+    // Internal state
     uint16_t hpos; // Resolution is in low-res pixels
     uint16_t vpos;
     uint16_t bpldat_shift[6];
     uint16_t bpldat_temp[6];
     bool bpl1dat_written;
     uint8_t bpldata_avail;
+
+    uint32_t dskpt;
+    uint16_t dsklen;
+
+    uint16_t dsklen_act;
 
     uint32_t copper_pt;
     uint16_t copper_inst[2];
@@ -441,6 +448,8 @@ struct custom_state {
     uint16_t dmacon;
     uint16_t intena;
     uint16_t intreq;
+    uint16_t adkcon;
+
     uint32_t bplpt[6];
     uint16_t bplcon0;
     uint16_t bplcon1;
@@ -834,10 +843,28 @@ public:
 
             do {
                 // Refresh
-                if (colclock < 8 && !(colclock & 0))
+                if (colclock == 0xE1 || colclock == 1 || colclock == 3 || colclock == 5)
                     break;
 
-                // TODO: Disk, Audio
+                // Disk
+                if ((colclock == 7 || colclock == 9 || colclock == 11) && (s_.dmacon & DMAF_DISK) && (s_.dsklen & 0x8000) && s_.dsklen_act) {
+                    const uint16_t nwords = s_.dsklen_act & 0x3FFF;
+                    TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
+                    TODO_ASSERT(nwords > 0);
+#ifdef DISK_DMA_DEBUG
+                    std::cout << "Disk DMA: Reading $" << hexfmt(nwords) << " words from drive\n";
+#endif
+                    std::vector<uint8_t> data(nwords * 2);
+                    cia_.active_drive().read_mfm_track(&data[0], nwords);                    
+
+                    for (uint16_t i = 0; i < nwords; ++i)
+                        mem_.write_u16(s_.dskpt + i * 2, get_u16(&data[i * 2]));
+
+                    s_.intreq |= INTF_DSKBLK; // TODO: INTF_DSKSYNC etc..
+                    s_.dsklen_act = 0;
+                }
+
+                // TODO: Audio
 
                 // Display
                 if ((s_.dmacon & DMAF_RASTER) && vert_disp
@@ -1036,7 +1063,28 @@ public:
         switch (offset) {
         case BLTDDAT: // $000
             return; // Dummy address
-        case SERDAT:  // $018
+        case DSKPTH: // $020:
+            s_.dskpt = val << 16 | (s_.dskpt & 0xffff);
+#ifdef  DISK_DMA_DEBUG 
+            std::cout << "Write to DSKPTH val=$" << hexfmt(val) << " dskpt=$" << hexfmt(s_.dskpt) << "\n";
+#endif
+            return;
+        case DSKPTL: // $022:
+            s_.dskpt = (s_.dskpt & 0xffff0000) | (val & 0xfffe);
+#ifdef DISK_DMA_DEBUG
+            std::cout << "Write to DSKPTL val=$" << hexfmt(val) << " dskpt=$" << hexfmt(s_.dskpt) << "\n";
+#endif
+            return;
+        case DSKLEN: // $024
+            s_.dsklen_act = s_.dsklen == val ? val : 0;
+            s_.dsklen = val;
+#ifdef DISK_DMA_DEBUG
+            std::cout << "Write to DSKLEN val=$" << hexfmt(val)<< "\n";
+#endif
+            return;
+        case VPOSW:  // $02A
+            return;  // Ignore for now
+        case SERDAT: // $030
             if (serial_data_handler_) {
                 uint8_t numbits = 9;
                 while (numbits && !(val & (1 << numbits)))
@@ -1044,8 +1092,6 @@ public:
                 serial_data_handler_(numbits, val & ((1 << numbits) - 1));
             }
             return;
-        case VPOSW:  // $02A
-            return;  // Ignore for now
         case SERPER: // $032
             return;  // Ignore for now
         case POTGO:  // $034 
@@ -1129,8 +1175,10 @@ public:
             s_.ddfstop = val;
             return;
         case DMACON:  // $096
-            val &= ~(1 << 14 | 1 << 13 | 1 << 12 | 1 << 11); // Mask out read only/unused bits
-            setclr(s_.dmacon, val);
+            setclr(s_.dmacon, val & ~(1 << 14 | 1 << 13 | 1 << 12 | 1 << 11));
+#ifdef DISK_DMA_DEBUG
+            std::cout << "Write to DMACON val=$" << hexfmt(val) << " dmacon=$" << hexfmt(s_.dmacon) << "\n";
+#endif
             if ((s_.dmacon & DMAF_COPPER) && s_.copper_pt == 0) {
                 std::cout << "HACK: Loading copper pointer early from $" << hexfmt(s_.coplc[0]) << "\n";
                 TODO_ASSERT(s_.coplc[0]);
@@ -1143,6 +1191,12 @@ public:
         case INTREQ:  // $09C
             val &= ~INTF_INTEN;
             setclr(s_.intreq, val);
+            return;
+        case ADKCON:  // $09E
+            setclr(s_.adkcon, val);
+#ifdef DISK_DMA_DEBUG
+            std::cout << "Write to ADKCON val=$" << hexfmt(val) << " adkcon=$" << hexfmt(s_.adkcon) << "\n";
+#endif
             return;
         case BPLCON0: // $100
             if (val & BPLCON0F_LACE) // TODO: Handle LOF in vposr
@@ -1184,7 +1238,6 @@ public:
         for (uint8_t i = INTB_EXTER+1; i--;) {
             if ((active & (1 << i))) {
                 return ipl[i];
-
             }
         }
         assert(0);

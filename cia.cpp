@@ -3,6 +3,8 @@
 #include <cassert>
 #include <iostream>
 
+//#define FLOPPY_DEBUG
+
 namespace {
 
 // CIAA Port A: /FIR1 /FIR0  /RDY /TK0  /WPRO /CHNG /LED  OVL
@@ -128,6 +130,28 @@ constexpr uint8_t CIAF_DSKCHANGE = 1 << CIAB_DSKCHANGE;
 constexpr uint8_t CIAF_LED       = 1 << CIAB_LED;
 constexpr uint8_t CIAF_OVERLAY   = 1 << CIAB_OVERLAY;
 
+// ciab port B (0xbfd100) -- disk control
+constexpr uint8_t CIAB_DSKMOTOR = 7;  // disk motor*
+constexpr uint8_t CIAB_DSKSEL3  = 6;  // disk select unit 3*
+constexpr uint8_t CIAB_DSKSEL2  = 5;  // disk select unit 2*
+constexpr uint8_t CIAB_DSKSEL1  = 4;  // disk select unit 1*
+constexpr uint8_t CIAB_DSKSEL0  = 3;  // disk select unit 0*
+constexpr uint8_t CIAB_DSKSIDE  = 2;  // disk side select*
+constexpr uint8_t CIAB_DSKDIREC = 1;  // disk direction of seek*
+constexpr uint8_t CIAB_DSKSTEP  = 0;  // disk step heads*
+
+constexpr uint8_t CIAF_DSKMOTOR = 1 << CIAB_DSKMOTOR;
+constexpr uint8_t CIAF_DSKSEL3  = 1 << CIAB_DSKSEL3;
+constexpr uint8_t CIAF_DSKSEL2  = 1 << CIAB_DSKSEL2;
+constexpr uint8_t CIAF_DSKSEL1  = 1 << CIAB_DSKSEL1;
+constexpr uint8_t CIAF_DSKSEL0  = 1 << CIAB_DSKSEL0;
+constexpr uint8_t CIAF_DSKSIDE  = 1 << CIAB_DSKSIDE;
+constexpr uint8_t CIAF_DSKDIREC = 1 << CIAB_DSKDIREC;
+constexpr uint8_t CIAF_DSKSTEP  = 1 << CIAB_DSKSTEP;
+
+
+constexpr uint8_t CIAF_ALL_DSKSEL = CIAF_DSKSEL0 | CIAF_DSKSEL1 | CIAF_DSKSEL2 | CIAF_DSKSEL3;
+
 #if 0
 
 /* control register B INMODE masks */
@@ -153,17 +177,6 @@ constexpr uint8_t CIAF_OVERLAY   = 1 << CIAB_OVERLAY;
 #define CIAB_PRTRPOUT (1) /* printer paper out */
 #define CIAB_PRTRBUSY (0) /* printer busy */
 
-/* ciab port B (0xbfd100) -- disk control */
-#define CIAB_DSKMOTOR (7) /* disk motorr* */
-#define CIAB_DSKSEL3 (6) /* disk select unit 3* */
-#define CIAB_DSKSEL2 (5) /* disk select unit 2* */
-#define CIAB_DSKSEL1 (4) /* disk select unit 1* */
-#define CIAB_DSKSEL0 (3) /* disk select unit 0* */
-#define CIAB_DSKSIDE (2) /* disk side select* */
-#define CIAB_DSKDIREC (1) /* disk direction of seek* */
-#define CIAB_DSKSTEP (0) /* disk step heads* */
-
-
 /* ciaa port B (0xbfe101) -- parallel port */
 
 /* ciab port A (0xbfd000) -- serial and printer control */
@@ -176,17 +189,6 @@ constexpr uint8_t CIAF_OVERLAY   = 1 << CIAB_OVERLAY;
 #define CIAF_PRTRPOUT (1L << 1)
 #define CIAF_PRTRBUSY (1L << 0)
 
-/* ciab port B (0xbfd100) -- disk control */
-#define CIAF_DSKMOTOR (1L << 7)
-#define CIAF_DSKSEL3 (1L << 6)
-#define CIAF_DSKSEL2 (1L << 5)
-#define CIAF_DSKSEL1 (1L << 4)
-#define CIAF_DSKSEL0 (1L << 3)
-#define CIAF_DSKSIDE (1L << 2)
-#define CIAF_DSKDIREC (1L << 1)
-#define CIAF_DSKSTEP (1L << 0)
-
-
 #endif
 
 }
@@ -195,16 +197,17 @@ constexpr uint8_t CIAF_OVERLAY   = 1 << CIAB_OVERLAY;
 // CIAA can generate INT2, CIAB can generate INT6
 class cia_handler::impl : public memory_area_handler {
 public:
-    explicit impl(memory_handler& mem_handler, rom_area_handler& rom_handler)
+    explicit impl(memory_handler& mem_handler, rom_area_handler& rom_handler, disk_drive* dfs[max_drives])
         : mem_handler_ { mem_handler }
         , rom_handler_ { rom_handler }
     {
+        assert(dfs[0]);
+        memcpy(drives_, dfs, sizeof(drives_));
         mem_handler_.register_handler(*this, 0xBF0000, 0x10000);
         rom_handler_.set_overlay(true);
         reset();
         // Since all ports are set to input, OVL in CIA pra is high -> OVL set
         assert(s_[0].port_value(0) & CIAF_OVERLAY);
-        assert(!(s_[0].port_value(0) & CIAF_DSKCHANGE)); // Empty drive -> disk change low
     }
 
     void step()
@@ -274,12 +277,11 @@ public:
         assert(cia < 2);
         auto& s = s_[cia];
         ++s.counter;
-        if (/*(s.icrmask & CIAICRF_ALRM) && */(s.counter & 0xffffff) == s.alarm) {
+        if (/*(s.icrmask & CIAICRF_ALRM) && */ (s.counter & 0xffffff) == s.alarm) {
             std::cerr << "[CIA] Todo: trigger alarm intterupt? for alarm=$" << hexfmt(s.alarm) << "\n";
             //s.trigger_int(CIAICRB_ALRM);
             assert(0);
         }
-
     }
 
     void keyboard_event(bool pressed, uint8_t raw)
@@ -296,9 +298,26 @@ public:
         return !(s_[0].port_value(0) & CIAF_LED);
     }
 
+    disk_drive& active_drive()
+    {
+        const uint8_t bpb = s_[1].port_value(1);
+        int drive = max_drives;
+        for (int dsk = 0; dsk < max_drives; ++dsk) {
+            if (bpb & (1 << (CIAB_DSKSEL0 + dsk)))
+                continue;
+            if (drive != max_drives)
+                throw std::runtime_error { "Multiple drives selected" };
+            drive = dsk;
+        }
+        if (drive >= max_drives || !drives_[drive])
+            throw std::runtime_error { "Invalid drive selected" };
+        return *drives_[drive];
+    }
+
 private:
     memory_handler& mem_handler_;
     rom_area_handler& rom_handler_;
+    disk_drive* drives_[max_drives];
     struct state {
         uint8_t ports[2];
         uint8_t ddr[2];
@@ -343,11 +362,11 @@ private:
     {
         memset(s_, 0, sizeof(s_));
         // Set output pin values to high (since they're connected to pull-ups)
-        s_[0].port_input[0] = 0xFF & ~CIAF_DSKCHANGE; // Disk change is low for empty (but connected) drive
+        s_[0].port_input[0] = 0xFF;
         s_[1].port_input[1] = 0xFF;
         s_[1].port_input[0] = 0xFF;
         s_[1].port_input[1] = 0xFF;
-        kbd_buffer_head_ =  kbd_buffer_tail_ = 0;
+        kbd_buffer_head_ = kbd_buffer_tail_ = 0;
         kbd_ack_ = true;
     }
 
@@ -367,20 +386,29 @@ private:
         auto& s = s_[idx];
         switch (reg) {
         case pra:
-//            if (idx == 0) {
-//                uint8_t val = s.port_value(0);
-//                if (s_[1].port_value(1) & 128) { /*CIAF_DSKMOTOR*/
-//                    val &= ~CIAF_DSKRDY;
-//                }
-//                return val;
-//            }
-//            [[fallthrough]];
+            if (idx == 0) {
+                auto& pi = s_[0].port_input[0];
+                static_assert(DSKF_ALL == 0xF << CIAB_DSKCHANGE);
+                uint8_t disk_state = DSKF_ALL;
+                const uint8_t ciab_prb_output = s_[1].port_value(1);
+                for (uint8_t dsk = 0; dsk < max_drives; ++dsk) {
+                    // Drive selected?
+                    if (ciab_prb_output & (1 << (dsk + CIAB_DSKSEL0)))
+                        continue;
+                    // Present?
+                    if (!drives_[dsk])
+                        continue;
+                    disk_state &= drives_[dsk]->cia_state();
+                }
+                pi = (pi & ~DSKF_ALL) | (disk_state & DSKF_ALL);
+            }
+            [[fallthrough]];
         case prb:
             //std::cerr << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
             return s.port_value(reg - pra);
         case ddra:
         case ddrb:
-            return s.ddr[reg-ddra];
+            return s.ddr[reg - ddra];
         case talo:
             return s.timer_val[0] & 0xff;
         case tahi:
@@ -420,15 +448,20 @@ private:
         assert(idx < 2 && reg < 16);
         auto& s = s_[idx];
         const uint8_t port_a_before = s.port_value(0);
+        const uint8_t port_b_before = s.port_value(1);
 
         switch (reg) {
         case pra:
         case prb:
             s.ports[reg - pra] = val;
+            if (idx == 1 && reg == prb)
+                recalc_disk(port_b_before);
             break;
         case ddra:
         case ddrb:
             s.ddr[reg - ddra] = val;
+            if (idx == 1 && reg == ddrb)
+                recalc_disk(port_b_before);
             break;
         case talo:
             s.timer_latch[0] = (s.timer_latch[0] & 0xff00) | val;
@@ -521,10 +554,54 @@ private:
         }
     }
 
+private:
+    void recalc_disk(uint8_t before) {
+        const uint8_t after = s_[1].port_value(1);
+        const uint8_t diff = after ^ before;
+        if (!diff)
+            return;
+        #if 0
+        for (int dsk = 0; dsk < 4; ++dsk) {
+            const uint8_t this_drive_change = diff & ~CIAF_ALL_DSKSEL;
+            if ((diff & (1<<(CIAB_DSKSEL0+dsk))) && this_drive_change) {
+                std::cout << "Change for drive " << dsk << ": " << hexfmt(this_drive_change) << "\n";
+            }
+        }
+        #endif
+        for (uint8_t dsk = 0; dsk < 4; ++dsk) {
+            if (!drives_[dsk])
+                continue;
+            auto& d = *drives_[dsk];
+            const uint8_t selmask = 1 << (CIAB_DSKSEL0 + dsk);
+            if (after & selmask)
+                continue;
+            if (before & selmask) {
+#ifdef FLOPPY_DEBUG
+                std::cout << "DF" << (int)dsk << " motor " << (after & CIAF_DSKMOTOR ? "off" : "on") << "\n";
+#endif
+                d.set_motor(!(after & CIAF_DSKMOTOR));
+            }
+            if (diff & (CIAF_DSKSIDE | CIAF_DSKDIREC)) {
+                // seekdir out -> towards 0
+#ifdef FLOPPY_DEBUG
+                std::cout << "DF" << (int)dsk << " side=" << (after & CIAF_DSKSIDE ? "lower" : "upper") << " seekdir=" << (after & CIAF_DSKDIREC ? "out" : "in") << "\n";
+#endif
+                d.set_side_dir(!!(after & CIAF_DSKSIDE), !!(after & CIAF_DSKDIREC));
+            }
+            if (!(before & CIAF_DSKSTEP) && (after & CIAF_DSKSTEP)) {
+                // TODO: Maybe check if it actually goes high again?
+#ifdef FLOPPY_DEBUG
+                std::cout << "DF" << (int)dsk << " step pulse\n";
+#endif
+                d.dir_step();
+            }
+
+        }
+    }
 };
 
-cia_handler::cia_handler(memory_handler& mem_handler, rom_area_handler& rom_handler)
-    : impl_ { std::make_unique<impl>(mem_handler, rom_handler) }
+cia_handler::cia_handler(memory_handler& mem_handler, rom_area_handler& rom_handler, disk_drive* dfs[max_drives])
+    : impl_ { std::make_unique<impl>(mem_handler, rom_handler, dfs) }
 {
 }
 
@@ -553,4 +630,9 @@ void cia_handler::keyboard_event(bool pressed, uint8_t raw)
 bool cia_handler::power_led_on() const
 {
     return impl_->power_led_on();
+}
+
+disk_drive& cia_handler::active_drive()
+{
+    return impl_->active_drive();
 }

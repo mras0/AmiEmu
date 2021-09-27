@@ -45,3 +45,22 @@ std::vector<uint8_t> read_file(const std::string& path)
     }
     return buf;
 }
+
+void hexdump(std::ostream& os, const uint8_t* data, size_t size)
+{
+    constexpr size_t width = 16;
+    for (size_t i = 0; i < size;) {
+        const size_t here = std::min(size - i, width);
+
+        for (size_t j = 0; j < here; ++j)
+            os << hexfmt(data[i + j]) << ' ';
+        for (size_t j = here; j < width; ++j)
+            os << "   ";
+        for (size_t j = 0; j < here; ++j) {
+            const uint8_t d = data[i + j];
+            os << static_cast<char>(d >= 32 && d < 128 ? d : '.');
+        }
+        os << "\n";
+        i += here;
+    }
+}
