@@ -516,6 +516,7 @@ struct custom_state {
     uint32_t bltpt[4];
     uint16_t bltdat[4];
     int16_t  bltmod[4];
+    uint16_t bltsize;
 
     uint16_t sprite_vpos_start(uint8_t spr)
     {
@@ -592,6 +593,13 @@ public:
         os << "BPLCON 0: " << hexfmt(s_.bplcon0) << " 1: " << hexfmt(s_.bplcon1) << " 2: " << hexfmt(s_.bplcon2) << "\n";
     }
 
+    void show_registers(std::ostream& os)
+    {
+        for (uint16_t i = 0; i < 0x100; i += 2) {
+            os << hexfmt(i, 3) << " " << custom_regname(i) << "\t" << hexfmt(internal_read(i)) << "\t" << hexfmt(0x100 | i, 3) << " " << custom_regname(0x100 | i) << "\t" << hexfmt(internal_read(0x100 | i)) << "\n";
+        }
+    }
+
     uint32_t copper_ptr(uint8_t idx) // 0=current
     {
         switch (idx) {
@@ -604,15 +612,6 @@ public:
         default:
             TODO_ASSERT(!"Invalid index");
             return 0;
-        }
-    }
-
-    void log_blitter_state()
-    {
-        *debug_stream << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
-        for (int i = 0; i < 4; ++i) {
-            const char name[5] = { 'B', 'L', 'T', static_cast<char>('A' + i), 0 };
-            *debug_stream << "  " << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(s_.bltdat[i]) << " " << name << "MOD=" << (int)s_.bltmod[i] << "\n";
         }
     }
 
@@ -693,6 +692,20 @@ public:
     void do_blit()
     {
         // For now just do immediate blit
+
+        if (DEBUG_BLITTER) {
+            DBGOUT << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
+            for (int i = 0; i < 4; ++i) {
+                const char name[5] = { 'B', 'L', 'T', static_cast<char>('A' + i), 0 };
+                *debug_stream << "\t" << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(s_.bltdat[i]) << " " << name << "MOD=$" << hexfmt(s_.bltmod[i]) << " (" << (int)s_.bltmod[i] << ")\n";
+            }
+            if (s_.bltcon1 & BC1F_LINEMODE)
+                *debug_stream << "\tLine mode\n";
+            else if (s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR))
+                *debug_stream << "\t" << (s_.bltcon1 & BC1F_FILL_XOR ? "Xor" : "Or") << " fill mode\n";
+            else
+                *debug_stream << "\tNormal mode\n";
+        }
 
         uint16_t any = 0;
 
@@ -1017,7 +1030,6 @@ public:
                         rem_pixelsE--;
                         if ((rem_pixelsO | rem_pixelsE) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
                             DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixelsO << " E=" << rem_pixelsE << "\n";
-                            rem_pixelsO = rem_pixelsE = 0;
                         }
                     }
 
@@ -1108,7 +1120,7 @@ public:
                 s_.bpldata_avail &= ~1;
                 if (DEBUG_BPL) {
                     DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (shift=$" << hexfmt(s_.bplcon1 & mask, 1) << ")";
-                    if (rem_pixelsO)
+                    if (rem_pixelsO > 0)
                         *debug_stream << " Warning discarded " << rem_pixelsO;
                     *debug_stream << "\n";
                     rem_pixelsO = 16;
@@ -1120,7 +1132,7 @@ public:
                 s_.bpldata_avail &= ~2;
                 if (DEBUG_BPL) {
                     DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (shift=$" << hexfmt((s_.bplcon1 >> 4) & mask, 1) << ")";
-                    if (rem_pixelsE)
+                    if (rem_pixelsE > 0)
                         *debug_stream << " Warning discarded " << rem_pixelsE;
                     *debug_stream << "\n";
                     rem_pixelsE = 16;
@@ -1509,6 +1521,7 @@ public:
             return;
         case BLTSIZE:        
             assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTDONE));
+            s_.bltsize = val;
             s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
             s_.blth = val >> 6 ? val >> 6 : 0x400;
             s_.bltaold = 0;
@@ -1571,7 +1584,7 @@ public:
         case INTENA:  // $09A
             setclr(s_.intena, val);
             if (s_.intena & (INTF_AUD0 | INTF_AUD1 | INTF_AUD2 | INTF_AUD3))
-                DBGOUT << "Warning: INTENA contains AUDx interrupts: $" << hexfmt(s_.intena) << "\n";
+                std::cerr << "Warning: INTENA contains AUDx interrupts: $" << hexfmt(s_.intena) << "\n";
             return;
         case INTREQ:  // $09C
             val &= ~INTF_INTEN;
@@ -1654,7 +1667,272 @@ private:
     {
         mem_.write_u16(addr & chip_ram_mask_, val);
     }
+
+    uint16_t internal_read(uint16_t reg);
 };
+
+uint16_t custom_handler::impl::internal_read(uint16_t reg)
+{
+    auto lo = [](uint32_t l) { return static_cast<uint16_t>(l); };
+    auto hi = [](uint32_t l) { return static_cast<uint16_t>(l >> 16); };
+
+    switch (reg) {
+    case BLTDDAT:
+        return s_.bltdat[3];
+    case DMACONR:
+    case VPOSR:
+    case VHPOSR:
+    case JOY0DAT:
+    case JOY1DAT:
+    case POTGOR:
+    case SERDATR:
+    case INTENAR:
+    case INTREQR:
+        return read_u16(reg | 0xdff000, reg);
+    case DSKPTH:
+        return hi(s_.dskpt);
+    case DSKPTL:
+        return lo(s_.dskpt);
+    case DSKLEN:
+        return s_.dsklen;
+    //case DSKDAT:
+    //case REFPTR:
+    //case VPOSW:
+    //case VHPOSW:
+    //case COPCON:
+    //case SERDAT:
+    //case SERPER:
+    //case POTGO:
+    case BLTCON0:
+        return s_.bltcon0;
+    case BLTCON1:
+        return s_.bltcon1;
+    case BLTAFWM:
+        return s_.bltafwm;
+    case BLTALWM:
+        return s_.bltalwm;
+    case BLTCPTH:
+        return hi(s_.bltpt[2]);
+    case BLTCPTL:
+        return lo(s_.bltpt[2]);
+    case BLTBPTH:
+        return hi(s_.bltpt[1]);
+    case BLTBPTL:
+        return lo(s_.bltpt[1]);
+    case BLTAPTH:
+        return hi(s_.bltpt[0]);
+    case BLTAPTL:
+        return lo(s_.bltpt[0]);
+    case BLTDPTH:
+        return hi(s_.bltpt[3]);
+    case BLTDPTL:
+        return lo(s_.bltpt[3]);
+    case BLTSIZE:
+        return s_.bltsize;
+    //case BLTCON0L:
+    //case BLTSIZV:
+    //case BLTSIZH:
+    case BLTCMOD:
+        return s_.bltmod[2];
+    case BLTBMOD:
+        return s_.bltmod[1];
+    case BLTAMOD:
+        return s_.bltmod[0];
+    case BLTDMOD:
+        return s_.bltmod[3];
+    case BLTCDAT:
+        return s_.bltdat[2];
+    case BLTBDAT:
+        return s_.bltdat[1];
+    case BLTADAT:
+        return s_.bltdat[0];
+    case DSKSYNC:
+        return s_.dsksync;
+    case COP1LCH:
+        return hi(s_.coplc[0]);
+    case COP1LCL:
+        return lo(s_.coplc[0]);
+    case COP2LCH:
+        return hi(s_.coplc[1]);
+    case COP2LCL:
+        return lo(s_.coplc[1]);
+    //case COPJMP1:
+    //case COPJMP2:
+    case DIWSTRT:
+        return s_.diwstrt;
+    case DIWSTOP:
+        return s_.diwstop;
+    case DDFSTRT:
+        return s_.ddfstrt;
+    case DDFSTOP:
+        return s_.ddfstop;
+    case DMACON:
+        return s_.dmacon;
+    case INTENA:
+        return s_.intena;
+    case INTREQ:
+        return s_.intreq;
+    case ADKCON:
+        return s_.adkcon;
+    //case AUD0LCH:
+    //case AUD0LCL:
+    //case AUD0LEN:
+    //case AUD0PER:
+    //case AUD0VOL:
+    //case AUD0DAT:
+    //case AUD1LCH:
+    //case AUD1LCL:
+    //case AUD1LEN:
+    //case AUD1PER:
+    //case AUD1VOL:
+    //case AUD1DAT:
+    //case AUD2LCH:
+    //case AUD2LCL:
+    //case AUD2LEN:
+    //case AUD2PER:
+    //case AUD2VOL:
+    //case AUD2DAT:
+    //case AUD3LCH:
+    //case AUD3LCL:
+    //case AUD3LEN:
+    //case AUD3PER:
+    //case AUD3VOL:
+    case BPL1PTH:
+    case BPL1PTL:
+    case BPL2PTH:
+    case BPL2PTL:
+    case BPL3PTH:
+    case BPL3PTL:
+    case BPL4PTH:
+    case BPL4PTL:
+    case BPL5PTH:
+    case BPL5PTL:
+    case BPL6PTH:
+    case BPL6PTL:
+        if (reg & 2)
+            return lo(s_.bplpt[(reg - BPL1PTH) / 4]);
+        else
+            return hi(s_.bplpt[(reg - BPL1PTH) / 4]);
+    case BPLCON0:
+        return s_.bplcon0;
+    case BPLCON1:
+        return s_.bplcon1;
+    case BPLCON2:
+        return s_.bplcon2;
+    //case BPLCON3:
+    case BPLMOD1:
+        return s_.bplmod1;
+    case BPLMOD2:
+        return s_.bplmod2;
+    case BPL1DAT:
+    case BPL2DAT:
+    case BPL3DAT:
+    case BPL4DAT:
+    case BPL5DAT:
+    case BPL6DAT:
+        return s_.bpldat[(reg - BPL1DAT) / 2];
+    case SPR0PTH:
+    case SPR0PTL:
+    case SPR1PTH:
+    case SPR1PTL:
+    case SPR2PTH:
+    case SPR2PTL:
+    case SPR3PTH:
+    case SPR3PTL:
+    case SPR4PTH:
+    case SPR4PTL:
+    case SPR5PTH:
+    case SPR5PTL:
+    case SPR6PTH:
+    case SPR6PTL:
+    case SPR7PTH:
+    case SPR7PTL:
+        if (reg & 2)
+            return lo(s_.sprpt[(reg - SPR0PTH) / 4]);
+        else
+            return hi(s_.sprpt[(reg - SPR0PTH) / 4]);
+    case SPR0POS:
+    case SPR0CTL:
+    case SPR0DATA:
+    case SPR0DATB:
+    case SPR1POS:
+    case SPR1CTL:
+    case SPR1DATA:
+    case SPR1DATB:
+    case SPR2POS:
+    case SPR2CTL:
+    case SPR2DATA:
+    case SPR2DATB:
+    case SPR3POS:
+    case SPR3CTL:
+    case SPR3DATA:
+    case SPR3DATB:
+    case SPR4POS:
+    case SPR4CTL:
+    case SPR4DATA:
+    case SPR4DATB:
+    case SPR5POS:
+    case SPR5CTL:
+    case SPR5DATA:
+    case SPR5DATB:
+    case SPR6POS:
+    case SPR6CTL:
+    case SPR6DATA:
+    case SPR6DATB:
+    case SPR7POS:
+    case SPR7CTL:
+    case SPR7DATA:
+    case SPR7DATB:
+        reg -= SPR0POS;
+        switch ((reg >> 1) & 3) {
+        case 0:
+            return s_.sprpos[reg / 8];
+        case 1:
+            return s_.sprctl[reg / 8];
+        case 2:
+            return s_.sprdata[reg / 8];
+        case 3:
+            return s_.sprdatb[reg / 8];
+        }
+    case COLOR00:
+    case COLOR01:
+    case COLOR02:
+    case COLOR03:
+    case COLOR04:
+    case COLOR05:
+    case COLOR06:
+    case COLOR07:
+    case COLOR08:
+    case COLOR09:
+    case COLOR10:
+    case COLOR11:
+    case COLOR12:
+    case COLOR13:
+    case COLOR14:
+    case COLOR15:
+    case COLOR16:
+    case COLOR17:
+    case COLOR18:
+    case COLOR19:
+    case COLOR20:
+    case COLOR21:
+    case COLOR22:
+    case COLOR23:
+    case COLOR24:
+    case COLOR25:
+    case COLOR26:
+    case COLOR27:
+    case COLOR28:
+    case COLOR29:
+    case COLOR30:
+    case COLOR31:
+        return s_.color[(reg - COLOR00) / 2];
+    //case DIWHIGH:
+    //case FMODE:
+    default:
+        return 0;
+    }
+}
 
 custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia)
     : impl_ { std::make_unique<impl>(mem_handler, cia) }
@@ -1696,6 +1974,11 @@ void custom_handler::mouse_move(int dx, int dy)
 void custom_handler::show_debug_state(std::ostream& os)
 {
     impl_->show_debug_state(os);
+}
+
+void custom_handler::show_registers(std::ostream& os)
+{
+    impl_->show_registers(os);
 }
 
 uint32_t custom_handler::copper_ptr(uint8_t idx)

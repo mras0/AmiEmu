@@ -438,6 +438,8 @@ int main(int argc, char* argv[])
                                 disasm_pc = pc;
                                 disasm_pc += disasm_stmts(mem, disasm_pc, lines);
                             }
+                        } else if (args[0] == "e") {
+                            custom.show_registers(std::cout);
                         } else if (args[0] == "g") {
                             goto exit_debug;
                             break;

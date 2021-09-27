@@ -29,6 +29,7 @@ public:
     void mouse_move(int dx, int dy);
 
     void show_debug_state(std::ostream& os);
+    void show_registers(std::ostream& os);
     uint32_t copper_ptr(uint8_t idx); // 0=current
 
 private:
