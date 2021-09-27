@@ -157,6 +157,17 @@ bool simple_asm_tests()
         { "tst.w -(a7)", { 0x4a67} },
         { "tst.l d7", { 0x4a87 } },
         { "pea 16(a0)", { 0x4868,  0x0010 } },
+        { "lea 42(a0,d2.w), a3", { 0x47f0, 0x202a } },
+        { "jsr (a0)", { 0x4e90 } },
+        { "l jsr l(pc)", { 0x4eba, 0xfffe } },
+        { "jmp $1234.w", { 0x4ef8, 0x1234 } },
+        { "addq.l #8, d0", { 0x5080 } },
+        { "addq.w #3, 2(a0,d0.w)", { 0x5070, 0x0002 } },
+        { "subq.w #2, a0", { 0x5148 } },
+        { "subq.l #8, -(a7)", { 0x51a7} },
+        { "exg d0, d1", { 0xc141 } },
+        { "exg a0, a1", { 0xc149 } },
+        { "exg.l d0, a1", { 0xc189 } },
         // also TODO: destination CCR
     };  
 

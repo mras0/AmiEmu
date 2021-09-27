@@ -31,6 +31,7 @@ constexpr bool range16(uint32_t val)
 
 #define INSTRUCTIONS(X)        \
     X(ADD   , bwl  , w    , 2) \
+    X(ADDQ  , bwl  , w    , 2) \
     X(AND   , bwl  , w    , 2) \
     X(BCHG  , bl   , none , 2) \
     X(BCLR  , bl   , none , 2) \
@@ -41,6 +42,10 @@ constexpr bool range16(uint32_t val)
     X(CMP   , bwl  , w    , 2) \
     X(EOR   , bwl  , w    , 2) \
     X(EXT   , wl   , w    , 1) \
+    X(EXG   , l    , none , 2) \
+    X(JMP   , none , none , 1) \
+    X(JSR   , none , none , 1) \
+    X(LEA   , l    , l    , 2) \
     X(MOVE  , bwl  , w    , 2) \
     X(MOVEQ , l    , l    , 2) \
     X(NBCD  , b    , b    , 1) \
@@ -51,6 +56,7 @@ constexpr bool range16(uint32_t val)
     X(PEA   , l    , l    , 1) \
     X(RTS   , none , none , 0) \
     X(SUB   , bwl  , w    , 2) \
+    X(SUBQ  , bwl  , w    , 2) \
     X(SWAP  , w    , w    , 1) \
     X(TST   , bwl  , w    , 1) \
 
@@ -640,6 +646,9 @@ operands_done:
         case token_type::ADD:
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0600, 0xD000);
             break;
+        case token_type::ADDQ:
+            iwords[0] = encode_addsub_q(info, ea, osize, false);
+            break;
         case token_type::AND:
             iwords[0] = encode_binop(info, ea, osize, 0x0200, 0xC000);
             break;
@@ -686,12 +695,28 @@ operands_done:
             iwords[0] = encode_unary(info, ea[0], osize, 0x4200);
             break;
         case token_type::CMP:
-            // Normal: 0xB000, Imm: 0x0C00
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0C00, 0xB000);
             break;
         case token_type::EOR:
             iwords[0] = encode_binop(info, ea, osize, 0x0A00, 0xB000);
             break;
+        case token_type::EXG: {
+            const uint8_t e0t = ea[0].type >> ea_m_shift;
+            const uint8_t e1t = ea[1].type >> ea_m_shift;
+            if (e0t != ea_m_Dn && e0t != ea_m_An)
+                ASSEMBLER_ERROR("Invalid first operand for EXG");
+            if (e1t != ea_m_Dn && e1t != ea_m_An)
+                ASSEMBLER_ERROR("Invalid second operand for EXG");
+
+            iwords[0] = 0xc100 | (ea[0].type & 7) << 9 | (ea[1].type & 7);
+            if (e0t == ea_m_Dn && e1t == ea_m_Dn)
+                iwords[0] |= 0b01000 << 3;
+            else if (e0t == ea_m_An && e1t == ea_m_An)
+                iwords[0] |= 0b01001 << 3;
+            else
+                iwords[0] |= 0b10001 << 3;
+            goto done;
+        }
         case token_type::EXT:
             assert(osize == opsize::w || osize == opsize::l);
             if (ea[0].type >> ea_m_shift != ea_m_Dn)
@@ -728,28 +753,30 @@ operands_done:
         case token_type::OR:
             iwords[0] = encode_binop(info, ea, osize, 0x0000, 0x8000);
             break;
+        case token_type::JMP:
+            iwords[0] = encode_ea_instruction(info, ea[0], 0x4ec0);
+            break;
+        case token_type::JSR:
+            iwords[0] = encode_ea_instruction(info, ea[0], 0x4e80);
+            break;
+        case token_type::LEA:
+            assert(osize == opsize::l);
+            if (ea[1].type >> ea_m_shift != ea_m_An)
+                ASSEMBLER_ERROR("Destination register must be address register for LEA");
+            iwords[0] = encode_ea_instruction(info, ea[0], 0x41c0 | (ea[1].type & 7) << 9);
+            break;
         case token_type::PEA:
             assert(osize == opsize::l);
-            switch (ea[0].type >> ea_m_shift) {
-            case ea_m_Dn:
-            case ea_m_An:
-            case ea_m_A_ind_post:
-            case ea_m_A_ind_pre:
-                ASSEMBLER_ERROR("Invalid operand to PEA");
-            case ea_m_Other:
-                if ((ea[0].type & 7) == ea_other_imm)
-                    ASSEMBLER_ERROR("Invalid operand to PEA");
-                break;
-            default:
-                break;
-            }
-            iwords[0] = 0x4840 | (ea[0].type & 0x3f);
+            iwords[0] = encode_ea_instruction(info, ea[0], 0x4840);
             break;
         case token_type::RTS:
             iwords[0] = 0x4e75;
             break;
         case token_type::SUB:
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0400, 0x9000);
+            break;
+        case token_type::SUBQ:
+            iwords[0] = encode_addsub_q(info, ea, osize, true);
             break;
         case token_type::SWAP:
             assert(osize == opsize::w && info.num_operands == 1);
@@ -933,6 +960,38 @@ done:
         constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
 
         return opcode | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea.type & 0x3f);
+    }
+
+    uint16_t encode_ea_instruction(const instruction_info_type& info, const ea_result& ea, uint16_t opcode)
+    {
+        switch (ea.type >> ea_m_shift) {
+        case ea_m_Dn:
+        case ea_m_An:
+        case ea_m_A_ind_post:
+        case ea_m_A_ind_pre:
+            ASSEMBLER_ERROR("Invalid operand to " << info.name);
+        case ea_m_Other:
+            if ((ea.type & 7) == ea_other_imm)
+                ASSEMBLER_ERROR("Invalid operand to " << info.name);
+            break;
+        default:
+            break;
+        }
+        return opcode| (ea.type & 0x3f);
+    }
+
+    uint16_t encode_addsub_q(const instruction_info_type& info, ea_result* ea, opsize osize, bool is_sub)
+    {
+        if (ea[0].type != ea_immediate)
+            ASSEMBLER_ERROR("Source operand for " << info.name << " must be immediate");
+        if (ea[0].val < 1 || ea[0].val > 8)
+            ASSEMBLER_ERROR("Immediate out of range for " << info.name);
+        if (osize == opsize::b && ea[1].type >> ea_m_shift == ea_m_An)
+            ASSEMBLER_ERROR("Byte size not allowed for address register destination for " << info.name);
+
+        ea[0].type = 0; // Don't encode the immediate
+        constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
+        return 0x5000 | is_sub << 8 | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[1].type & 0x3f);
     }
 };
 

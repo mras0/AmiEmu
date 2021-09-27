@@ -24,6 +24,30 @@ namespace {
 // MOVEM
 // TAS
 // CHK
+// MOVE USP
+// RESET
+// NOP
+// STOP
+// RTE
+// RTR
+// RTS
+// TRAPV
+// ILLEGAL
+// TRAP
+// Scc
+// DBcc
+// LINK
+// UNLNK
+// BRA
+// BSR
+// Bcc
+// MOVEQ
+// ABCD/SBCD
+// DIVU
+// DIVS
+// MULU
+// MULS
+// ADDX/SUBX
 
 const char* const line0000_immediate = R"(
 #<data>,<ea> :    |                
@@ -325,14 +349,17 @@ const char* const pea_table = R"(
 )";
 
 const char* const swap_table = R"(
-Dn :              |                 
-  .W :            |  4(1/0)
+<ea> :            |                 
+  .W :            |
+    Dn            |  4(1/0)
 )";
 
 const char* const ext_table = R"(
-Dn :              |                 
-  .W :            |  4(1/0)         
-  .L :            |  4(1/0)         
+<ea> :            |                 
+  .W :            |  
+    Dn            |  4(1/0)         
+  .L :            | 
+    Dn            |  4(1/0)         
 )";
 
 const char* const tst_table = R"(
@@ -398,6 +425,130 @@ Dn,<ea> :         |
     (d8,An,Xn)    | 12(1/2) 14(3/0)
     (xxx).W       | 12(1/2) 12(3/0)
     (xxx).L       | 12(1/2) 16(4/0)
+<ea>,An :         |                
+  .W :            |                
+    Dn            |  8(1/0)  0(0/0)
+    An            |  8(1/0)  0(0/0)
+    (An)          |  8(1/0)  4(1/0)
+    (An)+         |  8(1/0)  4(1/0)
+    -(An)         |  8(1/0)  6(1/0)
+    (d16,An)      |  8(1/0)  8(2/0)
+    (d8,An,Xn)    |  8(1/0) 10(2/0)
+    (xxx).W       |  8(1/0)  8(2/0)
+    (xxx).L       |  8(1/0) 12(3/0)
+    #<data>       |  8(1/0)  4(1/0)
+  .L :            |                
+    Dn            |  8(1/0)  0(0/0)
+    An            |  8(1/0)  0(0/0)
+    (An)          |  6(1/0)  8(2/0)
+    (An)+         |  6(1/0)  8(2/0)
+    -(An)         |  6(1/0) 10(2/0)
+    (d16,An)      |  6(1/0) 12(3/0)
+    (d8,An,Xn)    |  6(1/0) 14(3/0)
+    (xxx).W       |  6(1/0) 12(3/0)
+    (xxx).L       |  6(1/0) 16(4/0)
+    #<data>       |  8(1/0)  8(2/0)
+)";
+
+
+const char* const lea_table = R"(
+<ea>,An :         |         
+  .L :            |         
+    (An)          |  4(1/0) 
+    (d16,An)      |  8(2/0) 
+    (d8,An,Xn)    | 12(2/0) 
+    (xxx).W       |  8(2/0) 
+    (xxx).L       | 12(3/0) 
+)";
+
+const char* const jsr_table = R"(
+<ea> :            |         
+    (An)          | 16(2/2) 
+    (d16,An)      | 18(2/2) 
+    (d8,An,Xn)    | 22(2/2) 
+    (xxx).W       | 18(2/2) 
+    (xxx).L       | 20(3/2) 
+)";
+
+const char* const jmp_table = R"(
+<ea> :            |         
+    (An)          |  8(2/0) 
+    (d16,An)      | 10(2/0) 
+    (d8,An,Xn)    | 14(2/0) 
+    (xxx).W       | 10(2/0) 
+    (xxx).L       | 12(3/0) 
+)";
+
+const char* const addq_subq_table = R"(
+#<data>,<ea> :    |                
+  .B or .W :      |                
+    Dn            |  4(1/0)  0(0/0)
+    An            |  8(1/0)  0(0/0)
+    (An)          |  8(1/1)  4(1/0)
+    (An)+         |  8(1/1)  4(1/0)
+    -(An)         |  8(1/1)  6(1/0)
+    (d16,An)      |  8(1/1)  8(2/0)
+    (d8,An,Xn)    |  8(1/1) 10(2/0)
+    (xxx).W       |  8(1/1)  8(2/0)
+    (xxx).L       |  8(1/1) 12(3/0)
+  .L :            |                
+    Dn            |  8(1/0)  0(0/0)
+    An            |  8(1/0)  0(0/0)
+    (An)          | 12(1/2)  8(2/0)
+    (An)+         | 12(1/2)  8(2/0)
+    -(An)         | 12(1/2) 10(2/0)
+    (d16,An)      | 12(1/2) 12(3/0)
+    (d8,An,Xn)    | 12(1/2) 14(3/0)
+    (xxx).W       | 12(1/2) 12(3/0)
+    (xxx).L       | 12(1/2) 16(4/0)
+)";
+
+const char* const and_or_table = R"(
+<ea>,Dn :         |                 
+  .B or .W :      |                 
+    Dn            |  4(1/0)  0(0/0) 
+    (An)          |  4(1/0)  4(1/0) 
+    (An)+         |  4(1/0)  4(1/0) 
+    -(An)         |  4(1/0)  6(1/0) 
+    (d16,An)      |  4(1/0)  8(2/0) 
+    (d8,An,Xn)    |  4(1/0) 10(2/0) 
+    (xxx).W       |  4(1/0)  8(2/0) 
+    (xxx).L       |  4(1/0) 12(3/0) 
+    #<data>       |  4(1/0)  4(1/0) 
+  .L :            |                 
+    Dn            |  8(1/0)  0(0/0) 
+    (An)          |  6(1/0)  8(2/0) 
+    (An)+         |  6(1/0)  8(2/0) 
+    -(An)         |  6(1/0) 10(2/0) 
+    (d16,An)      |  6(1/0) 12(3/0) 
+    (d8,An,Xn)    |  6(1/0) 14(3/0) 
+    (xxx).W       |  6(1/0) 12(3/0) 
+    (xxx).L       |  6(1/0) 16(4/0) 
+    #<data>       |  8(1/0)  8(2/0) 
+Dn,<ea> :         |                 
+  .B or .W :      |                 
+    (An)          |  8(1/1)  4(1/0) 
+    (An)+         |  8(1/1)  4(1/0) 
+    -(An)         |  8(1/1)  6(1/0) 
+    (d16,An)      |  8(1/1)  8(2/0) 
+    (d8,An,Xn)    |  8(1/1) 10(2/0) 
+    (xxx).W       |  8(1/1)  8(2/0) 
+    (xxx).L       |  8(1/1) 12(3/0) 
+  .L :            |                 
+    (An)          | 12(1/2)  8(2/0) 
+    (An)+         | 12(1/2)  8(2/0) 
+    -(An)         | 12(1/2) 10(2/0) 
+    (d16,An)      | 12(1/2) 12(3/0) 
+    (d8,An,Xn)    | 12(1/2) 14(3/0) 
+    (xxx).W       | 12(1/2) 12(3/0) 
+    (xxx).L       | 12(1/2) 16(4/0) 
+)";
+
+const char* const exg_table = R"(
+  .L :            |        
+    Dx,Dy         |  6(1/0)
+    Ax,Ay         |  6(1/0)
+    Dx,Ay         |  6(1/0)
 )";
 
 const struct {
@@ -413,7 +564,14 @@ const struct {
     { swap_table         , { "SWAP" } },
     { ext_table          , { "EXT" } },
     { tst_table          , { "TST" } },
+    { lea_table          , { "LEA" } },
+    { jsr_table          , { "JSR" } },
+    { jmp_table          , { "JMP" } },
+    { addq_subq_table    , { "ADDQ", "SUBQ" } },
+    { and_or_table       , { "AND", "OR" } },
+    { exg_table          , { "EXG" } },
     { add_sub_table      , { "ADD", "SUB" } },
+
 };
 
 std::pair<unsigned, unsigned> interpret_cycle_text(const std::string& s)
@@ -462,7 +620,8 @@ struct tester {
         auto& ram = mem.ram();
 
         bool all_ok = true;
-
+        bool any = false;
+        
         for (std::string line; std::getline(iss, line);) {
             if (line.empty())
                 continue;
@@ -491,23 +650,33 @@ struct tester {
             auto replacement = trim(line.substr(4, divpos - 4));
             const auto [cycles, memaccesses] = interpret_cycle_text(line.substr(divpos + 1));
 
+            if (sizes.empty())
+                sizes = { "" };
+
             //std::cout << "\tReplacement = \"" << replacement << "\" cycles:" << cycles << "/" << memaccesses << "\n";
+
             for (const auto& inst : insts) {
+                const char* data = "$34";
+                if (inst.back() == 'Q')
+                    data = "$8";
+
                 for (const auto& s : sizes) {
                     if (s == ".B" && replacement == "An")
                         continue;
 
-                    auto args = replace(code_template, "<ea>", replacement);
+                    auto args = code_template.empty() ? replacement : replace(code_template, "<ea>", replacement);
 
                     args = replace(args, "-(An)", "-(A2)");
                     args = replace(args, "(xxx)", "$12");
                     args = replace(args, "(d16,An)", "$12(A0)");
                     args = replace(args, "(d8,An,Xn)", "$12(A0,D0.L)");
                     args = replace(args, "Dn", "D1");
-                    args = replace(args, "An", "A3");
                     args = replace(args, "Dx", "D2");
                     args = replace(args, "Dy", "D3");
-                    args = replace(args, "<data>", "$34");
+                    args = replace(args, "An", "A3");
+                    args = replace(args, "Ax", "A3");
+                    args = replace(args, "Ay", "A4");
+                    args = replace(args, "<data>", data);
 
 
                     //std::cout << "\tTest " << i << s << "\t" << args << "!\n";
@@ -543,8 +712,15 @@ struct tester {
                         all_ok = false;
                     }
 
+                    any = true;
                 }
             }
+        }
+        if (!any) {
+            std::cout << "Warning: No tests for";
+            for (const auto& inst : insts)
+                std::cout << " " << inst;
+            std::cout << "\n";
         }
         return all_ok;
     }
