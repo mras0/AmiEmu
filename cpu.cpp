@@ -629,6 +629,9 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+
+        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
+
         const auto osmask = opsize_msb_mask(inst_->size);
         const auto orig_val = val;
         bool carry;
@@ -821,6 +824,8 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
+
         const auto msb = !!(val & opsize_msb_mask(inst_->size));
 
         bool carry;
@@ -842,9 +847,20 @@ private:
 
     void handle_Bcc()
     {
+        // Base: Bcc.B  4/1, Bcc.W  8/2
+        // Taken:      10/2,       10/2
+        // Not taken:   8/1,       12/2
         assert(inst_->nea == 1 && inst_->ea[0] == ea_disp && (inst_->extra & extra_cond_flag));
-        if (!state_.eval_cond(static_cast<conditional>(inst_->extra >> 4)))
+        if (!state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
+            step_res_.clock_cycles = inst_->size == opsize::b ? 8 : 12;
             return;
+        }
+#ifndef NDEBUG
+        if (inst_->size == opsize::b)
+            mem_accesses_++;
+#endif
+        step_res_.clock_cycles = 10;
+        step_res_.mem_accesses = 2;
         state_.pc = ea_data_[0];
     }
 
@@ -869,8 +885,10 @@ private:
         if (inst_->size == opsize::b) {
             bitnum &= 7;
         } else {
-            assert(inst_->size == opsize::l);
+            assert(inst_->size == opsize::l && inst_->ea[1] >> ea_m_shift == ea_m_Dn);
             bitnum &= 31;
+            if (bitnum > 15)
+                step_res_.clock_cycles += 2;
         }
         state_.update_sr(srm_z, !((num >> bitnum) & 1) ? srm_z : 0); // Set according to the previous state of the bit
         return { bitnum, num };
@@ -944,17 +962,30 @@ private:
 
     void handle_DBcc()
     {
+        // Base clock cycles:             8/2
+        // CC true:                      12/2
+        // CC false, count not expired:  10/2
+        // CC false, count expired:      14/3
         assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) == ea_m_Dn && inst_->extra & extra_cond_flag);
         assert(inst_->size == opsize::w && inst_->ea[1] == ea_disp);
 
-        if (state_.eval_cond(static_cast<conditional>(inst_->extra >> 4)))
+        if (state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
+            step_res_.clock_cycles += 4;
             return;
+        }
 
         uint16_t val = static_cast<uint16_t>(read_ea(0));
         --val;
         write_ea(0, val);
         if (val != 0xffff) {
+            step_res_.clock_cycles += 2;
             state_.pc = ea_data_[1];
+        } else {
+            step_res_.clock_cycles += 6;
+            step_res_.mem_accesses++;
+#ifndef NDEBUG
+            ++mem_accesses_;
+#endif
         }
     }
 
@@ -1089,6 +1120,8 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
+
         bool carry;
         if (!cnt) {
             carry = false;
@@ -1339,6 +1372,8 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
+
         bool carry = false;
         if (cnt) {
             const auto nbits = opsize_bytes(inst_->size) * 8;
@@ -1365,6 +1400,8 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
+
         bool carry = false;
         if (cnt) {
             const auto nbits = opsize_bytes(inst_->size) * 8;
@@ -1390,6 +1427,7 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         // TODO: Could optimize
         const auto msb = opsize_msb_mask(inst_->size);
@@ -1413,6 +1451,7 @@ private:
             cnt = read_ea(0) & 63;
             val = read_ea(1);
         }
+        step_res_.clock_cycles += static_cast<uint8_t>(2 * cnt);
 
         // TODO: Could optimize
         const auto shift = opsize_bytes(inst_->size) * 8 - 1;
@@ -1466,6 +1505,8 @@ private:
     {
         assert(inst_->nea == 1 && inst_->size == opsize::b && (inst_->extra & extra_cond_flag));
         const bool cond = state_.eval_cond(static_cast<conditional>(inst_->extra >> 4));
+        if (cond && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
+            step_res_.clock_cycles += 2;
         write_ea(0, cond ? 0xff : 0x00);
     }
 

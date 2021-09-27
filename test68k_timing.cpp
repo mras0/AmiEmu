@@ -59,6 +59,73 @@ const char* const cmpi_table = R"(
     (xxx).L       | 12(3/0) 16(4/0)
 )";
 
+const char* const bchg_bset_table = R"(
+Dn,<ea> :         |                 
+  .B :            |                 
+    (An)          |  8(1/1)  4(1/0) 
+    (An)+         |  8(1/1)  4(1/0) 
+    -(An)         |  8(1/1)  6(1/0) 
+    (d16,An)      |  8(1/1)  8(2/0) 
+    (d8,An,Xn)    |  8(1/1) 10(2/0) 
+    (xxx).W       |  8(1/1)  8(2/0) 
+    (xxx).L       |  8(1/1) 12(3/0) 
+#<data>,<ea> :    |                 
+  .B :            |                 
+    (An)          | 12(2/1)  4(1/0) 
+    (An)+         | 12(2/1)  4(1/0) 
+    -(An)         | 12(2/1)  6(1/0) 
+    (d16,An)      | 12(2/1)  8(2/0) 
+    (d8,An,Xn)    | 12(2/1) 10(2/0) 
+    (xxx).W       | 12(2/1)  8(2/0) 
+    (xxx).L       | 12(2/1) 12(3/0) 
+)";
+
+const char* const bclr_table = R"(
+Dn,<ea> :         |                
+  .B :            |                
+    (An)          |  8(1/1)  4(1/0)
+    (An)+         |  8(1/1)  4(1/0)
+    -(An)         |  8(1/1)  6(1/0)
+    (d16,An)      |  8(1/1)  8(2/0)
+    (d8,An,Xn)    |  8(1/1) 10(2/0)
+    (xxx).W       |  8(1/1)  8(2/0)
+    (xxx).L       |  8(1/1) 12(3/0)
+#<data>,<ea> :    |                
+  .B :            |                
+    (An)          | 12(2/1)  4(1/0)
+    (An)+         | 12(2/1)  4(1/0)
+    -(An)         | 12(2/1)  6(1/0)
+    (d16,An)      | 12(2/1)  8(2/0)
+    (d8,An,Xn)    | 12(2/1) 10(2/0)
+    (xxx).W       | 12(2/1)  8(2/0)
+    (xxx).L       | 12(2/1) 12(3/0)
+)";
+
+const char* const btst_table = R"(
+Dn,<ea> :         |                
+  .B :            |                
+    (An)          |  4(1/0)  4(1/0)
+    (An)+         |  4(1/0)  4(1/0)
+    -(An)         |  4(1/0)  6(1/0)
+    (d16,An)      |  4(1/0)  8(2/0)
+    (d8,An,Xn)    |  4(1/0) 10(2/0)
+    (xxx).W       |  4(1/0)  8(2/0)
+    (xxx).L       |  4(1/0) 12(3/0)
+Dn,Dm :           |                
+  .L :            |  6(1/0)  0(0/0)
+#<data>,<ea> :    |                
+  .B :            |                
+    (An)          |  8(2/0)  4(1/0)
+    (An)+         |  8(2/0)  4(1/0)
+    -(An)         |  8(2/0)  6(1/0)
+    (d16,An)      |  8(2/0)  8(2/0)
+    (d8,An,Xn)    |  8(2/0) 10(2/0)
+    (xxx).W       |  8(2/0)  8(2/0)
+    (xxx).L       |  8(2/0) 12(3/0)
+#<data>,Dn :      |                
+  .L :            | 10(2/0)  0(0/0)
+)";
+
 const char* const move_table = R"(
 <ea>,Dn :         |        
   .B or .W :      |        
@@ -385,6 +452,19 @@ const char* const tst_table = R"(
     (xxx).L       |  4(1/0) 16(4/0) 
 )";
 
+const char* const tas_table = R"(
+<ea> :            |                
+  .B :            |                
+    Dn            |  4(1/0)  0(0/0)
+    (An)          | 10(1/1)  4(1/0)
+    (An)+         | 10(1/1)  4(1/0)
+    -(An)         | 10(1/1)  6(1/0)
+    (d16,An)      | 10(1/1)  8(2/0)
+    (d8,An,Xn)    | 10(1/1) 10(2/0)
+    (xxx).W       | 10(1/1)  8(1/0)
+    (xxx).L       | 10(1/1) 12(2/0)
+)";
+
 const char* const add_sub_table = R"(
 <ea>,Dn :         |                
   .B or .W :      |                
@@ -451,6 +531,15 @@ Dn,<ea> :         |
     #<data>       |  8(1/0)  8(2/0)
 )";
 
+const char* const addx_subx_table = R"(
+<ea> :            |
+  .B or .W :      |
+    Dy,Dx         |  4(1/0)
+    -(Ay),-(Ax)   | 18(3/1)
+  .L :            |
+    Dy,Dx         |  8(1/0)
+    -(Ay),-(Ax)   | 30(5/2)
+)";
 
 const char* const lea_table = R"(
 <ea>,An :         |         
@@ -623,12 +712,34 @@ Dn,<ea> :         |
     (xxx).L       | 12(1/2) 16(4/0)
 )";
 
+const char* const abcd_sbcd_table = R"(
+<ea> :            |        
+  .B :            |
+    Dy,Dx         |  6(1/0)
+    -(Ay),-(Ax)   | 18(3/1)
+)";
+
+const char* const shift_rot_table = R"(
+<ea> :            |                
+  .W :            |                
+    (An)          |  8(1/1)  4(1/0)
+    (An)+         |  8(1/1)  4(1/0)
+    -(An)         |  8(1/1)  6(1/0)
+    (d16,An)      |  8(1/1)  8(2/0)
+    (d8,An,Xn)    |  8(1/1) 10(2/0)
+    (xxx).W       |  8(1/1)  8(2/0)
+    (xxx).L       |  8(1/1) 12(3/0)
+)";
+
 const struct {
     const char* table;
     std::vector<std::string> instructions;
 } timing_tests[] = {
     { line0000_immediate , { "EOR", "OR", "AND", "SUB", "ADD" } },
     { cmpi_table         , { "CMP" } },
+    { bchg_bset_table    , { "BCHG", "BSET" } },
+    { bclr_table         , { "BCLR" } },
+    { btst_table         , { "BTST" } },
     { move_table         , { "MOVE" } },
     { line1111_rmw_table , { "CLR", "NEGX", "NEG", "NOT" } },
     { nbcd_table         , { "NBCD" } },
@@ -637,6 +748,7 @@ const struct {
     { swap_table         , { "SWAP" } },
     { ext_table          , { "EXT" } },
     { tst_table          , { "TST" } },
+    { tas_table          , { "TAS" } },
     { lea_table          , { "LEA" } },
     { jsr_table          , { "JSR" } },
     { jmp_table          , { "JMP" } },
@@ -644,8 +756,11 @@ const struct {
     { and_or_table       , { "AND", "OR" } },
     { exg_table          , { "EXG" } },
     { add_sub_table      , { "ADD", "SUB" } },
+    { addx_subx_table    , { "ADDX", "SUBX" } },
     { cmp_table          , { "CMP" } },
     { eor_table          , { "EOR" } },
+    { abcd_sbcd_table    , { "ABCD", "SBCD" } },
+    { shift_rot_table    , { "ASL", "ASR", "LSL", "LSR", "ROL", "ROR", "ROXL", "ROXR" } },
 };
 
 std::pair<unsigned, unsigned> interpret_cycle_text(const std::string& s)
@@ -735,12 +850,14 @@ struct tester {
                     data = "$8";
 
                 for (const auto& s : sizes) {
-                    if (s == ".B" && (replacement == "An" || code_template.find_first_of(",An") != std::string::npos))
+                    if (s == ".B" && (replacement == "An" || code_template.find(",An") != std::string::npos))
                         continue;
 
                     auto args = code_template.empty() ? replacement : replace(code_template, "<ea>", replacement);
 
                     args = replace(args, "-(An)", "-(A2)");
+                    args = replace(args, "-(Ax)", "-(A2)");
+                    args = replace(args, "-(Ay)", "-(A2)");
                     args = replace(args, "(xxx)", "$12");
                     args = replace(args, "(d16,An)", "$12(A0)");
                     args = replace(args, "(d8,An,Xn)", "$12(A0,D0.L)");
@@ -1059,6 +1176,13 @@ bool run_timing_tests()
         { "l BRA.W l"                       , 10, 2 },
         { "l BSR.B l"                       , 18, 4 },
         { "l BSR.W l"                       , 18, 4 },
+        { "l BEQ.B l"                       , 10, 2 }, // Taken
+        { "l BEQ.W l"                       , 10, 2 }, // Taken
+        { "l BNE.B l"                       , 8,  1 }, // Not taken
+        { "l BNE.W l"                       , 12, 2 }, // Not taken
+        { "l DBEQ d2, l"                    , 12, 2 }, // Condition true
+        { "l DBNE d2, l"                    , 10, 2 }, // Condition false, count not expired
+        { "l DBNE d0, l"                    , 14, 3 }, // Condition false, count expired
 
         { "OR.B #$12, CCR"                  , 20, 3 },
         { "AND.B #$12, CCR"                 , 20, 3 },
@@ -1066,6 +1190,202 @@ bool run_timing_tests()
         { "OR.W #$12, SR"                   , 20, 3 },
         { "AND.W #$12, SR"                  , 20, 3 },
         { "EOR.W #$12, SR"                  , 20, 3 },
+
+        // CC false
+        { "SNE D0"                          ,  4, 1 },
+        { "SNE (A0)"                        , 12, 3 },
+        { "SNE (A0)+"                       , 12, 3 },
+        { "SNE -(A2)"                       , 14, 3 },
+        { "SNE 2(A0)"                       , 16, 4 },
+        { "SNE 2(A0,D2.L)"                  , 18, 4 },
+        { "SNE $10.W"                       , 16, 4 },
+        { "SNE $10.L"                       , 20, 5 },
+        // CC true
+        { "SEQ D0"                          ,  6, 1 },
+        { "SEQ (A0)"                        , 12, 3 },
+        { "SEQ (A0)+"                       , 12, 3 },
+        { "SEQ -(A2)"                       , 14, 3 },
+        { "SEQ 2(A0)"                       , 16, 4 },
+        { "SEQ 2(A0,D2.L)"                  , 18, 4 },
+        { "SEQ $10.W"                       , 16, 4 },
+        { "SEQ $10.L"                       , 20, 5 },
+
+        { "BCHG D3, D0"                     ,  6, 1 },
+        { "BCHG D4, D0"                     ,  8, 1 },
+        { "BCHG #4, D0"                     , 10, 2 },
+        { "BCHG #18, D0"                    , 12, 2 },
+        { "BSET D3, D0"                     ,  6, 1 },
+        { "BSET D4, D0"                     ,  8, 1 },
+        { "BSET #4, D0"                     , 10, 2 },
+        { "BSET #18, D0"                    , 12, 2 },
+        { "BCLR D3, D0"                     ,  8, 1 },
+        { "BCLR D4, D0"                     , 10, 1 },
+        { "BCLR #4, D0"                     , 12, 2 },
+        { "BCLR #18, D0"                    , 14, 2 },
+
+        { "MOVEP.W D0, $12(A0)"             , 16, 4 },
+        { "MOVEP.L D0, $12(A0)"             , 24, 6 },
+        { "MOVEP.W $12(A0), D0"             , 16, 4 },
+        { "MOVEP.L $12(A0), D0"             , 24, 6 },
+
+        { "MOVE A0, USP"                    ,  4, 1 },
+        { "MOVE USP, A0"                    ,  4, 1 },
+
+        { "CMPM.B (A0)+, (A1)+"             , 12, 3 },
+        { "CMPM.W (A0)+, (A1)+"             , 12, 3 },
+        { "CMPM.L (A0)+, (A1)+"             , 20, 5 },
+
+        { "ASL.B D0, D0"                    ,  6, 1 },
+        { "ASL.B D3, D0"                    , 16, 1 },
+        { "ASL.B D4, D0"                    , 40, 1 },
+        { "ASL.W D0, D0"                    ,  6, 1 },
+        { "ASL.W D3, D0"                    , 16, 1 },
+        { "ASL.W D4, D0"                    , 40, 1 },
+        { "ASL.L D0, D0"                    ,  8, 1 },
+        { "ASL.L D3, D0"                    , 18, 1 },
+        { "ASL.L D4, D0"                    , 42, 1 },
+        { "ASL.B #1, D0"                    ,  8, 1 },
+        { "ASL.L #1, D0"                    , 10, 1 },
+        { "ASL.B #2, D0"                    , 10, 1 },
+        { "ASL.L #2, D0"                    , 12, 1 },
+        { "ASL.B #3, D0"                    , 12, 1 },
+        { "ASL.L #3, D0"                    , 14, 1 },
+        { "ASL.B #4, D0"                    , 14, 1 },
+        { "ASL.L #4, D0"                    , 16, 1 },
+        { "ASL.B #5, D0"                    , 16, 1 },
+        { "ASL.L #5, D0"                    , 18, 1 },
+        { "ASL.B #6, D0"                    , 18, 1 },
+        { "ASL.L #6, D0"                    , 20, 1 },
+        { "ASL.B #7, D0"                    , 20, 1 },
+        { "ASL.L #7, D0"                    , 22, 1 },
+        { "ASL.B #8, D0"                    , 22, 1 },
+        { "ASL.L #8, D0"                    , 24, 1 },
+
+        { "ASR.B D0, D0"                    ,  6, 1 },
+        { "ASR.B D3, D0"                    , 16, 1 },
+        { "ASR.B D4, D0"                    , 40, 1 },
+        { "ASR.W D0, D0"                    ,  6, 1 },
+        { "ASR.W D3, D0"                    , 16, 1 },
+        { "ASR.W D4, D0"                    , 40, 1 },
+        { "ASR.L D0, D0"                    ,  8, 1 },
+        { "ASR.L D3, D0"                    , 18, 1 },
+        { "ASR.L D4, D0"                    , 42, 1 },
+        { "ASR.B #1, D0"                    ,  8, 1 },
+        { "ASR.L #1, D0"                    , 10, 1 },
+        { "ASR.B #4, D0"                    , 14, 1 },
+        { "ASR.L #4, D0"                    , 16, 1 },
+        { "ASR.B #7, D0"                    , 20, 1 },
+        { "ASR.L #7, D0"                    , 22, 1 },
+        { "ASR.B #8, D0"                    , 22, 1 },
+        { "ASR.L #8, D0"                    , 24, 1 },
+
+        { "LSL.B D0, D0"                    ,  6, 1 },
+        { "LSL.B D3, D0"                    , 16, 1 },
+        { "LSL.B D4, D0"                    , 40, 1 },
+        { "LSL.W D0, D0"                    ,  6, 1 },
+        { "LSL.W D3, D0"                    , 16, 1 },
+        { "LSL.W D4, D0"                    , 40, 1 },
+        { "LSL.L D0, D0"                    ,  8, 1 },
+        { "LSL.L D3, D0"                    , 18, 1 },
+        { "LSL.L D4, D0"                    , 42, 1 },
+        { "LSL.B #1, D0"                    ,  8, 1 },
+        { "LSL.L #1, D0"                    , 10, 1 },
+        { "LSL.B #4, D0"                    , 14, 1 },
+        { "LSL.L #4, D0"                    , 16, 1 },
+        { "LSL.B #7, D0"                    , 20, 1 },
+        { "LSL.L #7, D0"                    , 22, 1 },
+        { "LSL.B #8, D0"                    , 22, 1 },
+        { "LSL.L #8, D0"                    , 24, 1 },
+
+        { "LSR.B D0, D0"                    ,  6, 1 },
+        { "LSR.B D3, D0"                    , 16, 1 },
+        { "LSR.B D4, D0"                    , 40, 1 },
+        { "LSR.W D0, D0"                    ,  6, 1 },
+        { "LSR.W D3, D0"                    , 16, 1 },
+        { "LSR.W D4, D0"                    , 40, 1 },
+        { "LSR.L D0, D0"                    ,  8, 1 },
+        { "LSR.L D3, D0"                    , 18, 1 },
+        { "LSR.L D4, D0"                    , 42, 1 },
+        { "LSR.B #1, D0"                    ,  8, 1 },
+        { "LSR.L #1, D0"                    , 10, 1 },
+        { "LSR.B #4, D0"                    , 14, 1 },
+        { "LSR.L #4, D0"                    , 16, 1 },
+        { "LSR.B #7, D0"                    , 20, 1 },
+        { "LSR.L #7, D0"                    , 22, 1 },
+        { "LSR.B #8, D0"                    , 22, 1 },
+        { "LSR.L #8, D0"                    , 24, 1 },
+
+        { "ROL.B D0, D0"                    ,  6, 1 },
+        { "ROL.B D3, D0"                    , 16, 1 },
+        { "ROL.B D4, D0"                    , 40, 1 },
+        { "ROL.W D0, D0"                    ,  6, 1 },
+        { "ROL.W D3, D0"                    , 16, 1 },
+        { "ROL.W D4, D0"                    , 40, 1 },
+        { "ROL.L D0, D0"                    ,  8, 1 },
+        { "ROL.L D3, D0"                    , 18, 1 },
+        { "ROL.L D4, D0"                    , 42, 1 },
+        { "ROL.B #1, D0"                    ,  8, 1 },
+        { "ROL.L #1, D0"                    , 10, 1 },
+        { "ROL.B #4, D0"                    , 14, 1 },
+        { "ROL.L #4, D0"                    , 16, 1 },
+        { "ROL.B #7, D0"                    , 20, 1 },
+        { "ROL.L #7, D0"                    , 22, 1 },
+        { "ROL.B #8, D0"                    , 22, 1 },
+        { "ROL.L #8, D0"                    , 24, 1 },
+
+        { "ROR.B D0, D0"                    ,  6, 1 },
+        { "ROR.B D3, D0"                    , 16, 1 },
+        { "ROR.B D4, D0"                    , 40, 1 },
+        { "ROR.W D0, D0"                    ,  6, 1 },
+        { "ROR.W D3, D0"                    , 16, 1 },
+        { "ROR.W D4, D0"                    , 40, 1 },
+        { "ROR.L D0, D0"                    ,  8, 1 },
+        { "ROR.L D3, D0"                    , 18, 1 },
+        { "ROR.L D4, D0"                    , 42, 1 },
+        { "ROR.B #1, D0"                    ,  8, 1 },
+        { "ROR.L #1, D0"                    , 10, 1 },
+        { "ROR.B #4, D0"                    , 14, 1 },
+        { "ROR.L #4, D0"                    , 16, 1 },
+        { "ROR.B #7, D0"                    , 20, 1 },
+        { "ROR.L #7, D0"                    , 22, 1 },
+        { "ROR.B #8, D0"                    , 22, 1 },
+        { "ROR.L #8, D0"                    , 24, 1 },
+
+        { "ROXL.B D0, D0"                   ,  6, 1 },
+        { "ROXL.B D3, D0"                   , 16, 1 },
+        { "ROXL.B D4, D0"                   , 40, 1 },
+        { "ROXL.W D0, D0"                   ,  6, 1 },
+        { "ROXL.W D3, D0"                   , 16, 1 },
+        { "ROXL.W D4, D0"                   , 40, 1 },
+        { "ROXL.L D0, D0"                   ,  8, 1 },
+        { "ROXL.L D3, D0"                   , 18, 1 },
+        { "ROXL.L D4, D0"                   , 42, 1 },
+        { "ROXL.B #1, D0"                   ,  8, 1 },
+        { "ROXL.L #1, D0"                   , 10, 1 },
+        { "ROXL.B #4, D0"                   , 14, 1 },
+        { "ROXL.L #4, D0"                   , 16, 1 },
+        { "ROXL.B #7, D0"                   , 20, 1 },
+        { "ROXL.L #7, D0"                   , 22, 1 },
+        { "ROXL.B #8, D0"                   , 22, 1 },
+        { "ROXL.L #8, D0"                   , 24, 1 },
+
+        { "ROXR.B D0, D0"                   ,  6, 1 },
+        { "ROXR.B D3, D0"                   , 16, 1 },
+        { "ROXR.B D4, D0"                   , 40, 1 },
+        { "ROXR.W D0, D0"                   ,  6, 1 },
+        { "ROXR.W D3, D0"                   , 16, 1 },
+        { "ROXR.W D4, D0"                   , 40, 1 },
+        { "ROXR.L D0, D0"                   ,  8, 1 },
+        { "ROXR.L D3, D0"                   , 18, 1 },
+        { "ROXR.L D4, D0"                   , 42, 1 },
+        { "ROXR.B #1, D0"                   ,  8, 1 },
+        { "ROXR.L #1, D0"                   , 10, 1 },
+        { "ROXR.B #4, D0"                   , 14, 1 },
+        { "ROXR.L #4, D0"                   , 16, 1 },
+        { "ROXR.B #7, D0"                   , 20, 1 },
+        { "ROXR.L #7, D0"                   , 22, 1 },
+        { "ROXR.B #8, D0"                   , 22, 1 },
+        { "ROXR.L #8, D0"                   , 24, 1 },
     };
 
     const uint32_t code_pos = 0x1000;
@@ -1088,9 +1408,12 @@ bool run_timing_tests()
             put_u16(&ram[code_pos + i * 2], insts[i]);
 
         cpu_state input_state {};
-        input_state.sr = 0x2000;
+        input_state.sr = 0x2000 | srm_z;
         input_state.pc = code_pos;
         input_state.a[2] = 32;
+        input_state.d[2] = 0x100;
+        input_state.d[3] = 5;
+        input_state.d[4] = 17;
         input_state.usp = 64;
         input_state.ssp = 32;
 
@@ -1112,37 +1435,24 @@ bool run_timing_tests()
 
 
 // TODO:
-// BCHG,BSET,BCLR,BTST
-// MOVEP
 // MOVEM
-// TAS
 // CHK
-// MOVE USP
 // RESET
 // STOP
 // TRAPV
 // ILLEGAL
 // TRAP
-// Scc
-// DBcc
-// Bcc
-// ABCD/SBCD
 // DIVU
 // DIVS
 // MULU
 // MULS
-// ADDX/SUBX
-// CMPM
-// ASL, ASR, LSL, LSR, ROL, ROR, ROXL, ROXR
 
 bool test_timing()
 {
-    if (!run_timing_tests())
-        /*return false*/;
+    bool all_ok = true;
+    all_ok &= run_timing_tests();
 
     tester t;
-
-    bool all_ok = true;
     for (const auto& tc : timing_tests) {
         const bool ok = t.tests_from_table(tc.table, tc.instructions);
         all_ok &= ok;
