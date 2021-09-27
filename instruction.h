@@ -91,7 +91,13 @@ struct instruction {
     uint8_t nea;
     uint8_t ea[2];
     uint8_t data;
+    uint8_t extra;
 };
+
+constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
+constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
+
+constexpr uint8_t ea_disp = 0b01'000'011;
 
 extern const instruction instructions[65536];
 

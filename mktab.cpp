@@ -96,15 +96,15 @@ constexpr const inst_desc insts[] = {
     {"SUBQ"              , "BWL" , "0 1 0 1 Data3 1 Sx  M     Xn   " , "   " },
     {"Scc"               , "B  " , "0 1 0 1 Cond    1 1 M     Xn   " , "   " },
     {"DBcc"              , " W " , "0 1 0 1 Cond    1 1 0 0 1 Dn   " , "W D" },
-    {"BRA"               , "BW " , "0 1 1 0 0 0 0 0 Displacement   " , "W D" },
-    {"BSR"               , "BW " , "0 1 1 0 0 0 0 1 Displacement   " , "W D" },
-    {"Bcc"               , "BW " , "0 1 1 0 Cond    Displacement   " , "W D" },
+    {"BRA"               , "BW " , "0 1 1 0 0 0 0 0 Displacement   " , "W d" },
+    {"BSR"               , "BW " , "0 1 1 0 0 0 0 1 Displacement   " , "W d" },
+    {"Bcc"               , "BW " , "0 1 1 0 Cond    Displacement   " , "W d" },
     {"MOVEQ"             , "  L" , "0 1 1 1 Dn    0 Data8          " , "   " },
     {"DIVU"              , " W " , "1 0 0 0 Dn    0 1 1 M     Xn   " , "   " },
     {"DIVS"              , " W " , "1 0 0 0 Dn    1 1 1 M     Xn   " , "   " },
     {"SBCD"              , "B  " , "1 0 0 0 Xn    1 0 0 0 0 m Xn   " , "   " },
     {"OR"                , "BWL" , "1 0 0 0 Dn    DzSx  M     Xn   " , "   " },
-    {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   " },
+    {"SUB"               , "BWL" , "1 0 0 1 Dn    DzSx  M     Xn   " , "   ", 0 },
     {"SUBX"              , "BWL" , "1 0 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
     {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   ", 0 },
     {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " },
@@ -115,7 +115,7 @@ constexpr const inst_desc insts[] = {
     {"MULS"              , " W " , "1 1 0 0 Dn    1 1 1 M     Xn   " , "   " },
     {"ABCD"              , "B  " , "1 1 0 0 Xn    1 0 0 0 0 m Xn   " , "   " },
     {"AND"               , "BWL" , "1 1 0 0 Dn    DzSx  M     Xn   " , "   " },
-    {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   " },
+    {"ADD"               , "BWL" , "1 1 0 1 Dn    DzSx  M     Xn   " , "   ", 0 },
     {"ADDX"              , "BWL" , "1 1 0 1 Xn    1 Sx  0 0 m Xn   " , "   " },
     {"ADDA"              , " WL" , "1 1 0 1 An    Sz1 1 M     Xn   " , "   ", 0},
     {"ASd"               , "BWL" , "1 1 1 0 0 0 0 d 1 1 M     Xn   " , "   " },
@@ -236,14 +236,20 @@ struct instruction_info {
     uint8_t nea;
     uint8_t ea[2];
     uint8_t data;
+    uint8_t extra;
 };
 instruction_info all_instructions[65536];
 
 constexpr uint8_t ea_imm = 0b00'111'100;
+
+// Note: Sync these with instruction.cpp/h
 constexpr uint8_t ea_data3 = 0b01'000'000;
 constexpr uint8_t ea_data4 = 0b01'000'001;
 constexpr uint8_t ea_data8 = 0b01'000'010;
 constexpr uint8_t ea_disp  = 0b01'000'011;
+
+constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
+constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
 
 opsize osize;
 int M; // M is always before Xn (except for MOVE)
@@ -378,9 +384,11 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             assert(false);
         }
 
+        ai.osize = osize;
+
         if (isbitop) {
             assert(osize == opsize::none && nea == 2);
-            osize = (ea[1] >= 0b010'000 && ea[1] != ea_imm) ? opsize::b : opsize::l;
+            ai.osize = (ea[1] >= 0b010'000 && ea[1] != ea_imm) ? opsize::b : opsize::l;
         }
 
         std::string name = desc.name;
@@ -391,16 +399,36 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
 
         assert(!swap_ea || nea == 2);
         ai.type = rot_dir != -1 ? name : desc.name;
-        ai.osize = osize;
         ai.nea = static_cast<uint8_t>(nea);
         std::copy(ea, ea + nea, ai.ea);
         ai.data = data;
         if (swap_ea)
             std::swap(ai.ea[0], ai.ea[1]);
 
-        if (osize != opsize::none) {
+        ai.extra = 0;
+        if (cond != -1)
+            ai.extra |= extra_cond_flag | (cond << 4);
+        
+        if (desc.imm[2] == 'D') {
+            assert(!strcmp(desc.name, "DBcc"));
+            assert(!strcmp(desc.imm, "W D"));
+            ai.extra |= extra_disp_flag;
+            assert(nea == 1);
+            ai.ea[ai.nea++] = ea_disp;
+        } else if (desc.imm[2] == 'd') {
+            assert(!strcmp(desc.imm, "W d"));
+            if (data == 0) {
+                ai.extra |= extra_disp_flag;
+                ai.osize = opsize::w;
+            } else {
+                ai.osize = opsize::b;
+                assert(data != 0xff);
+            }
+        }
+
+        if (ai.osize != opsize::none) {
             assert(nea > 0);
-            switch (osize) {
+            switch (ai.osize) {
             case opsize::b:
                 assert(strchr(desc.sizes, 'B'));
                 name += ".B";
@@ -417,8 +445,6 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         }
         ai.name = name;
 
-        if (isbitop)
-            osize = opsize::none;
         return;
     }
     assert(mask != 0xffff);
@@ -471,8 +497,9 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
     case field_type::M:
         assert(M == -1);
         for (unsigned i = 0; i < 8; ++i) {
-            if (((desc.block>>i)&1))
-                continue; // No An
+            if (((desc.block >> i) & 1)) {
+                continue;
+            }
             M = i;
             recur(i);
         }
@@ -577,7 +604,8 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
     case field_type::Displacement:
         assert(nea < 2);
         ea[nea++] = ea_disp;
-        for (unsigned i = 0; i < 256; ++i) {
+        // Note: 255 is not included since long word displacement is not supported on 68000
+        for (unsigned i = 0; i < 255; ++i) {
             data = static_cast<uint8_t>(i);
             recur(i);
         }
@@ -752,7 +780,7 @@ int main(int argc, char* argv[])
         out << "/* " << hexfmt(static_cast<uint16_t>(i)) << " */ { ";
         out << "inst_type::" << std::left << std::setw(10) << ai.type << ", " << std::left << std::setw(12) << n << ", opsize::" << std::left << std::setw(5) << ai.osize;
         out << ", " << static_cast<int>(ai.nea);
-        out << ", { 0x" << hexfmt(ai.ea[0]) << ", 0x" << hexfmt(ai.ea[1]) << "}, 0x" << hexfmt(ai.data);
+        out << ", { 0x" << hexfmt(ai.ea[0]) << ", 0x" << hexfmt(ai.ea[1]) << "}, 0x" << hexfmt(ai.data) << ", 0x" << hexfmt(ai.extra);
         out << " },\n";
     }
 }
