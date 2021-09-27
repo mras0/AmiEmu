@@ -1778,15 +1778,167 @@ public:
         return true;
     }
 
+    void do_pixels(bool vert_disp, unsigned virt_pixel, uint8_t* pixel_temp, const uint8_t* spriteidx)
+    {
+        const unsigned disp_pixel = virt_pixel - hires_min_pixel;
+        if (s_.vpos < vblank_end_vpos || disp_pixel >= graphics_width)
+            return;
+
+
+        const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
+
+        uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? 0 : graphics_width)];
+        assert(&row[1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
+
+        if (vert_disp && horiz_disp) {
+            const uint8_t nbpls = std::min<uint8_t>(6, (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
+
+            if (DEBUG_BPL && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
+                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
+
+            uint8_t active_sprite = 0;
+            uint8_t active_sprite_group = 8;
+
+            // Sprites are only visible after write to BPL1DAT
+            if (s_.bpl1dat_written_this_line) {
+                // Sprite 0 has highest priority, 7 lowest
+                for (uint8_t spr = 0; spr < 8; ++spr) {
+                    if (!(spr & 1) && (s_.sprctl[spr + 1] & 0x80)) {
+                        // Attached sprite
+                        const uint8_t idx = spriteidx[spr] | spriteidx[spr + 1] << 2;
+                        if (idx) {
+                            active_sprite = 16 + idx;
+                            active_sprite_group = spr >> 1;
+                            break;
+                        }
+                        ++spr; // Skip next sprite
+                    } else if (spriteidx[spr]) {
+                        active_sprite = 16 + (spr >> 1) * 4 + spriteidx[spr];
+                        active_sprite_group = spr >> 1;
+                        break;
+                    }
+                }
+            }
+
+            auto one_pixel = [&](const uint8_t* bpl) {
+                uint8_t pf1 = 0, pf2 = 0;
+
+                if (s_.bplcon0 & BPLCON0F_DBLPF) {
+                    for (int i = 0; i < nbpls; ++i) {
+                        if (i & 1)
+                            pf2 |= bpl[i] << (i >> 1);
+                        else
+                            pf1 |= bpl[i] << (i >> 1);
+                    }
+                } else {
+                    for (int i = 0; i < nbpls; ++i) {
+                        pf1 |= bpl[i] << i;
+                    }
+                }
+
+                if (DEBUG_BPL) {
+                    rem_pixels_odd_--;
+                    rem_pixels_even_--;
+                    if ((rem_pixels_odd_ | rem_pixels_even_) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
+                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixels_odd_ << " E=" << rem_pixels_even_ << "\n";
+                    }
+                }
+
+                const uint8_t pf2p = (s_.bplcon2 >> 3) & 7;
+                const uint8_t pf1p = s_.bplcon2 & 7;
+
+                // TODO: Sprites again
+                if (s_.bplcon0 & BPLCON0F_DBLPF) {
+                    const bool pf1vis = active_sprite_group >= pf1p;
+                    const bool pf2vis = active_sprite_group >= pf2p;
+
+                    uint8_t idx;
+                    if (s_.bplcon2 & 0x40) { // PF2PRI
+                        if (pf2vis && pf2)
+                            idx = pf2 + 8;
+                        else if (!pf1vis || !pf1)
+                            idx = active_sprite;
+                        else
+                            idx = pf1;
+                    } else {
+                        if (pf1vis && pf1)
+                            idx = pf1;
+                        else if (!pf2vis || !pf2)
+                            idx = active_sprite;
+                        else
+                            idx = pf2 + 8;
+                    }
+                    return rgb4_to_8(s_.color[idx]);
+                } else if ((s_.bplcon0 & BPLCON0F_HOMOD) && nbpls >= 5) { // HAM is only active if 5 or 6 bitplanes
+                    const int ibits = ((nbpls + 1) & ~1) - 2;
+                    const int val = (pf1 & 0xf) << (8 - ibits);
+                    auto& col = s_.ham_color;
+                    switch (pf1 >> ibits) {
+                    case 0: // Palette entry
+                        col = rgb4_to_8(s_.color[pf1 & 0xf]);
+                        break;
+                    case 1: // Modify B
+                        col = (col & 0xffff00) | val;
+                        break;
+                    case 2: // Modify R
+                        col = (col & 0x00ffff) | val << 16;
+                        break;
+                    case 3: // Modify G
+                        col = (col & 0xff00ff) | val << 8;
+                        break;
+                    default:
+                        assert(false);
+                    }
+                    //if (active_sprite_group < pf2p)
+                    if (active_sprite) // How is priority handled here?
+                        return rgb4_to_8(s_.color[active_sprite]);
+                    return col;
+                } else if (active_sprite_group < pf2p || !pf1) { // no active sprite -> active_sprite=0, so same as pf1
+                    return rgb4_to_8(s_.color[active_sprite]);
+                } else if (nbpls < 6) {
+                    return rgb4_to_8(s_.color[pf1]);
+                } else {
+                    // EHB bpls=6 && !HAM && !DPU
+                    const auto col = rgb4_to_8(s_.color[pf1 & 0x1f]);
+                    return pf1 & 0x20 ? (col & 0xfefefe) >> 1 : col;
+                }
+            };
+
+            if (s_.bplcon0 & BPLCON0F_HIRES) {
+                uint8_t temp[6];
+                for (int i = 0; i < nbpls; ++i) {
+                    temp[i] = pixel_temp[i] & 1;
+                    pixel_temp[i] >>= 1;
+                }
+
+                row[0] = one_pixel(pixel_temp);
+                row[1] = one_pixel(temp);
+            } else {
+                row[0] = row[1] = one_pixel(pixel_temp);
+            }
+        } else {
+            row[0] = row[1] = rgb4_to_8(s_.color[0]);
+
+            if (DEBUG_BPL && s_.bpl1dat_written_this_line) {
+                rem_pixels_odd_--;
+                rem_pixels_even_--;
+            }
+        }
+
+        if (!(s_.bplcon0 & BPLCON0F_LACE) && s_.long_frame) {
+            assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
+            row[0 + graphics_width] = row[0];
+            row[1 + graphics_width] = row[1];
+        }
+    }
+
     step_result step(bool cpu_wants_access, uint32_t current_pc)
     {
         // Step frequency: Base CPU frequency (7.09 for PAL) => 1 lores virtual pixel / 2 hires pixels
 
         // First readble hpos that's interpreted as being on a new line is $005 (since it's resolution is half that of lowres pixels -> 20) 
         const unsigned virt_pixel = s_.hpos * 2 + 20 + 2; // +2 to compensate for change of hpos_per_line from 455 to 454
-        const unsigned disp_pixel = virt_pixel - hires_min_pixel;
         const bool vert_disp = s_.vpos >= s_.diwstrt >> 8 && s_.vpos < ((~s_.diwstop & 0x8000) >> 7 | s_.diwstop >> 8); // VSTOP MSB is complemented and used as the 9th bit
-        const bool horiz_disp = s_.hpos >= (s_.diwstrt & 0xff) && s_.hpos < (0x100 | (s_.diwstop & 0xff));
         const uint16_t colclock = s_.hpos >> 1;
 
         step_result res {
@@ -1851,155 +2003,11 @@ public:
             s_.bpl1dat_written = false;
         }
 
-        if (s_.vpos >= vblank_end_vpos && disp_pixel < graphics_width) {
-            uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? 0 : graphics_width)];
-            assert(&row[1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
-
-            if (vert_disp && horiz_disp) {
-                const uint8_t nbpls = std::min<uint8_t>(6, (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
-
-                if (DEBUG_BPL && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
-                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
-
-
-                uint8_t active_sprite = 0;
-                uint8_t active_sprite_group = 8;
-
-                // Sprites are only visible after write to BPL1DAT
-                if (s_.bpl1dat_written_this_line) {
-                    // Sprite 0 has highest priority, 7 lowest
-                    for (uint8_t spr = 0; spr < 8; ++spr) {
-                        if (!(spr & 1) && (s_.sprctl[spr + 1] & 0x80)) {
-                            // Attached sprite
-                            const uint8_t idx = spriteidx[spr] | spriteidx[spr + 1] << 2;
-                            if (idx) {
-                                active_sprite = 16 + idx;
-                                active_sprite_group = spr >> 1;
-                                break;
-                            }
-                            ++spr; // Skip next sprite
-                        } else if (spriteidx[spr]) {
-                            active_sprite = 16 + (spr >> 1) * 4 + spriteidx[spr];
-                            active_sprite_group = spr >> 1;
-                            break;
-                        }
-                    }
-                }
-
-                auto one_pixel = [&]() {
-                    uint8_t pf1 = 0, pf2 = 0;
-
-                    if (s_.bplcon0 & BPLCON0F_DBLPF) {
-                        for (int i = 0; i < nbpls; ++i) {
-                            if (s_.bpldat_shift[i] & 0x8000) {
-                                if (i & 1)
-                                    pf2 |= 1 << (i >> 1);
-                                else
-                                    pf1 |= 1 << (i >> 1);
-                            }
-                            s_.bpldat_shift[i] <<= 1;
-                        }
-                    } else {
-                        for (int i = 0; i < nbpls; ++i) {
-                            if (s_.bpldat_shift[i] & 0x8000)
-                                pf1 |= 1 << i;
-                            s_.bpldat_shift[i] <<= 1;
-                        }
-                    }
-
-                    if (DEBUG_BPL) {
-                        rem_pixels_odd_--;
-                        rem_pixels_even_--;
-                        if ((rem_pixels_odd_ | rem_pixels_even_) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixels_odd_ << " E=" << rem_pixels_even_ << "\n";
-                        }
-                    }
-
-                    const uint8_t pf2p = (s_.bplcon2 >> 3) & 7;
-                    const uint8_t pf1p = s_.bplcon2 & 7;
-
-                    // TODO: Sprites again
-                    if (s_.bplcon0 & BPLCON0F_DBLPF) {
-                        const bool pf1vis = active_sprite_group >= pf1p;
-                        const bool pf2vis = active_sprite_group >= pf2p;
-
-                        uint8_t idx;
-                        if (s_.bplcon2 & 0x40) { // PF2PRI
-                            if (pf2vis && pf2)
-                                idx = pf2 + 8;
-                            else if (!pf1vis || !pf1)
-                                idx = active_sprite;
-                            else
-                                idx = pf1;
-                        } else {
-                            if (pf1vis && pf1)
-                                idx = pf1;
-                            else if (!pf2vis || !pf2)
-                                idx = active_sprite;
-                            else
-                                idx = pf2 + 8;
-                        }
-                        return rgb4_to_8(s_.color[idx]);
-                    } else if ((s_.bplcon0 & BPLCON0F_HOMOD) && nbpls >= 5) { // HAM is only active if 5 or 6 bitplanes
-                        const int ibits = ((nbpls + 1) & ~1) - 2;
-                        const int val = (pf1 & 0xf) << (8 - ibits);
-                        auto& col = s_.ham_color;
-                        switch (pf1 >> ibits) {
-                        case 0: // Palette entry
-                            col = rgb4_to_8(s_.color[pf1 & 0xf]);
-                            break;
-                        case 1: // Modify B
-                            col = (col & 0xffff00) | val;
-                            break;
-                        case 2: // Modify R
-                            col = (col & 0x00ffff) | val << 16;
-                            break;
-                        case 3: // Modify G
-                            col = (col & 0xff00ff) | val << 8;
-                            break;
-                        default:
-                            assert(false);
-                        }
-                        //if (active_sprite_group < pf2p)
-                        if (active_sprite) // How is priority handled here?
-                            return rgb4_to_8(s_.color[active_sprite]);
-                        return col;
-                    } else if (active_sprite_group < pf2p || !pf1) { // no active sprite -> active_sprite=0, so same as pf1
-                        return rgb4_to_8(s_.color[active_sprite]);
-                    } else if (nbpls < 6) {
-                        return rgb4_to_8(s_.color[pf1]);
-                    } else {
-                        // EHB bpls=6 && !HAM && !DPU
-                        const auto col = rgb4_to_8(s_.color[pf1 & 0x1f]);
-                        return pf1 & 0x20 ? (col & 0xfefefe) >> 1 : col;
-                    }
-                };
-
-                if (s_.bplcon0 & BPLCON0F_HIRES) {
-                    row[0] = one_pixel();
-                    row[1] = one_pixel();
-                } else {
-                    row[0] = row[1] = one_pixel();
-                }
-            } else {
-                row[0] = row[1] = rgb4_to_8(s_.color[0]);
-
-                if (s_.bpl1dat_written_this_line) {
-                    // Shift out pixels to make delay work
-                    if (DEBUG_BPL) {
-                        rem_pixels_odd_--;
-                        rem_pixels_even_--;
-                    }
-                    for (int i = 0; i < 6; ++i)
-                        s_.bpldat_shift[i] <<= 1;
-                }
-            }
-
-            if (!(s_.bplcon0 & BPLCON0F_LACE) && s_.long_frame) {
-                assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
-                row[0 + graphics_width] = row[0];
-                row[1 + graphics_width] = row[1];
-            }
+        // Shift out pixel data here (but don't draw until after the copper has had a chance to update the color register)
+        uint8_t pixel_temp[6];
+        for (uint8_t i = 0, s = (s_.bplcon0 & BPLCON0F_HIRES) ? 2 : 1; i < 6; ++i) {
+            pixel_temp[i] = static_cast<uint8_t>(s_.bpldat_shift[i] >> (16-s));
+            s_.bpldat_shift[i] <<= s;
         }
 
         if (s_.bpldata_avail) {
@@ -2188,6 +2196,9 @@ public:
             res.free_chip_cycle = true;
             s_.bltblockingcpu = 0;
         }
+
+        // Output pixels after copper had a chance to update color registers
+        do_pixels(vert_disp, virt_pixel, pixel_temp, spriteidx);
 
         if (!(s_.hpos & 1) && (s_.bplmod1_countdown|s_.bplmod2_countdown)) {
             if (s_.bplmod1_countdown && --s_.bplmod1_countdown == 0) {
