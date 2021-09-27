@@ -12,44 +12,8 @@
 #include "asm.h"
 
 // From Yacht (Yet Another Cycle Hunting Table)                
-
+// With some modifications
 namespace {
-
-// TODO:
-// ORI, ANDI, EORI to SR/CCR
-// BCHG,BSET,BCLR,BTST
-// MOVEP
-// MOVE from SR
-// MOVE to CCR, SR
-// MOVEM
-// TAS
-// CHK
-// MOVE USP
-// RESET
-// NOP
-// STOP
-// RTE
-// RTR
-// RTS
-// TRAPV
-// ILLEGAL
-// TRAP
-// Scc
-// DBcc
-// LINK
-// UNLNK
-// BRA
-// BSR
-// Bcc
-// MOVEQ
-// ABCD/SBCD
-// DIVU
-// DIVS
-// MULU
-// MULS
-// ADDX/SUBX
-// CMPM
-// ASL, ASR, LSL, LSR, ROL, ROR, ROXL, ROXR
 
 const char* const line0000_immediate = R"(
 #<data>,<ea> :    |                
@@ -338,6 +302,41 @@ const char* const nbcd_table = R"(
     (d8,An,Xn)    |  8(1/1) 10(2/0)
     (xxx).W       |  8(1/1)  8(2/0)
     (xxx).L       |  8(1/1) 12(3/0)
+)";
+
+const char* const move_sr_table = R"(
+SR,<ea> :         |                
+  .W :            |                
+    Dn            |  6(1/0)  0(0/0)
+    (An)          |  8(1/1)  4(1/0)
+    (An)+         |  8(1/1)  4(1/0)
+    -(An)         |  8(1/1)  6(1/0)
+    (d16,An)      |  8(1/1)  8(2/0)
+    (d8,An,Xn)    |  8(1/1) 10(2/0)
+    (xxx).W       |  8(1/1)  8(2/0)
+    (xxx).L       |  8(1/1) 12(3/0)
+<ea>,SR :         |                
+  .W :            |                
+    Dn            | 12(1/0)  0(0/0)
+    (An)          | 12(1/0)  4(1/0)
+    (An)+         | 12(1/0)  4(1/0)
+    -(An)         | 12(1/0)  6(1/0)
+    (d16,An)      | 12(1/0)  8(2/0)
+    (d8,An,Xn)    | 12(1/0) 10(2/0)
+    (xxx).W       | 12(1/0)  8(2/0)
+    (xxx).L       | 12(1/0) 12(3/0)
+    #<data>       | 12(1/0)  4(1/0)
+<ea>,CCR :        |                
+  .W :            |                
+    Dn            | 12(1/0)  0(0/0)
+    (An)          | 12(1/0)  4(1/0)
+    (An)+         | 12(1/0)  4(1/0)
+    -(An)         | 12(1/0)  6(1/0)
+    (d16,An)      | 12(1/0)  8(2/0)
+    (d8,An,Xn)    | 12(1/0) 10(2/0)
+    (xxx).W       | 12(1/0)  8(2/0)
+    (xxx).L       | 12(1/0) 12(3/0)
+    #<data>       | 12(1/0)  4(1/0)
 )";
 
 const char* const pea_table = R"(
@@ -633,6 +632,7 @@ const struct {
     { move_table         , { "MOVE" } },
     { line1111_rmw_table , { "CLR", "NEGX", "NEG", "NOT" } },
     { nbcd_table         , { "NBCD" } },
+    { move_sr_table      , { "MOVE" } },
     { pea_table          , { "PEA" } },
     { swap_table         , { "SWAP" } },
     { ext_table          , { "EXT" } },
@@ -801,10 +801,345 @@ struct tester {
     }
 };
 
+bool run_timing_tests()
+{
+    const struct {
+        const char* test_inst;
+        uint8_t clock_cycles, memory_accesses;
+    } test_cases[] = {
+        { "MOVE.B D0, D1"                   ,  4, 1 },
+        { "MOVE.B (A0), D1"                 ,  8, 2 },
+        { "MOVE.B (A0)+, D0"                ,  8, 2 },
+        { "MOVE.B -(A0), D0"                , 10, 2 },
+        { "MOVE.B 10(A0), D0"               , 12, 3 },
+        { "MOVE.B 2(A0,D0.L), D0"           , 14, 3 },
+        { "MOVE.B 0.W, D0"                  , 12, 3 },
+        { "MOVE.B 0.L, D0"                  , 16, 4 },
+        { "MOVE.B 0(pc), D0"                , 12, 3 },
+        { "MOVE.B 0(pc,D0.L), D0"           , 14, 3 },
+        { "MOVE.B #$12, D0"                 ,  8, 2 },
+
+        { "MOVE.W D0, D1"                   ,  4, 1 },
+        { "MOVE.W A0, D1"                   ,  4, 1 },
+        { "MOVE.W (A0), D1"                 ,  8, 2 },
+        { "MOVE.W (A0)+, D0"                ,  8, 2 },
+        { "MOVE.W -(A0), D0"                , 10, 2 },
+        { "MOVE.W 10(A0), D0"               , 12, 3 },
+        { "MOVE.W 2(A0,D0.L), D0"           , 14, 3 },
+        { "MOVE.W 0.W, D0"                  , 12, 3 },
+        { "MOVE.W 0.L, D0"                  , 16, 4 },
+        { "MOVE.W 0(pc), D0"                , 12, 3 },
+        { "MOVE.W 0(pc,D0.L), D0"           , 14, 3 },
+        { "MOVE.W #$12, D0"                 ,  8, 2 },
+
+        { "MOVE.L D0, D1"                   ,  4, 1 },
+        { "MOVE.L A0, D1"                   ,  4, 1 },
+        { "MOVE.L (A0), D1"                 , 12, 3 },
+        { "MOVE.L (A0)+, D0"                , 12, 3 },
+        { "MOVE.L -(A0), D0"                , 14, 3 },
+        { "MOVE.L 10(A0), D0"               , 16, 4 },
+        { "MOVE.L 2(A0,D0.L), D0"           , 18, 4 },
+        { "MOVE.L 0.W, D0"                  , 16, 4 },
+        { "MOVE.L 0.L, D0"                  , 20, 5 },
+        { "MOVE.L 0(pc), D0"                , 16, 4 },
+        { "MOVE.L 0(pc,D0.L), D0"           , 18, 4 },
+        { "MOVE.L #$12, D0"                 , 12, 3 },
+
+        { "MOVE.W D0, (A0)"                 ,  8, 2 },
+        { "MOVE.W A0, (A0)"                 ,  8, 2 },
+        { "MOVE.W (A0), (A0)"               , 12, 3 },
+        { "MOVE.W (A0)+, (A0)"              , 12, 3 },
+        { "MOVE.W -(A1), (A0)"              , 14, 3 },
+        { "MOVE.W 10(A0), (A0)"             , 16, 4 },
+        { "MOVE.W 2(A0,D0.L), (A0)"         , 18, 4 },
+        { "MOVE.W 0.W, (A0)"                , 16, 4 },
+        { "MOVE.W 0.L, (A0)"                , 20, 5 },
+        { "MOVE.W #$12, (A0)"               , 12, 3 },
+
+        { "MOVE.L D0, (A0)"                 , 12, 3 },
+        { "MOVE.L A0, (A0)"                 , 12, 3 },
+        { "MOVE.L (A0), (A0)"               , 20, 5 },
+        { "MOVE.L (A0)+, (A0)"              , 20, 5 },
+        { "MOVE.L -(A1), (A0)"              , 22, 5 },
+        { "MOVE.L 10(A0), (A0)"             , 24, 6 },
+        { "MOVE.L 2(A0,D0.L), (A0)"         , 26, 6 },
+        { "MOVE.L 0.W, (A0)"                , 24, 6 },
+        { "MOVE.L 0.L, (A0)"                , 28, 7 },
+        { "MOVE.L #$12, (A0)"               , 20, 5 },
+
+        { "MOVE.W D0, (A2)+"                ,  8, 2 },
+        { "MOVE.W A0, (A2)+"                ,  8, 2 },
+        { "MOVE.W (A0), (A2)+"              , 12, 3 },
+        { "MOVE.W (A0), (A2)+"              , 12, 3 },
+        { "MOVE.W -(A1), (A2)+"             , 14, 3 },
+        { "MOVE.W 10(A0), (A2)+"            , 16, 4 },
+        { "MOVE.W 2(A0,D0.L), (A2)+"        , 18, 4 },
+        { "MOVE.W 0.W, (A2)+"               , 16, 4 },
+        { "MOVE.W 0.L, (A2)+"               , 20, 5 },
+        { "MOVE.W #$12, (A2)+"              , 12, 3 },
+
+        { "MOVE.L D0, (A2)+"                , 12, 3 },
+        { "MOVE.L A0, (A2)+"                , 12, 3 },
+        { "MOVE.L (A0), (A2)+"              , 20, 5 },
+        { "MOVE.L (A0), (A2)+"              , 20, 5 },
+        { "MOVE.L -(A1), (A2)+"             , 22, 5 },
+        { "MOVE.L 10(A2), (A2)+"            , 24, 6 },
+        { "MOVE.L 2(A0,D0.L), (A2)+"        , 26, 6 },
+        { "MOVE.L 0.W, (A2)+"               , 24, 6 },
+        { "MOVE.L 0.L, (A2)+"               , 28, 7 },
+        { "MOVE.L #$12, (A2)+"              , 20, 5 },
+
+        { "MOVE.W D0, -(A2)"                ,  8, 2 },
+        { "MOVE.W A0, -(A2)"                ,  8, 2 },
+        { "MOVE.W (A0), -(A2)"              , 12, 3 },
+        { "MOVE.W (A0), -(A2)"              , 12, 3 },
+        { "MOVE.W -(A1), -(A2)"             , 14, 3 },
+        { "MOVE.W 10(A0), -(A2)"            , 16, 4 },
+        { "MOVE.W 2(A0,D0.L), -(A2)"        , 18, 4 },
+        { "MOVE.W 0.W, -(A2)"               , 16, 4 },
+        { "MOVE.W 0.L, -(A2)"               , 20, 5 },
+        { "MOVE.W #$12, -(A2)"              , 12, 3 },
+
+        { "MOVE.L D0, -(A2)"                , 12, 3 },
+        { "MOVE.L A0, -(A2)"                , 12, 3 },
+        { "MOVE.L (A0), -(A2)"              , 20, 5 },
+        { "MOVE.L (A0), -(A2)"              , 20, 5 },
+        { "MOVE.L -(A1), -(A2)"             , 22, 5 },
+        { "MOVE.L 10(A2), -(A2)"            , 24, 6 },
+        { "MOVE.L 2(A0,D0.L), -(A2)"        , 26, 6 },
+        { "MOVE.L 0.W, -(A2)"               , 24, 6 },
+        { "MOVE.L 0.L, -(A2)"               , 28, 7 },
+        { "MOVE.L #$12, -(A2)"              , 20, 5 },
+
+        { "MOVE.W D0, 2(A2)"                , 12, 3 },
+        { "MOVE.W A0, 2(A2)"                , 12, 3 },
+        { "MOVE.W (A0), 2(A2)"              , 16, 4 },
+        { "MOVE.W (A0), 2(A2)"              , 16, 4 },
+        { "MOVE.W -(A1), 2(A2)"             , 18, 4 },
+        { "MOVE.W 10(A0), 2(A2)"            , 20, 5 },
+        { "MOVE.W 2(A0,D0.L), 2(A2)"        , 22, 5 },
+        { "MOVE.W 0.W, 2(A2)"               , 20, 5 },
+        { "MOVE.W 0.L, 2(A2)"               , 24, 6 },
+        { "MOVE.W #$12, 2(A2)"              , 16, 4 },
+
+        { "MOVE.L D0, 2(A2)"                , 16, 4 },
+        { "MOVE.L A0, 2(A2)"                , 16, 4 },
+        { "MOVE.L (A0), 2(A2)"              , 24, 6 },
+        { "MOVE.L (A0), 2(A2)"              , 24, 6 },
+        { "MOVE.L -(A1), 2(A2)"             , 26, 6 },
+        { "MOVE.L 10(A2), 2(A2)"            , 28, 7 },
+        { "MOVE.L 2(A0,D0.L), 2(A2)"        , 30, 7 },
+        { "MOVE.L 0.W, 2(A2)"               , 28, 7 },
+        { "MOVE.L 0.L, 2(A2)"               , 32, 8 },
+        { "MOVE.L #$12, 2(A2)"              , 24, 6 },
+
+        { "MOVE.W D0, 2(A2,D1.L)"           , 14, 3 },
+        { "MOVE.W A0, 2(A2,D1.L)"           , 14, 3 },
+        { "MOVE.W (A0), 2(A2,D1.L)"         , 18, 4 },
+        { "MOVE.W (A0), 2(A2,D1.L)"         , 18, 4 },
+        { "MOVE.W -(A1), 2(A2,D1.L)"        , 20, 4 },
+        { "MOVE.W 10(A0), 2(A2,D1.L)"       , 22, 5 },
+        { "MOVE.W 2(A0,D0.L), 2(A2,D1.L)"   , 24, 5 },
+        { "MOVE.W 0.W, 2(A2,D1.L)"          , 22, 5 },
+        { "MOVE.W 0.L, 2(A2,D1.L)"          , 26, 6 },
+        { "MOVE.W #$12, 2(A2,D1.L)"         , 18, 4 },
+
+        { "MOVE.L D0, 2(A2,D1.L)"           , 18, 4 },
+        { "MOVE.L A0, 2(A2,D1.L)"           , 18, 4 },
+        { "MOVE.L (A0), 2(A2,D1.L)"         , 26, 6 },
+        { "MOVE.L (A0), 2(A2,D1.L)"         , 26, 6 },
+        { "MOVE.L -(A1), 2(A2,D1.L)"        , 28, 6 },
+        { "MOVE.L 10(A2), 2(A2,D1.L)"       , 30, 7 },
+        { "MOVE.L 2(A0,D0.L), 2(A2,D1.L)"   , 32, 7 },
+        { "MOVE.L 0.W, 2(A2,D1.L)"          , 30, 7 },
+        { "MOVE.L 0.L, 2(A2,D1.L)"          , 34, 8 },
+        { "MOVE.L #$12, 2(A2,D1.L)"         , 26, 6 },
+
+        { "MOVE.W D0, $4.W"                 , 12, 3 },
+        { "MOVE.W A0, $4.W"                 , 12, 3 },
+        { "MOVE.W (A0), $4.W"               , 16, 4 },
+        { "MOVE.W (A0), $4.W"               , 16, 4 },
+        { "MOVE.W -(A1), $4.W"              , 18, 4 },
+        { "MOVE.W 10(A0), $4.W"             , 20, 5 },
+        { "MOVE.W 2(A0,D0.L), $4.W"         , 22, 5 },
+        { "MOVE.W 0.W, $4.W"                , 20, 5 },
+        { "MOVE.W 0.L, $4.W"                , 24, 6 },
+        { "MOVE.W #$12, $4.W"               , 16, 4 },
+
+        { "MOVE.L D0, $4.W"                 , 16, 4 },
+        { "MOVE.L A0, $4.W"                 , 16, 4 },
+        { "MOVE.L (A0), $4.W"               , 24, 6 },
+        { "MOVE.L (A0), $4.W"               , 24, 6 },
+        { "MOVE.L -(A1), $4.W"              , 26, 6 },
+        { "MOVE.L 10(A2), $4.W"             , 28, 7 },
+        { "MOVE.L 2(A0,D0.L), $4.W"         , 30, 7 },
+        { "MOVE.L 0.W, $4.W"                , 28, 7 },
+        { "MOVE.L 0.L, $4.W"                , 32, 8 },
+        { "MOVE.L #$12, $4.W"               , 24, 6 },
+
+        { "MOVE.W D0, $4.L"                 , 16, 4 },
+        { "MOVE.W A0, $4.L"                 , 16, 4 },
+        { "MOVE.W (A0), $4.L"               , 20, 5 },
+        { "MOVE.W (A0), $4.L"               , 20, 5 },
+        { "MOVE.W -(A1), $4.L"              , 22, 5 },
+        { "MOVE.W 10(A0), $4.L"             , 24, 6 },
+        { "MOVE.W 2(A0,D0.L), $4.L"         , 26, 6 },
+        { "MOVE.W 0.W, $4.L"                , 24, 6 },
+        { "MOVE.W 0.L, $4.L"                , 28, 7 },
+        { "MOVE.W #$12, $4.L"               , 20, 5 },
+
+        { "MOVE.L D0, $4.L"                 , 20, 5 },
+        { "MOVE.L A0, $4.L"                 , 20, 5 },
+        { "MOVE.L (A0), $4.L"               , 28, 7 },
+        { "MOVE.L (A0), $4.L"               , 28, 7 },
+        { "MOVE.L -(A1), $4.L"              , 30, 7 },
+        { "MOVE.L 10(A2), $4.L"             , 32, 8 },
+        { "MOVE.L 2(A0,D0.L), $4.L"         , 34, 8 },
+        { "MOVE.L 0.W, $4.L"                , 32, 8 },
+        { "MOVE.L 0.L, $4.L"                , 36, 9 },
+        { "MOVE.L #$12, $4.L"               , 28, 7 },
+
+        { "MOVE.W D0, A0"                   ,  4, 1 },
+        { "MOVE.W A0, A0"                   ,  4, 1 },
+        { "MOVE.W (A0), A0"                 ,  8, 2 },
+        { "MOVE.W (A0), A0"                 ,  8, 2 },
+        { "MOVE.W -(A1), A0"                , 10, 2 },
+        { "MOVE.W 10(A0), A0"               , 12, 3 },
+        { "MOVE.W 2(A0,D0.L), A0"           , 14, 3 },
+        { "MOVE.W 0.W, A0"                  , 12, 3 },
+        { "MOVE.W 0.L, A0"                  , 16, 4 },
+        { "MOVE.W #$12, A0"                 ,  8, 2 },
+
+        { "MOVE.L D0, A0"                   ,  4, 1 },
+        { "MOVE.L A0, A0"                   ,  4, 1 },
+        { "MOVE.L (A0), A0"                 , 12, 3 },
+        { "MOVE.L (A0), A0"                 , 12, 3 },
+        { "MOVE.L -(A1), A0"                , 14, 3 },
+        { "MOVE.L 10(A2), A0"               , 16, 4 },
+        { "MOVE.L 2(A0,D0.L), A0"           , 18, 4 },
+        { "MOVE.L 0.W, A0"                  , 16, 4 },
+        { "MOVE.L 0.L, A0"                  , 20, 5 },
+        { "MOVE.L #$12, A0"                 , 12, 3 },
+
+        // Line 0000: ADDI (should be same for EORI, ORI, ANDI and SUBI)
+        { "ADD.B #$12, D0"                  ,  8, 2 },
+        { "ADD.W #$12, (A0)"                , 16, 4 },
+        { "ADD.B #$12, (A0)+"               , 16, 4 },
+        { "ADD.W #$12, -(A2)"               , 18, 4 },
+        { "ADD.W #$12, 2(A0)"               , 20, 5 },
+        { "ADD.B #$12, 2(A0,D2.L)"          , 22, 5 },
+        { "ADD.W #$12, $10.W"               , 20, 5 },
+        { "ADD.W #$12, $10.L"               , 24, 6 },
+
+        { "ADD.L #$12, D0"                  , 16, 3 },
+        { "ADD.L #$12, (A0)"                , 28, 7 },
+        { "ADD.L #$12, (A0)+"               , 28, 7 },
+        { "ADD.L #$12, -(A2)"               , 30, 7 },
+        { "ADD.L #$12, 2(A0,D2.L)"          , 34, 8 },
+        { "ADD.L #$12, $10.W"               , 32, 8 },
+        { "ADD.L #$12, $10.L"               , 36, 9 },
+
+        { "EOR.L #$12, 2(A0)"               , 32, 8 },
+        { "EOR.W #$12, $10.W"               , 20, 5 },
+        { "OR.L #$12, 2(A0)"                , 32, 8 },
+        { "OR.W #$12, $10.W"                , 20, 5 },
+        { "AND.L #$12, 2(A0)"               , 32, 8 },
+        { "AND.W #$12, $10.W"               , 20, 5 },
+        { "SUB.L #$12, 2(A0)"               , 32, 8 },
+        { "SUB.W #$12, $10.W"               , 20, 5 },
+
+        { "NOP"                             ,  4, 1 },
+        { "RTE"                             , 20, 5 },
+        { "RTR"                             , 20, 5 },
+        { "RTS"                             , 16, 4 },
+        { "LINK A2, #$1234"                 , 16, 4 },
+        { "UNLK A2"                         , 12, 3 },
+        { "MOVEQ #$12, d0"                  ,  4, 1 },
+        { "l BRA.B l"                       , 10, 2 },
+        { "l BRA.W l"                       , 10, 2 },
+        { "l BSR.B l"                       , 18, 4 },
+        { "l BSR.W l"                       , 18, 4 },
+
+        { "OR.B #$12, CCR"                  , 20, 3 },
+        { "AND.B #$12, CCR"                 , 20, 3 },
+        { "EOR.B #$12, CCR"                 , 20, 3 },
+        { "OR.W #$12, SR"                   , 20, 3 },
+        { "AND.W #$12, SR"                  , 20, 3 },
+        { "EOR.W #$12, SR"                  , 20, 3 },
+    };
+
+    const uint32_t code_pos = 0x1000;
+    const uint32_t code_size = 0x2000;
+    memory_handler mem { code_pos + code_size };
+    auto& ram = mem.ram();
+    std::vector<uint16_t> insts;
+    bool all_ok = true;
+
+    for (const auto& tc : test_cases) {
+        try {
+            insts = assemble(code_pos, tc.test_inst);
+        } catch (const std::exception& e) {
+            std::cerr << e.what() << " while assembling:\n" << tc.test_inst << "\n";
+            return false;
+        }
+
+        memset(&ram[0], 0, ram.size());
+        for (size_t i = 0; i < std::size(insts); ++i)
+            put_u16(&ram[code_pos + i * 2], insts[i]);
+
+        cpu_state input_state {};
+        input_state.sr = 0x2000;
+        input_state.pc = code_pos;
+        input_state.a[2] = 32;
+        input_state.usp = 64;
+        input_state.ssp = 32;
+
+        m68000 cpu { mem, input_state };
+
+        const auto step_res = cpu.step();
+        if (step_res.clock_cycles != tc.clock_cycles || step_res.mem_accesses != tc.memory_accesses) {
+            std::cerr << "Test failed for:\n" << tc.test_inst << "\n";
+            std::cerr << "Expected clock cycles:    " << (int)tc.clock_cycles << "\tActual: " << (int)step_res.clock_cycles << "\n";
+            std::cerr << "Expected memory accesses: " << (int)tc.memory_accesses << "\tActual: " << (int)step_res.mem_accesses << "\n";
+            all_ok = false;
+        }
+    }
+
+    return all_ok;
+}
+
 } // unnamed namespace
+
+
+// TODO:
+// BCHG,BSET,BCLR,BTST
+// MOVEP
+// MOVEM
+// TAS
+// CHK
+// MOVE USP
+// RESET
+// STOP
+// TRAPV
+// ILLEGAL
+// TRAP
+// Scc
+// DBcc
+// Bcc
+// ABCD/SBCD
+// DIVU
+// DIVS
+// MULU
+// MULS
+// ADDX/SUBX
+// CMPM
+// ASL, ASR, LSL, LSR, ROL, ROR, ROXL, ROXR
 
 bool test_timing()
 {
+    if (!run_timing_tests())
+        /*return false*/;
+
     tester t;
 
     bool all_ok = true;
