@@ -331,6 +331,7 @@ struct command_line_arguments {
         sf.handle(chip_size);
         sf.handle(slow_size);
         sf.handle(fast_size);
+        sf.handle(cpu_scale);
     }
 };
 
@@ -410,7 +411,7 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_string_arg("state", args.state_filename))
                 continue;
-            else if (get_number_arg("cpuscale", args.cpu_scale, 22))
+            else if (get_number_arg("cpuscale", args.cpu_scale, 255))
                 continue;
             else if (!strcmp(&argv[i][1], "help"))
                 usage("");
@@ -680,6 +681,7 @@ int main(int argc, char* argv[])
             cpu.handle_state(sf);
             sf.handle(cpu_ipl);
             sf.handle(cpu_ipl_delay);
+            sf.handle(cycles_todo);
             if (sf.loading()) {
                 // Fake up something for the debugger
                 cpu_step.current_pc = cpu_step.last_pc = cpu.state().pc;
@@ -834,26 +836,31 @@ int main(int argc, char* argv[])
                 return;
             assert(size == 1 || size == 2); (void)size;
             if (addr < max_chip_size || (addr >= slow_base && addr < custom_base_addr + custom_mem_size)) {
+                // Sync with Agnus
                 do_all_custom_cylces();
                 while (!custom_step.free_chip_cycle) {
                     ++cpu_cycles_count;
                     cstep(true);
                 }
-                cycles_todo = 4;
+                for (int i = 0; i < 4; ++i) {
+                    ++cpu_cycles_count;
+                    cstep(false);
+                }
             } else if (addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size) {
+                // Get up to date
                 do_all_custom_cylces();
+                // Sync with EClock
+                //
                 // Eclock is low for 6 system clocks and then high for 4 during which the transfer happens
                 // And address needs to be latched 3 cycles before EClk rises or falls
-
                 while (custom_step.eclock_cycle != 3) {
                     ++cpu_cycles_count;
                     cstep(false);
                 }
-                while (custom_step.eclock_cycle != 6) {
+                while (custom_step.eclock_cycle) {
                     ++cpu_cycles_count;
                     cstep(false);
                 }
-                cycles_todo = 4;
             } else {
                 cycles_todo += 4;
             }
