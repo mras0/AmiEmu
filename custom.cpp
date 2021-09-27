@@ -1730,15 +1730,22 @@ public:
 
         current_pc_ = current_pc;
 
+
+        // Sprite vpos check is 4 CCKs ahead
+        const uint16_t spr_vpos_check = s_.vpos + (s_.hpos + 8 >= hpos_per_line);
         uint8_t spriteidx[8];
         for (uint8_t spr = 0; spr < 8; ++spr) {
             spriteidx[spr] = 0;
 
             // end check is always active (vAmigaTS spritedma10)
-            if (s_.vpos == s_.sprite_vpos_end(spr)) {
+            if (spr_vpos_check == s_.sprite_vpos_end(spr)) {
                 if (DEBUG_SPRITE && s_.spr_dma_active[spr])
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA off\n";
                 s_.spr_dma_active[spr] = false;
+            } else if (spr_vpos_check > sprite_dma_start_vpos && s_.sprite_vpos_start(spr) == spr_vpos_check) {
+                if (DEBUG_SPRITE)
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA on\n";
+                s_.spr_dma_active[spr] = true;
             }
 
             if (s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == s_.hpos) {
@@ -2074,12 +2081,6 @@ public:
                     const uint8_t spr = static_cast<uint8_t>((colclock - 0x15) / 4);
                     const bool fetch_ctl = s_.vpos == sprite_dma_start_vpos || s_.vpos == s_.sprite_vpos_end(spr);
 
-                    if (!fetch_ctl && s_.vpos == s_.sprite_vpos_start(spr)) {
-                        if (DEBUG_SPRITE)
-                            DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA on\n";
-                        s_.spr_dma_active[spr] = true;
-                    }
-
                     if ((s_.dmacon & DMAF_SPRITE) && (fetch_ctl || s_.spr_dma_active[spr])) {
                         const bool first_word = !(colclock & 2);
                         const uint16_t reg = SPR0POS + 8 * spr + 2 * (fetch_ctl ? 1 - first_word : 3 - first_word);
@@ -2361,19 +2362,6 @@ public:
             case 3: // SPRxDATB (high word)
                 s_.sprdatb[spr] = val;
                 return;
-            }
-
-            // CTL/POS write recheck vstart/vend
-            if (s_.vpos >= sprite_dma_start_vpos) {
-                if (s_.vpos == s_.sprite_vpos_end(spr)) {
-                    if (DEBUG_SPRITE && s_.spr_dma_active[spr])
-                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA off\n";
-                    s_.spr_dma_active[spr] = false;
-                } else if (s_.vpos == s_.sprite_vpos_start(spr)) {
-                    if (DEBUG_SPRITE && !s_.spr_dma_active[spr])
-                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA on\n";
-                    s_.spr_dma_active[spr] = true;
-                }
             }
 
             if (DEBUG_SPRITE)
