@@ -341,7 +341,8 @@ int main(int argc, char* argv[])
             serdata.push_back(data ? data : ' ');
             });
 
-        gui g { graphics_width, graphics_height };
+        
+        gui g { graphics_width, graphics_height, std::array<std::string, 4>{ cmdline_args.df0, cmdline_args.df1, "", "" } };
         auto serdata_flush = [&g, &serdata]() {
             if (!serdata.empty()) {
                 g.serial_data(serdata);

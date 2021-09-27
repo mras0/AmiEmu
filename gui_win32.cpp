@@ -136,24 +136,23 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     return map;
 }();
 
-gui::disk_inserted_event browse_for_file(HWND hwnd, const char* zz_filter)
+bool browse_for_file(HWND hwnd, const char* zz_filter, std::string& filename)
 {
     OPENFILENAMEA ofn;
-    gui::disk_inserted_event evt;
 
-    evt.drive = MessageBox(hwnd, L"Drive 0?", L"Lame dialog (TODO: Improve)", MB_YESNO) == IDYES ? 0 : 1;
-
+    char path[MAX_PATH];
     ZeroMemory(&ofn, sizeof(ofn));
-    evt.filename[0] = 0;
+    path[0] = 0;
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hwnd;
     ofn.lpstrFilter = zz_filter;
-    ofn.lpstrFile = evt.filename;
-    ofn.nMaxFile = sizeof(evt.filename);
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = sizeof(path);
     ofn.Flags = OFN_PATHMUSTEXIST;
     if (!GetOpenFileNameA(&ofn))
-        evt.filename[0] = 0;
-    return evt;
+        return false;
+    filename = path;
+    return true;
 }
 
 struct gdi_deleter {
@@ -576,8 +575,8 @@ private:
                 CreateWindow(L"STATIC", temp, WS_CHILD | WS_VISIBLE, xpos, ypos, w, h, hwnd, nullptr, hInstance, nullptr);
                 xpos += w + xmargin;
                 wsprintfW(temp, L"$%03X", pal_[n]);
-                color_edit_[n] = CreateWindow(L"EDIT", temp, WS_CHILD | WS_VISIBLE | WS_TABSTOP, xpos, ypos, w-32, h, hwnd, reinterpret_cast<HMENU>(intptr_t(100) + n), hInstance, nullptr);
-                color_preview_[n] = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE, xpos + w - 32, ypos, 32, h, hwnd, reinterpret_cast<HMENU>(intptr_t(1000) + n), hInstance, nullptr);
+                color_edit_[n] = CreateWindow(L"EDIT", temp, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, xpos, ypos, w - 34, h, hwnd, reinterpret_cast<HMENU>(intptr_t(100) + n), hInstance, nullptr);
+                color_preview_[n] = CreateWindow(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_BORDER, xpos + w - 32, ypos, 32, h, hwnd, reinterpret_cast<HMENU>(intptr_t(1000) + n), hInstance, nullptr);
                 xpos += w + xmargin;
             }
             ypos += h + ymargin;
@@ -776,7 +775,7 @@ private:
 
             CreateWindow(L"STATIC", f.name, WS_CHILD | WS_VISIBLE, toolbar_margin_x, y, w, elem_y, hwnd, nullptr, hInstance, nullptr);
             y += toolbar_margin_y + elem_y;
-            field_combo_[i] = CreateWindow(L"EDIT", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP, toolbar_margin_x, y, w, elem_y, hwnd, reinterpret_cast<HMENU>(101+i), hInstance, nullptr);
+            field_combo_[i] = CreateWindow(L"EDIT", text, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, toolbar_margin_x, y, w, elem_y, hwnd, reinterpret_cast<HMENU>(101 + i), hInstance, nullptr);
             y += toolbar_margin_y + elem_y;
         }
 
@@ -995,6 +994,133 @@ private:
     }
 };
 
+class config_dialog : public window_base<config_dialog> {
+public:
+    static void run(HWND parent, std::array<std::string, 4>& disk_filenames)
+    {
+        bool done = false;
+        auto wnd = new config_dialog { done, disk_filenames };
+        wnd->do_create(L"Configuration", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
+
+        MSG msg = { 0 };
+        while (!done && GetMessage(&msg, nullptr, 0, 0)) {
+            if (!IsDialogMessage(wnd->handle(), &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        }
+
+        if (msg.message == WM_QUIT)
+            PostQuitMessage(static_cast<int>(msg.wParam));
+    }
+
+private:
+    friend window_base;
+    static constexpr const wchar_t* const class_name_ = L"config_dialog";
+    bool& done_;
+    HWND parent_ = nullptr;
+    HWND last_focus_ = nullptr;
+    std::array<std::string, 4>& disk_filenames_;
+    static constexpr int max_disks = 2;
+    HWND filename_edit_[max_disks];
+
+    config_dialog(bool& done, std::array<std::string, 4>& disk_filenames)
+        : done_ { done }
+        , disk_filenames_ { disk_filenames }
+    {
+    }
+
+    bool on_create(HWND hwnd, const CREATESTRUCT& cs)
+    {
+        parent_ = cs.hwndParent;
+        EnableWindow(parent_, FALSE);
+
+        auto hInstance = GetModuleHandle(nullptr);
+        const int h = 20;
+        const int xmargin = 10;
+        const int ymargin = 10;
+        int y = ymargin;
+        for (size_t i = 0; i < max_disks; ++i) {
+            char temp[256];
+            snprintf(temp, sizeof(temp), "DF%d:", static_cast<int>(i));
+            const int descw = 40;
+            int x = xmargin;
+            CreateWindowA("STATIC", temp, WS_CHILD | WS_VISIBLE, x, y, descw, h, hwnd, nullptr, hInstance, nullptr);
+            x += xmargin + descw;
+            filename_edit_[i] = CreateWindowA("EDIT", disk_filenames_[i].c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, x, y, 600, h, hwnd, reinterpret_cast<HMENU>(100 + i), hInstance, nullptr);
+            x += xmargin + 600;
+            CreateWindowA("BUTTON", "...", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, x, y, 24, h, hwnd, reinterpret_cast<HMENU>(200 + i), hInstance, nullptr);
+            x += xmargin + 24;
+            CreateWindowA("BUTTON", "Eject", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, x, y, 48, h, hwnd, reinterpret_cast<HMENU>(300 + i), hInstance, nullptr);
+            x += xmargin + 48;
+            y += h + ymargin;
+        }
+
+        const int button_w = 100;
+        int x = xmargin;
+        HWND hwndOK = CreateWindow(L"BUTTON", L"&Ok", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, xmargin, y, button_w, h, hwnd, reinterpret_cast<HMENU>(IDOK), hInstance, nullptr);
+        x += button_w + xmargin;
+        CreateWindow(L"BUTTON", L"&Cancel", WS_CHILD | WS_TABSTOP | WS_VISIBLE, x, y, button_w, h, hwnd, reinterpret_cast<HMENU>(IDCANCEL), hInstance, nullptr);
+        x += button_w + xmargin;
+        SetFocus(hwndOK);
+        return true;
+    }
+
+    void on_close(HWND hwnd)
+    {
+        EnableWindow(parent_, TRUE);
+        done_ = true;
+        DestroyWindow(hwnd);
+    }
+
+    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        switch (uMsg) {
+        case WM_ACTIVATE:
+            if (LOWORD(wParam) == WA_INACTIVE)
+                last_focus_ = GetFocus();
+            break;
+        case WM_SETFOCUS:
+            SetFocus(last_focus_);
+            break;
+        case WM_COMMAND: {
+            const auto id = LOWORD(wParam);
+            const auto code = HIWORD(wParam);
+            if (id == IDOK && code == BN_CLICKED) {
+                for (int i = 0; i < max_disks; ++i) {
+                    const int l = GetWindowTextLengthA(filename_edit_[i]);
+                    if (l) {
+                        disk_filenames_[i].resize(l + 1);
+                        GetWindowTextA(filename_edit_[i], &disk_filenames_[i][0], l + 1);
+                        assert(disk_filenames_[i][l] == '\0');
+                        disk_filenames_[i].pop_back();
+                    } else {
+                        disk_filenames_[i].clear();
+                    }
+                }
+                SendMessage(hwnd, WM_CLOSE, 0, 0);
+            } else if (id == IDCANCEL && code == BN_CLICKED) {
+                SendMessage(hwnd, WM_CLOSE, 0, 0);
+            } else if (id >= 200 && id < 200 + max_disks && code == BN_CLICKED) {
+                std::string f;
+                if (browse_for_file(hwnd, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0", f))
+                    SetWindowTextA(filename_edit_[id - 200], f.c_str());
+            } else if (id >= 300 && id < 300 + max_disks && code == BN_CLICKED) {
+                SetWindowTextA(filename_edit_[id - 300], "");
+            }
+            break;
+        }
+        case WM_CTLCOLORSTATIC: {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+            return reinterpret_cast<LRESULT>(GetStockObject(HOLLOW_BRUSH));
+        }
+        }
+        return window_base::wndproc(hwnd, uMsg, wParam, lParam);
+    }
+};
+
+
 
 constexpr int border_height = 8;
 constexpr int led_width = 64;
@@ -1005,9 +1131,9 @@ constexpr int extra_height = border_height*2 + led_height;
 
 class gui::impl : public window_base<impl> {
 public:
-    static impl* create(int width, int height)
+    static impl* create(int width, int height, const std::array<std::string, 4>& disk_filenames)
     {
-        std::unique_ptr<impl> wnd { new impl {width, height} };
+        std::unique_ptr<impl> wnd { new impl { width, height, disk_filenames } };
         const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~WS_THICKFRAME;
         RECT r = { 0, 0, width, height + extra_height };
         AdjustWindowRect(&r, style, FALSE);
@@ -1102,10 +1228,12 @@ private:
     POINT last_mouse_pos_ { 0, 0 };
     bool mouse_captured_ = false;
     bool active_ = true;
+    std::array<std::string, 4> disk_filenames_;
 
-    impl(int width, int height)
+    impl(int width, int height, const std::array<std::string, 4>& disk_filenames)
         : width_ { width }
         , height_ { height }
+        , disk_filenames_ { disk_filenames }
     {
     }
 
@@ -1208,9 +1336,17 @@ private:
                     events_.push_back(evt);
                     set_active(false);
                 } else {
-                    evt.type = event_type::disk_inserted;
-                    evt.disk_inserted = browse_for_file(hwnd, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0");
-                    events_.push_back(evt);
+                    std::array<std::string, 4> disk_filenames = disk_filenames_;
+                    config_dialog::run(hwnd, disk_filenames);
+                    for (int i = 0; i < 4; ++i) {
+                        if (disk_filenames[i] == disk_filenames_[i])
+                            continue;
+                        evt.type = event_type::disk_inserted;
+                        evt.disk_inserted.drive = static_cast<uint8_t>(i);
+                        snprintf(evt.disk_inserted.filename, sizeof(evt.disk_inserted.filename), "%s", disk_filenames[i].c_str());
+                        disk_filenames_[i] = disk_filenames[i];
+                        events_.push_back(evt);
+                    }
                     if (was_captured)
                         capture_mouse();
                 }
@@ -1282,8 +1418,8 @@ private:
     }
 };
 
-gui::gui(unsigned width, unsigned height)
-    : impl_ { impl::create(static_cast<int>(width), static_cast<int>(height)) }
+gui::gui(unsigned width, unsigned height, const std::array<std::string, 4>& disk_filenames)
+    : impl_ { impl::create(static_cast<int>(width), static_cast<int>(height), disk_filenames) }
 {
 }
 

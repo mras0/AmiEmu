@@ -3,11 +3,12 @@
 
 #include <vector>
 #include <string>
+#include <array>
 #include <stdint.h>
 
 class gui {
 public:
-    explicit gui(unsigned width, unsigned height);
+    explicit gui(unsigned width, unsigned height, const std::array<std::string, 4>& disk_filenames);
     ~gui();
 
     enum class event_type {
