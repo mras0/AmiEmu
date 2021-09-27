@@ -18,6 +18,16 @@ constexpr uint8_t opsize_mask_bw   = opsize_mask_b | opsize_mask_w;
 constexpr uint8_t opsize_mask_bwl  = opsize_mask_b | opsize_mask_w | opsize_mask_l;
 
 
+constexpr bool range8(uint32_t val)
+{
+    return static_cast<int32_t>(val) >= -128 && static_cast<int32_t>(val) <= 127;
+}
+
+constexpr bool range16(uint32_t val)
+{
+    return static_cast<int32_t>(val) >= -32768 && static_cast<int32_t>(val) <= 32767;
+}
+
 #define INSTRUCTIONS(X)        \
     X(BRA   , bw   , none , 1) \
     X(MOVE  , bwl  , w    , 2) \
@@ -77,16 +87,19 @@ public:
                 ii.has_value = true;
                 ii.value = pc_;
                 for (const auto& f : ii.fixups) {
+                    // TODO: Check range
                     switch (f.size) {
                     case opsize::none:
                         ASSEMBLER_ERROR("Invalid fixup");
                     case opsize::b: {
-                        ASSEMBLER_ERROR("TODO: Byte fixup");
+                        assert(f.offset / 2 < result_.size());
+                        assert(f.offset & 1);
+                        auto v = (result_[f.offset / 2] & 0xff) + ii.value & 0xff;
+                        result_[f.offset / 2] = (result_[f.offset / 2] & 0xff00) | (v & 0xff);
                         break;
                     }
                     case opsize::w: {
                         assert(f.offset % 2 == 0 && f.offset / 2 < result_.size());
-                        // TODO: Check range
                         result_[f.offset / 2] += static_cast<uint16_t>(ii.value);
                         break;
                     }
@@ -141,6 +154,7 @@ private:
         size_l,
         d0, d1, d2, d3, d4, d5, d6, d7,
         a0, a1, a2, a3, a4, a5, a6, a7,
+        pc,
         dc,
 
         instruction_start_minus_1,
@@ -174,6 +188,7 @@ private:
         { "A5", token_type::a5 },
         { "A6", token_type::a6 },
         { "A7", token_type::a7 },
+        { "PC", token_type::pc },
         { "DC", token_type::dc },
     };
 
@@ -216,6 +231,11 @@ private:
         return static_cast<uint32_t>(t) >= static_cast<uint32_t>(token_type::d0) && static_cast<uint32_t>(t) <= static_cast<uint32_t>(token_type::a7);
     }
 
+    static constexpr bool is_data_register(token_type t)
+    {
+        return static_cast<uint32_t>(t) >= static_cast<uint32_t>(token_type::d0) && static_cast<uint32_t>(t) <= static_cast<uint32_t>(token_type::d7);
+    }
+
     static constexpr bool is_address_register(token_type t)
     {
         return static_cast<uint32_t>(t) >= static_cast<uint32_t>(token_type::a0) && static_cast<uint32_t>(t) <= static_cast<uint32_t>(token_type::a7);
@@ -245,6 +265,8 @@ private:
             return "SIZE.W";
         case token_type::size_l:
             return "SIZE.L";
+        case token_type::pc:
+            return "PC";
         case token_type::dc:
             return "DC";
         #define CASE_INST_TOKEN(n, m, d, no) case token_type::n: return #n;
@@ -410,10 +432,17 @@ private:
         identifier_info_type* fixup;
     };
 
-    ea_result process_number()
+    ea_result process_number(bool neg = false)
     {
         // TODO: Aritmetic etc.
         ea_result res {};
+
+        if (token_type_ == token_type::minus) {
+            if (neg)
+                ASSEMBLER_ERROR("Double minus not allowed");
+            neg = true;
+            get_token();
+        }
 
         if (token_type_ == token_type::number) {
             res.val = token_number_;
@@ -429,13 +458,39 @@ private:
         } else {
             ASSEMBLER_ERROR("Invalid number");
         }
+
+        if (neg) {
+            if (res.fixup)
+                ASSEMBLER_ERROR("Not supported: Negating with fixup");
+            res.val = -static_cast<int32_t>(res.val);
+        }
+
         return res;
+    }
+
+    uint8_t process_areg()
+    {
+        if (!is_address_register(token_type_))
+            ASSEMBLER_ERROR("Address register expected got " << token_type_string(token_type_));
+        const auto reg = static_cast<uint8_t>(static_cast<uint32_t>(token_type_) - static_cast<uint32_t>(token_type::a0));
+        get_token();
+        return reg;
+    }
+
+    uint8_t process_reg()
+    {
+        if (!is_register(token_type_))
+            ASSEMBLER_ERROR("Register expected got " << token_type_string(token_type_));
+        const auto reg = static_cast<uint8_t>(static_cast<uint32_t>(token_type_) - static_cast<uint32_t>(token_type::d0));
+        get_token();
+        return reg;
     }
 
     ea_result process_ea()
     {
         skip_whitespace();
 
+        bool neg = false;
         if (token_type_ == token_type::hash) {
             get_token();
             auto res = process_number();
@@ -443,21 +498,20 @@ private:
             return res;
         } else if (token_type_ == token_type::minus) {
             get_token();
-            expect(token_type::lparen);
-            if (!is_address_register(token_type_))
-                ASSEMBLER_ERROR("Address register expected");
-            ea_result res {};
-            res.type = ea_m_A_ind_pre << ea_m_shift | static_cast<uint8_t>(static_cast<uint32_t>(token_type_) - static_cast<uint32_t>(token_type::a0));
+            if (token_type_ != token_type::lparen) {
+                neg = true;
+                goto number;
+            }
+
             get_token();
+            ea_result res {};
+            res.type = ea_m_A_ind_pre << ea_m_shift | process_areg();
             expect(token_type::rparen);
             return res;
         } else if (token_type_ == token_type::lparen) {
             get_token();
-            if (!is_address_register(token_type_))
-                ASSEMBLER_ERROR("Address register expected");
             ea_result res {};
-            res.type = ea_m_A_ind << ea_m_shift | static_cast<uint8_t>(static_cast<uint32_t>(token_type_)-static_cast<uint32_t>(token_type::a0));
-            get_token();
+            res.type = ea_m_A_ind << ea_m_shift | process_areg();
             expect(token_type::rparen);
             if (token_type_ == token_type::plus) {
                 res.type = ea_m_A_ind_post << ea_m_shift | (res.type & 7);
@@ -465,14 +519,52 @@ private:
             }
             return res;
         } else if (token_type_ == token_type::number || is_identifier(token_type_)) {
-            auto res = process_number();
+number:
+            auto res = process_number(neg);
+            if (token_type_ == token_type::lparen) {
+                get_token();
+                uint8_t reg;
+                if (token_type_ == token_type::pc) {
+                    reg = 0xff;
+                    res.val -= pc_ + 2;
+                    get_token();
+                } else {
+                    reg = process_areg();
+                    if (!range16(res.val))
+                        ASSEMBLER_ERROR(static_cast<int32_t>(res.val) << " is out of range for 16-bit displacement");
+                }
+                if (token_type_ == token_type::rparen) {
+                    get_token();
+                    if (reg == 0xff)
+                        res.type = ea_m_Other << ea_m_shift | ea_other_pc_disp16;
+                    else
+                        res.type = ea_m_A_ind_disp16 << ea_m_shift | reg;
+                    return res;
+                }
+                expect(token_type::comma);
+                const auto reg2 = process_reg();
+                const bool l = token_type_ == token_type::size_l;
+                if (token_type_ == token_type::size_w || token_type_ == token_type::size_l)
+                    get_token();
+                expect(token_type::rparen);
+                if (reg == 0xff)
+                    res.type = ea_m_Other << ea_m_shift | ea_other_pc_index;
+                else {
+                    res.type = ea_m_A_ind_index << ea_m_shift | reg;
+                    if (!range8(res.val))
+                        ASSEMBLER_ERROR(static_cast<int32_t>(res.val) << " is out of range for 8-bit displacement");
+                }
+                res.val = (res.val & 0xff) | (reg2 & 8 ? 0x8000 : 0) | (reg2 & 7) << 12 | (l ? 0x800 : 0);
+                return res;
+            }
+
             res.type = ea_m_Other << ea_m_shift | ea_other_abs_l;
             if (token_type_ == token_type::size_l) {
                 get_token();
             } else if (token_type_ == token_type::size_w) {
                 get_token();
                 res.type = ea_m_Other << ea_m_shift | ea_other_abs_w;
-                if (static_cast<int32_t>(res.val) < -32768 || static_cast<int32_t>(res.val) > 32767)
+                if (!range16(res.val))
                     ASSEMBLER_ERROR(static_cast<int32_t>(res.val) << " is out of range for 16-bit absolute address");
             }
             return res;
@@ -537,10 +629,10 @@ operands_done:
                 else
                     ea[0].fixup->fixups.push_back(fixup_type { opsize::b, ofs + 1 });
             } else {
-                if (disp == 0 || (disp < -128 || disp > 127)) {
+                if (disp == 0 || !range8(disp)) {
                     if (osize == opsize::b)
                         ASSEMBLER_ERROR("Displacement " << disp << " is out of range for byte size");
-                    if (disp < -32768 || disp > 32767)
+                    if (!range16(disp))
                         ASSEMBLER_ERROR("Displacement " << disp << " is out of range");
                     osize = opsize::w;
                 } else if (osize == opsize::none)
@@ -562,6 +654,8 @@ operands_done:
         case token_type::MOVEQ: {
             if (ea[0].type != ea_immediate || ea[0].fixup || ea[1].type >> ea_m_shift != ea_m_Dn)
                 ASSEMBLER_ERROR("Invalid operands to MOVEQ");
+            if (!range8(ea[0].val))
+                ASSEMBLER_ERROR("Immediate out of 8-bit range for MOVEQ: " << ea[0].val);
             iwords[0] = 0x7000 | (ea[1].type & 7) << 9 | (ea[0].val & 0xff);
             goto done;
         }
@@ -583,8 +677,11 @@ operands_done:
             case ea_m_A_ind_pre:
                 assert(!ea[arg].fixup);
                 break;
-            //case ea_m_A_ind_disp16: // (d16, An)
-            //case ea_m_A_ind_index:  // (d8, An, Xn)
+            case ea_m_A_ind_disp16: // (d16, An)
+            case ea_m_A_ind_index: // (d8, An, Xn)
+                assert(!ea[arg].fixup);
+                iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
+                break;
             case ea_m_Other: {
                 uint32_t ofs = static_cast<uint32_t>((result_.size() + iword_cnt) * 2);
                 switch (ea[arg].type & 7) {
@@ -599,8 +696,16 @@ operands_done:
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val >> 16);
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                     break;
-                //case ea_other_pc_disp16: // (d16, PC)
-                //case ea_other_pc_index:  // (d8, PC, Xn)
+                case ea_other_pc_disp16: // (d16, PC)
+                    if (ea[arg].fixup)
+                        ea[arg].fixup->fixups.push_back(fixup_type { opsize::w, ofs });
+                    iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
+                    break;
+                case ea_other_pc_index:  // (d8, PC, Xn)
+                    if (ea[arg].fixup)
+                        ea[arg].fixup->fixups.push_back(fixup_type { opsize::b, ofs+1 });
+                    iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
+                    break;
                 case ea_other_imm:
                     if (ea[arg].fixup) {
                         assert(osize != opsize::none);
@@ -608,9 +713,10 @@ operands_done:
                             ++ofs;
                         ea[arg].fixup->fixups.push_back(fixup_type { osize, ofs });
                     }
-                    if (osize == opsize::l) {
+                    if (osize == opsize::l)
                         iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val >> 16);
-                    }
+                    else if (osize == opsize::b)
+                        ea[arg].val &= 0xff;
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                     break;
                 default:

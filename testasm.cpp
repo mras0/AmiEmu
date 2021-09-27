@@ -82,6 +82,15 @@ bool simple_asm_tests()
         { "move.l d3, (a2)\n", { 0x2483 } },
         { "move.l d4, (a7)+\n", { 0x2ec4 } },
         { "move.l -(a3), a0\n", { 0x2063 } },
+        { "move.b #-12, d0\n", { 0x103c, 0x00f4 } },
+        { "move.l -12.w, d0\n", { 0x2038, 0xfff4 } },
+        { "move.w -1234(a0), d2\n", { 0x3428, 0xfb2e } },
+        { "move.w 8(a2,d2.w), d3\n", { 0x3632, 0x2008 } },
+        { "move.w 0(a3,d4.l), d3\n", { 0x3633, 0x4800 } },
+        { "move.l 10(a2,a1.w), d3\n", {0x2632, 0x900a} },
+        { "move.w lab(pc), a0\nlab dc.w $4afc\n", { 0x307a, 0x0002, 0x4afc } },
+        { "move.l lab(pc,d0.w), $12345678\nrts\nlab dc.w $4afc\n", { 0x23fb, 0x0008, 0x1234, 0x5678, 0x4e75, 0x4afc} },
+        { "x: move.w x(pc), d0\n", {0x303a, 0xfffe} },
     };  
 
     for (const auto& tc : test_cases) {
