@@ -4,12 +4,7 @@
 #include <ostream>
 #include "ioutil.h"
 #include "memory.h"
-
-//#define DISK_DEBUG
-
-#ifdef DISK_DEBUG
-#include <iostream>
-#endif
+#include "debug.h"
 
 namespace {
 
@@ -58,6 +53,8 @@ public:
 
     void insert_disk(std::vector<uint8_t>&& data)
     {
+        if (DEBUG_DISK)
+            *debug_stream << "Inserting disk of size $" << hexfmt(data.size(), 8) << "\n";
         if (data.size() != 0 && data.size() != DISK_SIZE) {
             throw std::runtime_error { "Invalid disk size $" + hexstring(data.size()) };
         }
@@ -81,35 +78,29 @@ public:
     
     void set_motor(bool enabled)
     {
-#ifdef DISK_DEBUG
-        if (motor_ != enabled)
-            std::cout << "Motor turning " << (enabled ? "on" : "off") << "\n";
-#endif
+        if (DEBUG_DISK && motor_ != enabled)
+            *debug_stream << "Motor turning " << (enabled ? "on" : "off") << "\n";
         motor_ = enabled;
     }
 
     void set_side_dir(bool side, bool dir)
     {
-#ifdef DISK_DEBUG
-        if (side != side_ || seek_dir_ != dir)
-            std::cout << "Changing side/stp direction cyl = " << (int)cyl_ << " new side = " << (side ? "lower" : "upper") << " new direction = " << (dir ? "out (towards 0)" : "in (towards 79)") << "\n";
-#endif
+        if (DEBUG_DISK && (side != side_ || seek_dir_ != dir))
+            *debug_stream << "Changing side/stp direction cyl = " << (int)cyl_ << " new side = " << (side ? "lower" : "upper") << " new direction = " << (dir ? "out (towards 0)" : "in (towards 79)") << "\n";
         side_ = side;
         seek_dir_ = dir;
     }
 
     void dir_step()
     {
-#ifdef DISK_DEBUG
-        std::cout << "Stepping cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
-#endif
+        if (DEBUG_DISK)
+            *debug_stream << "Stepping cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
         if (!seek_dir_ && cyl_ < NUM_CYLINDERS - 1)
             ++cyl_;
         else if (seek_dir_ && cyl_)
             --cyl_;
-#ifdef DISK_DEBUG
-        std::cout << "New cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
-#endif
+        if (DEBUG_DISK)
+            *debug_stream << "New cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
     }
 
     void read_mfm_track(uint8_t* dest)
@@ -120,9 +111,8 @@ public:
         // Lower side=first
         const uint8_t tracknum = !side_ + cyl_ * 2;
 
-#ifdef DISK_DEBUG
-        std::cout << "Reading track $" << hexfmt(tracknum) << " cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << "\n";
-#endif
+        if (DEBUG_DISK)
+            *debug_stream << "Reading track $" << hexfmt(tracknum) << " cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << "\n";
 
         if (disk_activity_handler_)
             disk_activity_handler_(tracknum, false);

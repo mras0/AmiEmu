@@ -1,9 +1,9 @@
 #include "cia.h"
 #include "ioutil.h"
+#include "debug.h"
 #include <cassert>
 #include <iostream>
 
-//#define FLOPPY_DEBUG
 //#define KEYBOARD_DEBUG
 
 namespace {
@@ -600,41 +600,34 @@ private:
         const uint8_t diff = after ^ before;
         if (!diff)
             return;
-        #if 0
-        for (int dsk = 0; dsk < 4; ++dsk) {
-            const uint8_t this_drive_change = diff & ~CIAF_ALL_DSKSEL;
-            if ((diff & (1<<(CIAB_DSKSEL0+dsk))) && this_drive_change) {
-                std::cout << "Change for drive " << dsk << ": " << hexfmt(this_drive_change) << "\n";
-            }
-        }
-        #endif
-#ifdef FLOPPY_DEBUG
-        auto prbits = [](const char* name, uint8_t b) {
-            std::cout << "  " << name << " $" << hexfmt(b) << " ";
-            const char* const names[8] = {
-                "/MOTOR",
-                "/SEL3 ",
-                "/SEL2 ",
-                "/SEL1 ",
-                "/SEL0 ",
-                "/SIDE ",
-                "/DIREC",
-                "/STEP ",
+        if (DEBUG_DISK) {
+            auto prbits = [](const char* name, uint8_t b) {
+                std::cout << "  " << name << " $" << hexfmt(b) << " ";
+                const char* const names[8] = {
+                    "/MOTOR",
+                    "/SEL3 ",
+                    "/SEL2 ",
+                    "/SEL1 ",
+                    "/SEL0 ",
+                    "/SIDE ",
+                    "/DIREC",
+                    "/STEP ",
+                };
+
+                for (int bit = 7; bit >= 0; bit--) {
+                    if (!(b & (1 << bit)))
+                        std::cout << names[7 - bit] << " ";
+                    else
+                        std::cout << "       ";
+                }
+                std::cout << "\n";
             };
 
-            for (int bit = 7; bit >= 0; bit--) {
-                if (!(b & (1 << bit)))
-                    std::cout << names[7 - bit] << " ";
-                else
-                    std::cout << "       ";
-            }
-            std::cout << "\n";
-        };
+            std::cout << "CIAPRB:\n";
+            prbits("before", before);
+            prbits("after ", after);
+        }
 
-        std::cout << "CIAPRB:\n";
-        prbits("before", before);
-        prbits("after ", after);
-#endif
         for (uint8_t dsk = 0; dsk < 4; ++dsk) {
             if (!drives_[dsk])
                 continue;
@@ -643,23 +636,14 @@ private:
             if (after & selmask)
                 continue;
             if (before & selmask) {
-#ifdef FLOPPY_DEBUG
-                std::cout << "DF" << (int)dsk << " motor " << (after & CIAF_DSKMOTOR ? "off" : "on") << "\n";
-#endif
                 d.set_motor(!(after & CIAF_DSKMOTOR));
             }
             /*if (diff & (CIAF_DSKSIDE | CIAF_DSKDIREC)) */{
                 // seekdir out -> towards 0
-#ifdef FLOPPY_DEBUG
-                std::cout << "DF" << (int)dsk << " side=" << (after & CIAF_DSKSIDE ? "lower" : "upper") << " seekdir=" << (after & CIAF_DSKDIREC ? "out" : "in") << "\n";
-#endif
                 d.set_side_dir(!!(after & CIAF_DSKSIDE), !!(after & CIAF_DSKDIREC));
             }
             if (!(before & CIAF_DSKSTEP) && (after & CIAF_DSKSTEP)) {
                 // TODO: Maybe check if it actually goes high again?
-#ifdef FLOPPY_DEBUG
-                std::cout << "DF" << (int)dsk << " step pulse\n";
-#endif
                 d.dir_step();
             }
 

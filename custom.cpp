@@ -1,17 +1,15 @@
 #include "custom.h"
 #include "ioutil.h"
 #include "cia.h"
+#include "debug.h"
 
-#include <iostream>
 #include <cassert>
 #include <utility>
+#include <iostream>
 
 #define TODO_ASSERT(expr) do { if (!(expr)) throw std::runtime_error{("TODO: " #expr " in ") + std::string{__FILE__} + " line " + std::to_string(__LINE__) }; } while (0)
 
-//#define COPPER_DEBUG
-//#define BPL_DMA_DEBUG
-//#define DISK_DMA_DEBUG
-//#define SPRITE_DMA_DEBUG
+#define DBGOUT *debug_stream << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 2) << ") "
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
@@ -611,10 +609,10 @@ public:
 
     void log_blitter_state()
     {
-        std::cout << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
+        *debug_stream << "Blit $" << hexfmt(s_.bltw) << "x$" << hexfmt(s_.blth) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
         for (int i = 0; i < 4; ++i) {
             const char name[5] = { 'B', 'L', 'T', static_cast<char>('A' + i), 0 };
-            std::cout << "  " << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(s_.bltdat[i]) << " " << name << "MOD=" << (int)s_.bltmod[i] << "\n";
+            *debug_stream << "  " << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(s_.bltdat[i]) << " " << name << "MOD=" << (int)s_.bltmod[i] << "\n";
         }
     }
 
@@ -793,16 +791,6 @@ public:
             return;
         }
 
-        if (s_.copper_inst[0] == 0 && s_.copper_inst[1] == 0) {
-            // This hack can probably be removed if the copper is paused after writing to a "dangerous" register without COPPERDANG enabled
-#ifdef COPPER_DEBUG
-            std::cout << "Hack, halting copper after reading 0,0\n";
-#endif
-            pause_copper();
-            return;
-        }
-
-
         if (s_.copper_inst[0] & 1) {
             // Wait/skip
             const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
@@ -813,15 +801,13 @@ public:
             if (!(s_.copper_inst[1] & 0x8000) && !(s_.dmacon & DMAF_BLTDONE)) {
                 // Blitter wait
             } else if ((s_.vpos & ve) > (vp & ve) || ((s_.vpos & ve) == (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he))) {
-#ifdef COPPER_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos>>1,4) << ") Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
-#endif
+                if (DEBUG_COPPER)
+                    DBGOUT << "Wait done $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt - 4) << "\n";
                 s_.copper_inst_ofs = 0; // Fetch next instruction
                 if (s_.copper_inst[1] & 1) {
                     // SKIP instruction. Actually reads next instruction, but does nothing?
-#ifdef COPPER_DEBUG
-                    std::cout << "Warning: SKIP processed\n";
-#endif
+                    if (DEBUG_COPPER)
+                        DBGOUT << "Warning: SKIP processed\n";
                     TODO_ASSERT(!"Skip not implemented");
                 }
             }
@@ -829,15 +815,13 @@ public:
         } else {
             const auto reg = s_.copper_inst[0] & 0x1ff;
             if (reg >= 0x80 || (s_.cdang && reg >= 0x40)) {
-#ifdef COPPER_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
-#endif
+                if (DEBUG_COPPER)
+                    DBGOUT << "Writing to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << "\n";
                 write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
                 s_.copper_inst_ofs = 0; // Fetch next instruction
             } else {
-#ifdef COPPER_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Writing to " << regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << " - Illegal. Pausing copper.\n";
-#endif
+                if (DEBUG_COPPER)
+                    DBGOUT << "Writing to " << custom_regname(reg) << " value=$" << hexfmt(s_.copper_inst[1]) << " - Illegal. Pausing copper.\n";
                 pause_copper();
             }
         }
@@ -848,31 +832,24 @@ public:
         assert(idx == 0 || idx == 1);
         s_.copper_inst_ofs = 0;
         s_.copper_pt = s_.coplc[idx];
-#ifdef COPPER_DEBUG
-        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Copper jump to COP" << (idx+1) << "LC: $" << hexfmt(s_.coplc[idx]) << "\n";
-#endif
+        if (DEBUG_COPPER)
+            DBGOUT << "Copper jump to COP" << (idx + 1) << "LC: $" << hexfmt(s_.coplc[idx]) << "\n";
     }
 
     bool do_disk_dma()
     {
-#ifdef DISK_DMA_DEBUG
-        const uint16_t colclock = s_.hpos >> 1;
-#endif
         TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
         if (s_.dskwait) {
             --s_.dskwait;
-#ifdef DISK_DMA_DEBUG
-            if (!s_.dskwait)
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Disk wait done\n";
-#endif
+            if (DEBUG_DISK && !s_.dskwait)
+                DBGOUT << "Disk wait done\n";
             return false;
         }
         
         if (!s_.dskread) {
+            if (DEBUG_DISK)
+                DBGOUT << "Reading track\n";
             assert(s_.mfm_pos == 0);
-#ifdef DISK_DMA_DEBUG
-            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading track\n";
-#endif
             cia_.active_drive().read_mfm_track(s_.mfm_track);
             s_.dskread = true;
             s_.dskwait = 0;
@@ -883,9 +860,8 @@ public:
             assert(s_.mfm_pos == 0);
             for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
                 if (get_u16(&s_.mfm_track[i * 2]) == s_.dsksync) {
-#ifdef DISK_DMA_DEBUG
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(i) << "\n";
-#endif
+                    if (DEBUG_DISK)
+                        DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(i) << "\n";
                     s_.mfm_pos = i + 1;
                     s_.intreq |= INTF_DSKSYNC;
                     s_.dsksync_passed = true;
@@ -900,9 +876,9 @@ public:
         const uint16_t nwords = s_.dsklen_act & 0x3FFF;
         TODO_ASSERT(nwords > 0);
 
-#ifdef DISK_DMA_DEBUG
-        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm offset=$" << hexfmt(s_.mfm_pos) << "\n";
-#endif
+        if (DEBUG_DISK)
+            DBGOUT << "Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm offset=$" << hexfmt(s_.mfm_pos) << "\n";
+    
         for (uint16_t i = 0; i < nwords; ++i) {
             uint16_t val = 0xaaaa;
             if (s_.mfm_pos < MFM_TRACK_SIZE_WORDS) {
@@ -930,38 +906,34 @@ public:
 
         for (uint8_t spr = 0; spr < 8; ++spr) {
             if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_waiting && s_.sprite_vpos_start(spr) == s_.vpos) {
-#ifdef SPRITE_DMA_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now active\n";
-#endif
+                if (DEBUG_SPRITE)
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now active\n";
                 s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_active;
                 s_.spr_dma_states[spr] = sprite_dma_state::fetch_data;
             } else if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_active && s_.sprite_vpos_end(spr) == s_.vpos) {
-#ifdef SPRITE_DMA_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now done\n";
-#endif
+                if (DEBUG_SPRITE)
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now done\n";
                 s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
                 s_.spr_dma_states[spr] = sprite_dma_state::fetch_ctl;
             } else if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_active && s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == s_.hpos) {
-#ifdef SPRITE_DMA_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Armed and HPOS matches!\n";
-#endif
+                if (DEBUG_SPRITE)
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Armed and HPOS matches!\n";
                 s_.spr_hold_a[spr] = s_.sprdata[spr];
                 s_.spr_hold_b[spr] = s_.sprdatb[spr];
                 s_.spr_hold_cnt[spr] = 16;
             }
         }
 
-#ifdef BPL_DMA_DEBUG
         static int rem_pixelsO = 0, rem_pixelsE = 0;
-#endif
+
         if (!(s_.hpos & 1) && s_.bpl1dat_written) {
-#ifdef BPL_DMA_DEBUG
-            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Making BPL data available";
-            if (s_.bpldata_avail) {
-                std::cout << " Warning: data not used flags=" << hexfmt(s_.bpldata_avail);
+            if (DEBUG_BPL) {
+                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Making BPL data available";
+                if (s_.bpldata_avail) {
+                    *debug_stream << " Warning: data not used flags=" << hexfmt(s_.bpldata_avail);
+                }
+                *debug_stream << "\n";
             }
-            std::cout << "\n";
-#endif
             static_assert(sizeof(s_.bpldat_temp) == sizeof(s_.bpldat));
             memcpy(s_.bpldat_temp, s_.bpldat, sizeof(s_.bpldat_temp));
 
@@ -976,10 +948,8 @@ public:
             if (vert_disp && horiz_disp) {
                 const uint8_t nbpls = (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0;
 
-#ifdef BPL_DMA_DEBUG
-                if ((s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
-#endif
+                if (DEBUG_BPL && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
+                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Display starting\n";
 
 
                 uint8_t spriteidx[8];
@@ -1042,14 +1012,15 @@ public:
                         }
                     }
 
-#ifdef BPL_DMA_DEBUG
-                    rem_pixelsO--;
-                    rem_pixelsE--;
-                    if ((rem_pixelsO|rem_pixelsE) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixelsO << " E=" << rem_pixelsE << "\n";
-                        rem_pixelsO = rem_pixelsE = 0;
+                    if (DEBUG_BPL) {
+                        rem_pixelsO--;
+                        rem_pixelsE--;
+                        if ((rem_pixelsO | rem_pixelsE) < 0 && nbpls && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER)) {
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Warning: out of pixels O=" << rem_pixelsO << " E=" << rem_pixelsE << "\n";
+                            rem_pixelsO = rem_pixelsE = 0;
+                        }
                     }
-#endif
+
                     const uint8_t pf2p = (s_.bplcon2 >> 3) & 7;
                     const uint8_t pf1p = s_.bplcon2 & 7;
 
@@ -1135,25 +1106,25 @@ public:
                 for (int i = 0; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~1;
-#ifdef BPL_DMA_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (shift=$" << hexfmt(s_.bplcon1 & mask, 1) << ")";
-                if (rem_pixelsO)
-                    std::cout << " Warning discarded " << rem_pixelsO;
-                std::cout << "\n";
-                rem_pixelsO = 16;
-#endif
+                if (DEBUG_BPL) {
+                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded odd pixels (shift=$" << hexfmt(s_.bplcon1 & mask, 1) << ")";
+                    if (rem_pixelsO)
+                        *debug_stream << " Warning discarded " << rem_pixelsO;
+                    *debug_stream << "\n";
+                    rem_pixelsO = 16;
+                }
             }
             if ((s_.bpldata_avail & 2) && ((s_.bplcon1 >> 4) & mask) == (s_.hpos & mask)) {
                 for (int i = 1; i < 6; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~2;
-#ifdef BPL_DMA_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (shift=$" << hexfmt((s_.bplcon1 >> 4) & mask, 1) << ")";
-                if (rem_pixelsE)
-                    std::cout << " Warning discarded " << rem_pixelsE;
-                std::cout << "\n";
-                rem_pixelsE = 16;
-#endif
+                if (DEBUG_BPL) {
+                    DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Loaded even pixels (shift=$" << hexfmt((s_.bplcon1 >> 4) & mask, 1) << ")";
+                    if (rem_pixelsE)
+                        *debug_stream << " Warning discarded " << rem_pixelsE;
+                    *debug_stream << "\n";
+                    rem_pixelsE = 16;
+                }
             }
         }
 
@@ -1189,28 +1160,25 @@ public:
                 const uint16_t act_ddfstop = std::min<uint16_t>(0xD8, s_.ddfstop);
                 const bool bpl_dma_active = (s_.dmacon & DMAF_RASTER) && vert_disp && (s_.bplcon0 & BPLCON0F_BPU);
 
-#ifdef BPL_DMA_DEBUG
                 static int num_bpl1_writes = 0;
-#endif
+
                 if (bpl_dma_active) {
                     if (s_.ddfst == ddfstate::before_ddfstrt && colclock == std::max<uint16_t>(0x18, s_.ddfstrt)) {
-#ifdef BPL_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " DDFSTRT=$" << hexfmt(s_.ddfstrt) << " passed\n";
-                        num_bpl1_writes = 0;
-#endif
+                        if (DEBUG_BPL) {
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " DDFSTRT=$" << hexfmt(s_.ddfstrt) << " passed\n";
+                            num_bpl1_writes = 0;
+                        }
                         s_.ddfst = ddfstate::active;
                         s_.ddfcycle = 0;
                         s_.ddfend = 0;
                     } else if (s_.ddfst == ddfstate::active && colclock == std::min<uint16_t>(0xD8, s_.ddfstop)) {
-#ifdef BPL_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " DDFSTOP=$" << hexfmt(s_.ddfstop) << " passed\n";
-#endif
+                        if (DEBUG_BPL)
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " DDFSTOP=$" << hexfmt(s_.ddfstop) << " passed\n";
                         // Need to do one final 8-cycles DMA fetch
                         s_.ddfst = ddfstate::ddfstop_passed;
                     } else if (s_.ddfst == ddfstate::ddfstop_passed && s_.ddfcycle == s_.ddfend) {
-#ifdef BPL_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " BPL DMA done (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
-#endif
+                        if (DEBUG_BPL)
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPL DMA done (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
                         s_.ddfst = ddfstate::stopped;
                     }
                 }
@@ -1220,23 +1188,21 @@ public:
                     constexpr uint8_t hires_bpl_sched[8] = { 4, 3, 2, 1, 4, 3, 2, 1 };
                     const int bpl = (s_.bplcon0 & BPLCON0F_HIRES ? hires_bpl_sched : lores_bpl_sched)[s_.ddfcycle & 7] - 1;
                     if (s_.ddfst == ddfstate::ddfstop_passed && !s_.ddfend && (s_.ddfcycle & 7) == 0) {
-#ifdef BPL_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Doing final DMA cycles (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
-#endif
+                        if (DEBUG_BPL)
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Doing final DMA cycles (fetch cycle $" << hexfmt(s_.ddfcycle) << ", bpl1 writes: " << num_bpl1_writes << ")\n";
                         s_.ddfend = s_.ddfcycle + 8;
                     }
                     ++s_.ddfcycle;
 
                     if (bpl >= 0 && bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0)) {
-#ifdef BPL_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " BPL " << bpl << " DMA (fetch cycle $" << hexfmt(s_.ddfcycle) << ")\n";
-#endif
+                        if (DEBUG_BPL)
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " BPL " << bpl << " DMA (fetch cycle $" << hexfmt(s_.ddfcycle) << ")\n";
                         s_.bpldat[bpl] = do_dma(s_.bplpt[bpl]);
                         if (bpl == 0) {
-#ifdef BPL_DMA_DEBUG
-                            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Data available -- bpldat1_written = " << s_.bpl1dat_written << " bpldata_avail = " << hexfmt(s_.bpldata_avail) << (s_.bpl1dat_written ? " Warning!" : "") << "\n";
-                            ++num_bpl1_writes;
-#endif
+                            if (DEBUG_BPL) {
+                                DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Data available -- bpldat1_written = " << s_.bpl1dat_written << " bpldata_avail = " << hexfmt(s_.bpldata_avail) << (s_.bpl1dat_written ? " Warning!" : "") << "\n";
+                                ++num_bpl1_writes;
+                            }
 
                             s_.bpl1dat_written = true;
                             s_.bpl1dat_written_this_line = true;
@@ -1252,9 +1218,8 @@ public:
                         const bool first_word = !(colclock & 2);
                         const uint16_t reg = SPR0POS + 8 * spr + 2 * (s_.spr_dma_states[spr] == sprite_dma_state::fetch_ctl ? 1 - first_word : 3 - first_word);
                         const uint16_t val = do_dma(s_.sprpt[spr]);
-#ifdef SPRITE_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " vpos_state=" << (int)s_.spr_vpos_states[spr] << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << regname(reg) << "\n";
-#endif
+                        if (DEBUG_SPRITE)
+                            DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " vpos_state=" << (int)s_.spr_vpos_states[spr] << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << custom_regname(reg) << "\n";
                         write_u16(0xdff000 | reg, reg, val);
                         break;
                     }
@@ -1263,19 +1228,18 @@ public:
                 // Copper (uses only odd-numbered cycles)
                 if ((s_.dmacon & (DMAF_MASTER | DMAF_COPPER)) == (DMAF_MASTER | DMAF_COPPER) && s_.copper_inst_ofs < 2 && !(colclock & 1)) {
                     if (colclock == 0xe0) {
-#ifdef COPPER_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Wasting cycle (HACK)\n";
-#endif
+                        if (DEBUG_COPPER)
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Wasting cycle (HACK)\n";
                         break; // $E0 not usable by copper?
                     }
 
                     s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
-#ifdef COPPER_DEBUG
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " Read copper instruction word $" << hexfmt(s_.copper_inst[s_.copper_inst_ofs-1]) << " from $" << hexfmt(s_.copper_pt-2) << "\n";
-                    if (s_.copper_inst_ofs == 2 && s_.copper_inst[0] == 0xFFFF && s_.copper_inst[1] == 0xFFFE) {
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") virt_pixel=" << hexfmt(virt_pixel) << " End of copper list.\n";
+                    if (DEBUG_COPPER) {
+                        DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " Read copper instruction word $" << hexfmt(s_.copper_inst[s_.copper_inst_ofs - 1]) << " from $" << hexfmt(s_.copper_pt - 2) << "\n";
+                        if (s_.copper_inst_ofs == 2 && s_.copper_inst[0] == 0xFFFF && s_.copper_inst[1] == 0xFFFE) {
+                            DBGOUT << "virt_pixel=" << hexfmt(virt_pixel) << " End of copper list.\n";
+                        }
                     }
-#endif
                     break;
                 }
                 
@@ -1304,9 +1268,7 @@ public:
             s_.bpl1dat_written = false;
             s_.bpl1dat_written_this_line = false;
             s_.bpldata_avail = 0;
-#ifdef BPL_DMA_DEBUG
             rem_pixelsO = rem_pixelsE = 0;
-#endif
             s_.ham_color = rgb4_to_8(s_.color[0]);
             s_.ddfst = ddfstate::before_ddfstrt;
             memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
@@ -1445,22 +1407,19 @@ public:
                 s_.spr_armed[spr] = false;
                 s_.spr_dma_states[spr] = sprite_dma_state::stopped;
                 if (s_.sprite_vpos_start(spr) < s_.sprite_vpos_end(spr) && s_.sprite_vpos_start(spr) >= s_.vpos) {
-#ifdef SPRITE_DMA_DEBUG
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Setting active waiting for VPOS=$" << hexfmt(s_.sprite_vpos_start(spr)) << " end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
-#endif
+                    if (DEBUG_SPRITE)
+                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Setting active waiting for VPOS=$" << hexfmt(s_.sprite_vpos_start(spr)) << " end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
                     s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_waiting;
                 } else {
-#ifdef SPRITE_DMA_DEBUG
-                    std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Disabling start=$" << hexfmt(s_.sprite_vpos_start(spr)) << " >= end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
-#endif
+                    if (DEBUG_SPRITE)
+                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Disabling start=$" << hexfmt(s_.sprite_vpos_start(spr)) << " >= end=$" << hexfmt(s_.sprite_vpos_end(spr)) << "\n";
                     s_.spr_vpos_states[spr] = sprite_vpos_state::vpos_disabled;
                 }
                 return;
             case 2: // SPRxDATA (low word)
                 s_.sprdata[spr] = val;
-#ifdef SPRITE_DMA_DEBUG
-                std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Arming\n";
-#endif
+                if (DEBUG_SPRITE)
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Arming\n";
                 s_.spr_armed[spr] = true;
                 return;
             case 3: // SPRxDATB (high word)
@@ -1479,15 +1438,13 @@ public:
             return; // Dummy address
         case DSKPTH: // $020:
             s_.dskpt = val << 16 | (s_.dskpt & 0xffff);
-#ifdef  DISK_DMA_DEBUG 
-            std::cout << "Write to DSKPTH val=$" << hexfmt(val) << " dskpt=$" << hexfmt(s_.dskpt) << "\n";
-#endif
+            if (DEBUG_DISK)
+                DBGOUT << "Write to DSKPTH val=$" << hexfmt(val) << " dskpt=$" << hexfmt(s_.dskpt) << "\n";
             return;
         case DSKPTL: // $022:
             s_.dskpt = (s_.dskpt & 0xffff0000) | (val & 0xfffe);
-#ifdef DISK_DMA_DEBUG
-            std::cout << "Write to DSKPTL val=$" << hexfmt(val) << " dskpt=$" << hexfmt(s_.dskpt) << "\n";
-#endif
+            if (DEBUG_DISK)
+                DBGOUT << "Write to DSKPTL val=$" << hexfmt(val) << " dskpt=$" << hexfmt(s_.dskpt) << "\n";
             return;
         case DSKLEN: // $024
             s_.dsklen_act = s_.dsklen == val ? val : 0;
@@ -1496,17 +1453,15 @@ public:
             s_.mfm_pos = 0;
             s_.dsksync_passed = false;
             s_.dskread = false;
-#ifdef DISK_DMA_DEBUG
-            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Write to DSKLEN: $" << hexfmt(val) << (s_.dsklen_act && (s_.dsklen_act & 0x8000) ? " - Active!" : "") << "\n";
-#endif
+            if (DEBUG_DISK)
+                DBGOUT << "Write to DSKLEN: $" << hexfmt(val) << (s_.dsklen_act && (s_.dsklen_act & 0x8000) ? " - Active!" : "") << "\n";
             return;
         case VPOSW:  // $02A
             return;  // Ignore for now
         case COPCON: // $02E
             s_.cdang = !!(val & 2);
-#ifdef COPPER_DEBUG
-            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") CDANG " << (s_.cdang ? "enabled" : "disabled") << "\n";
-#endif
+            if (DEBUG_COPPER)
+                DBGOUT << "CDANG " << (s_.cdang ? "enabled" : "disabled") << "\n";
             return;
         case SERDAT: // $030
             if (serial_data_handler_) {
@@ -1610,14 +1565,13 @@ public:
             return;
         case DMACON:  // $096
             setclr(s_.dmacon, val & ~(1 << 14 | 1 << 13 | 1 << 12 | 1 << 11));
-#ifdef DISK_DMA_DEBUG
-            std::cout << "Write to DMACON val=$" << hexfmt(val) << " dmacon=$" << hexfmt(s_.dmacon) << "\n";
-#endif
+            if (DEBUG_DMA)
+                DBGOUT << "Write to DMACON val=$" << hexfmt(val) << " dmacon=$" << hexfmt(s_.dmacon) << "\n";
             return;
         case INTENA:  // $09A
             setclr(s_.intena, val);
             if (s_.intena & (INTF_AUD0 | INTF_AUD1 | INTF_AUD2 | INTF_AUD3))
-                std::cout << "Warning: INTENA contains AUDx interrupts: $" << hexfmt(s_.intena) << "\n";
+                DBGOUT << "Warning: INTENA contains AUDx interrupts: $" << hexfmt(s_.intena) << "\n";
             return;
         case INTREQ:  // $09C
             val &= ~INTF_INTEN;
@@ -1625,9 +1579,8 @@ public:
             return;
         case ADKCON:  // $09E
             setclr(s_.adkcon, val);
-#ifdef DISK_DMA_DEBUG
-            std::cout << "Write to ADKCON val=$" << hexfmt(val) << " adkcon=$" << hexfmt(s_.adkcon) << "\n";
-#endif
+            if (DEBUG_DISK)
+                DBGOUT << "Write to ADKCON val=$" << hexfmt(val) << " adkcon=$" << hexfmt(s_.adkcon) << "\n";
             return;
         case BPLCON0: // $100
             s_.bplcon0 = val;

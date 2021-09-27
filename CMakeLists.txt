@@ -53,5 +53,6 @@ add_executable(amiemu
     custom.cpp custom.h
     disk_drive.cpp disk_drive.h
     gui_win32.cpp gui.h
+    debug.cpp debug.h
     )
 target_link_libraries(amiemu PRIVATE utils m68k)

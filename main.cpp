@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdexcept>
 #include <cassert>
+#include <fstream>
 
 //#define TRACE_LOG
 
@@ -18,6 +19,7 @@
 #include "cpu.h"
 #include "disk_drive.h"
 #include "gui.h"
+#include "debug.h"
 
 namespace {
 std::string trim(const std::string& line)
@@ -350,7 +352,7 @@ int main(int argc, char* argv[])
         constexpr size_t trace_start_inst = 200'000'000;
 #endif
 
-        const unsigned steps_per_update = 10000;
+        const unsigned steps_per_update = 1000000;
         unsigned steps_to_update = 0;
         std::vector<gui::event> events;
         std::vector<uint8_t> pending_disk;
@@ -358,6 +360,9 @@ int main(int argc, char* argv[])
         constexpr uint32_t invalid_pc = ~0U;
         bool debug_mode = false;
         uint32_t wait_for_pc = invalid_pc;
+        bool new_frame_since_last_check = false;
+        bool waiting_for_new_frame = false;
+        std::unique_ptr<std::ofstream> trace_file;
 
         for (bool quit = false; !quit;) {
             try {
@@ -402,15 +407,16 @@ int main(int argc, char* argv[])
                     debug_mode = true;
                     wait_for_pc = invalid_pc;
                 }
+                if (waiting_for_new_frame && new_frame_since_last_check) {
+                    g.set_active(false);
+                    debug_mode = true;
+                    waiting_for_new_frame = false;
+                }
 
                 if (debug_mode) {
                     const auto& s = cpu.state();
-                    auto show_state = [&]() {
-                        print_cpu_state(std::cout, s);
-                        disasm_stmts(mem, s.pc, 1);
-                    };
 
-                    show_state();
+                    cpu.show_state(std::cout);
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
                         std::cout << "> " << std::flush;
@@ -433,8 +439,7 @@ int main(int argc, char* argv[])
                                 disasm_pc += disasm_stmts(mem, disasm_pc, lines);
                             }
                         } else if (args[0] == "g") {
-                            debug_mode = false;
-                            g.set_active(true);
+                            goto exit_debug;
                             break;
                         } else if (args[0] == "m") {
                             auto [valid, addr, lines] = get_addr_and_lines(args, hexdump_addr, 20);
@@ -466,19 +471,54 @@ int main(int argc, char* argv[])
                             quit = true;
                             break;
                         } else if (args[0] == "r") {
-                            show_state();
+                            cpu.show_state(std::cout);
                         } else if (args[0] == "t") {
                             break;
+                        } else if (args[0] == "trace_file") {
+                            if (args.size() > 1) {
+                                auto f = std::make_unique<std::ofstream>(args[1].c_str());
+                                if (*f) {
+                                    trace_file.reset(f.release());
+                                    debug_stream = trace_file.get();
+                                    std::cout << "Tracing to \"" << args[1] << "\"\n";
+                                } else {
+                                    std::cout << "Error creating \"" << args[1] << "\"\n";
+                                }
+                            } else {
+                                std::cout << "Tracing to screen\n";
+                                trace_file.reset();
+                                debug_stream = &std::cout;
+                            }
+                        } else if (args[0] == "trace_flags") {
+                            if (args.size() > 1) {
+                                auto fh = from_hex(args[1]);
+                                if (fh.first) {
+                                    debug_flags = fh.second;
+                                }
+                            } else {
+                                std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
+                            }
                         } else if (args[0] == "z") {
                             wait_for_pc = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
-                            debug_mode = false;
-                            g.set_active(true);
-                            break;
+                            goto exit_debug;
+                        } else if (args[0] == "zf") {
+                            // Wait for next frame
+                            new_frame_since_last_check = false;
+                            waiting_for_new_frame = true;
+                            goto exit_debug;
                         } else {
 unknown_command:
                             std::cout << "Unknown command \"" << args[0] << "\"\n";
                         }
                     }
+
+                    if (0) {
+exit_debug:
+                        debug_mode = false;
+                        g.set_active(true);
+
+                    }
+
                 }
 
                 cpu.step(custom.current_ipl());
@@ -504,6 +544,7 @@ unknown_command:
                             df0.insert_disk(std::move(pending_disk));
                         }
                     }
+                    new_frame_since_last_check = true;
                     goto update;
                 }
                 if (!steps_to_update--) {
