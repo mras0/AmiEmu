@@ -56,20 +56,121 @@ std::vector<std::string> split_line(const std::string& line)
     return args;
 }
 
+std::pair<bool, uint32_t> get_simple_expr(const std::string& arg)
+{
+    if (arg.empty())
+        return { false, 0 };
+
+    auto prec = [](char c) {
+        switch (c) {
+        case '+':
+        case '-':
+            return 1;
+        case '*':
+        case '/':
+            return 2;
+        default:
+            return 0;
+        }
+    };
+    auto doop = [](char c, uint32_t a, uint32_t b) -> uint32_t {
+        switch (c) {
+        case '+':
+            return a + b;
+        case '-':
+            return a - b;
+        case '*':
+            return a * b;
+        case '/':
+            return b ? a / b : 0xffffffff;
+        }
+        assert(false);
+        return 0;
+    };
+
+    struct stack_elem {
+        bool isop;
+        uint32_t val;
+    };
+    std::vector<stack_elem> s;
+    std::vector<char> opstack;
+
+    #if 0
+    auto print_state = [&]() {
+        for (const auto& se : s) {
+            if (se.isop)
+                std::cout << static_cast<char>(se.val);
+            else
+                std::cout << "$" << hexfmt(se.val);
+            std::cout << " ";
+        }
+        std::cout << "\t";
+        for (const auto op : opstack)
+            std::cout << op << " ";
+        std::cout << "\n";
+    };
+    #endif
+
+    // Extremely simple shunting yard expression parser
+    for (size_t i = 0, size = arg.size(); i < size;) {
+        const char c = arg[i];
+        if (auto pre = prec(c); pre) {
+            while (!opstack.empty() && prec(c) <= prec(opstack.back())) {
+                s.push_back({ true, static_cast<uint32_t>(opstack.back()) });
+                opstack.pop_back();
+            }
+            opstack.push_back(c);
+            ++i;
+        } else {
+            size_t j = i + 1;
+            for (; j < size && !prec(arg[j]); ++j)
+                ;
+            const auto [valid, num] = from_hex(arg.substr(i, j - i));
+            if (!valid)
+                return { false, 0 };
+            s.push_back({ false, num });
+            i = j;
+        }
+    }
+    while (!opstack.empty()) {
+        s.push_back({ true, static_cast<uint32_t>(opstack.back()) });
+        opstack.pop_back();
+    }
+
+    std::vector<uint32_t> vals;
+    for (auto& se : s) {
+        if (se.isop) {
+            if (vals.size() < 2)
+                return { false, 0 };
+            auto b = vals.back();
+            vals.pop_back();
+            auto a = vals.back();
+            vals.pop_back();
+            vals.push_back(doop(static_cast<char>(se.val), a, b));
+        } else {
+            vals.push_back(se.val);
+        }
+    }
+
+    if (vals.size() != 1)
+        return { false, 0 };
+    return { true, vals[0] };
+}
+
 std::tuple<bool, uint32_t, uint32_t> get_addr_and_lines(const std::vector<std::string>& args, uint32_t def_addr, uint32_t def_lines)
 {
     uint32_t addr = def_addr, lines = def_lines;
 
     if (args.size() > 1) {
         if (args.size() > 1) {
-            auto fh = from_hex(args[1]);
+            auto fh = get_simple_expr(args[1]);
             if (!fh.first) {
                 std::cout << "Invalid address \"" << args[1] << "\"\n";
                 return { false, def_addr, def_lines };
             }
             addr = fh.second;
             if (args.size() > 2) {
-                if (fh = from_hex(args[2]); fh.first)
+                if (fh = get_simple_expr(args[2]); fh.first)
                     lines = fh.second;
                 else {
                     std::cout << "Invalid lines \"" << args[2] << "\"\n";
@@ -811,7 +912,7 @@ int main(int argc, char* argv[])
                             custom.show_registers(std::cout);
                         } else if (args[0] == "f") {
                             if (args.size() > 1) {
-                                auto [valid, pc] = from_hex(args[1]);
+                                auto [valid, pc] = get_simple_expr(args[1]);
                                 if (valid && !(pc & 1)) {
                                     if (auto it = std::find(breakpoints.begin(), breakpoints.end(), pc); it != breakpoints.end()) {
                                         breakpoints.erase(it);
@@ -831,7 +932,7 @@ int main(int argc, char* argv[])
                             std::cout << "All breakpoints deleted\n";
                         } else if (args[0] == "fi") {
                             if (args.size() > 1) {
-                                auto [valid, inst] = from_hex(args[1]);
+                                auto [valid, inst] = get_simple_expr(args[1]);
                                 if (valid && inst < 0x10000) {
                                     wait_mode = wait_exact_inst;
                                     wait_arg = inst;
@@ -922,7 +1023,7 @@ int main(int argc, char* argv[])
                             std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
                         } else if (args[0] == "w") {
                             if (args.size() > 1) {
-                                auto [nvalid, num] = from_hex(args[1]);
+                                auto [nvalid, num] = get_simple_expr(args[1]);
                                 if (!nvalid)
                                     goto memwatch_invalid_args;
                                 if (args.size() == 2) {
@@ -937,8 +1038,8 @@ int main(int argc, char* argv[])
                                         std::cerr << "Too few arguments\n";
                                         goto memwatch_invalid_args;
                                     }
-                                    auto [avalid, address] = from_hex(args[2]);
-                                    auto [svalid, size] = from_hex(args[3]);
+                                    auto [avalid, address] = get_simple_expr(args[2]);
+                                    auto [svalid, size] = get_simple_expr(args[3]);
                                     uint8_t flags = 0;
                                     for (const char c : args[4]) {
                                         if (c == 'r' || c == 'R')
@@ -986,7 +1087,7 @@ int main(int argc, char* argv[])
                                             std::cerr << "Invalid length for value \"" << a << "\n";
                                             break;
                                         }
-                                        auto [dvalid, data] = from_hex(args[i]);
+                                        auto [dvalid, data] = get_simple_expr(args[i]);
                                         if (!dvalid) {
                                             std::cerr << "Invalid value \"" << a << "\n";
                                             break;
@@ -1050,11 +1151,11 @@ int main(int argc, char* argv[])
                             // Wait for video position
                             if (args.size() > 1) {
                                 uint32_t waitpos = 0;
-                                auto vpos = from_hex(args[1]);
+                                auto vpos = get_simple_expr(args[1]);
                                 if (vpos.first && vpos.second <= 313) {
                                     waitpos = vpos.second << 9;
                                     if (args.size() > 2) {
-                                        auto hpos = from_hex(args[2]);
+                                        auto hpos = get_simple_expr(args[2]);
                                         if (hpos.first && hpos.second < 455) {
                                             waitpos |= hpos.second;
                                         } else {
@@ -1073,6 +1174,12 @@ int main(int argc, char* argv[])
                             } else {
                                 std::cout << "Missing argument(s) vpos [hpos]\n";
                             }
+                        } else if (args[0][0] == '?') {
+                            const auto [valid, num] = get_simple_expr(args[0].substr(1));
+                            if (valid)
+                                std::cout << "$" << hexfmt(num) << " = %" << binfmt(num) << " = " << num << "\n";
+                            else
+                                std::cout << "Invalid expression\n";                                
                         } else {
 unknown_command:
                             std::cout << "Unknown command \"" << args[0] << "\"\n";
