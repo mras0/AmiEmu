@@ -73,7 +73,9 @@ public:
     }
     uint16_t read_u16(uint32_t addr, uint32_t) override
     {
-        std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
+        // Don't warn a bunch when scanning for ROM tags
+        if (addr < 0xf00000)
+            std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
         return 0xffff;
     }
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override
@@ -91,6 +93,11 @@ public:
     explicit ram_handler(uint32_t size)
     {
         ram_.resize(size);
+    }
+
+    std::vector<uint8_t>& ram()
+    {
+        return ram_;
     }
 
     uint8_t read_u8(uint32_t, uint32_t offset) override
@@ -129,6 +136,11 @@ public:
 
     memory_handler(const memory_handler&) = delete;
     memory_handler& operator=(const memory_handler&) = delete;
+
+    std::vector<uint8_t>& ram()
+    {
+        return ram_.ram();
+    }
 
     void register_handler(memory_area_handler& h, uint32_t base, uint32_t len)
     {
@@ -195,7 +207,7 @@ private:
     area def_area_ { 0, 1U << 24, &def_handler_ };
     area ram_area_;
 
-    area& find_area(uint32_t addr)
+    area& find_area(uint32_t& addr)
     {
         addr &= 0xffffff;
         for (auto& a : areas_) {
@@ -300,8 +312,7 @@ public:
         if (valid_address(addr)) {
             handle_write(!(addr & 1), (addr >> 8) & 0xf, val);
         } else {
-            std::cerr << "TODO: Invalid CIA byte write : " << hexfmt(addr) << " val = $" << hexfmt(val) << "\n";
-            assert(0);
+            std::cerr << "[CIA] Ignoring Invalid CIA byte write : " << hexfmt(addr) << " val = $" << hexfmt(val) << "\n";
         }
     }
 
@@ -332,14 +343,13 @@ private:
         switch (reg) {
         case pra:
         case prb:
-            std::cerr << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
+            //std::cerr << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
             return regs_[idx][reg];
         case ddra:
         case ddrb:
             return regs_[idx][reg];
         default:
-            std::cerr << "TODO: Handle read from CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
-            assert(0);
+            std::cerr << "[CIA] TODO: Handle read from CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
         }
         return 0xFF;
     }
@@ -357,8 +367,8 @@ private:
             regs_[idx][reg] = val;
             break;
         default:
-            std::cerr << "TODO: Handle write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
-            assert(0);
+            std::cerr << "[CIA] Ignoring write to CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << " val $" << hexfmt(val) << "\n";
+            return;
         }
 
         if (idx == 0) {
@@ -435,26 +445,41 @@ public:
 
     uint8_t read_u8(uint32_t, uint32_t offset) override
     {
+        switch (offset) {
+        case POTGOR:
+            std::cerr << "[CUSTOM] Ignoring read from " << regname(offset) << "\n";
+            return 0xff;
+        }
         std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
-        assert(false);
         return 0xff;
     }
     uint16_t read_u16(uint32_t, uint32_t offset) override
     {
+        if (offset == SERDATR) {
+            // Don't spam in DiagROM
+            return 0xff;
+        }
+
         std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
-        assert(false);
         return 0xffff;
     }
     void write_u8(uint32_t, uint32_t offset, uint8_t val) override
     {
         std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
                   << " val $" << hexfmt(val) << "\n";
-        assert(false);
     }
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
         switch (offset) {
+        case SERDAT:
+            std::cerr << "[CUSTOM] Serial output ($" << hexfmt(val) << ") '" << (isprint(val&0xff)?static_cast<char>(val&0xff):' ') << "'\n"; 
+            return;
+        case INTREQ:
+            // Don't spam
+            return;
+
         case SERPER:
+        case POTGO:
         case COP1LCH:
         case COP1LCL:
         case COP2LCH:
@@ -466,7 +491,6 @@ public:
         case DDFSTRT:
         case DDFSTOP:
         case INTENA:
-        case INTREQ:
         case DMACON:
         case BPL1PTH:
         case BPL1PTL:
@@ -485,9 +509,7 @@ public:
         if (offset >= COLOR00 && offset <= COLOR31)
             goto ignore;
 
-        std::ostringstream oss;
-        oss << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val);
-        throw std::runtime_error { oss.str() };
+        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
     }
 
 private:
@@ -495,7 +517,11 @@ private:
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
+    X(POTGOR  , 0x016 , 0) /* Pot port data read(formerly POTINP)                     */ \
+    X(SERDATR , 0x018 , 0) /* Serial port data and status read                        */ \
+    X(SERDAT  , 0x030 , 1) /*                                                         */ \
     X(SERPER  , 0x032 , 1) /* Serial port period and control                          */ \
+    X(POTGO   , 0x034 , 1) /* Pot port data write and start                           */ \
     X(COP1LCH , 0x080 , 1) /* Coprocessor first location register (high 3 bits)       */ \
     X(COP1LCL , 0x082 , 1) /* Coprocessor first location register (low 15 bits)       */ \
     X(COP2LCH , 0x084 , 1) /* Coprocessor second location register (high 3 bits)      */ \
@@ -787,6 +813,12 @@ constexpr int32_t sext(uint32_t val, opsize size)
 
 class m68000 {
 public:
+    explicit m68000(memory_handler& mem, const cpu_state& state)
+        : mem_ { mem }
+        , state_ { state }
+    {
+    }
+
     explicit m68000(memory_handler& mem)
         : mem_ { mem }
     {
@@ -794,9 +826,6 @@ public:
         state_.sr = srm_s | srm_ipl; // 0x2700
         state_.ssp = mem.read_u32(0);
         state_.pc = mem.read_u32(4);
-
-        std::fill(std::begin(iwords_), std::end(iwords_), illegal_instruction_num);
-        inst_ = &instructions[illegal_instruction_num];
     }
 
     const cpu_state& state() const
@@ -843,10 +872,16 @@ public:
             std::cout << '\n';
         }
 
+        if ((inst_->extra & extra_priv_flag) && !(state_.sr & srm_s)) {
+            state_.pc = start_pc_; // "The saved value of the program counter is the address of the first word of the instruction causing the privilege violation.
+            do_trap(interrupt_vector::privililege_violation);
+            goto out;
+        }
+
         if (inst_->type == inst_type::ILLEGAL) {
             if (iwords_[0] == 0x4e7b) {
                 // For now only handle this specific one (from kickstart 1.3)
-                do_interrupt(interrupt_vector::illegal_instruction);
+                do_trap(interrupt_vector::illegal_instruction);
                 goto out;
             }
             throw std::runtime_error { "ILLEGAL" };
@@ -856,14 +891,15 @@ public:
 
         iword_idx_ = 1;
 
-        // Pre-increment & handle ea
-        for (uint8_t i = 0; i < inst_->nea; ++i) {
-            const auto ea = inst_->ea[i];
-            // Don't predecrement here for MOVEM
-            if (inst_->type != inst_type::MOVEM && (ea >> ea_m_shift) == ea_m_A_ind_pre) {
-                state_.A(ea & ea_xn_mask) -= opsize_bytes(inst_->size);
+        // Pre-increment & handle ea, MOVEM handles things on its own
+        if (inst_->type != inst_type::MOVEM) {
+            for (uint8_t i = 0; i < inst_->nea; ++i) {
+                const auto ea = inst_->ea[i];
+                if ((ea >> ea_m_shift) == ea_m_A_ind_pre) {
+                    state_.A(ea & ea_xn_mask) -= opsize_bytes(inst_->size);
+                }
+                handle_ea(i);
             }
-            handle_ea(i);
         }
 
         switch (inst_->type) {
@@ -875,15 +911,19 @@ public:
             HANDLE_INST(ADDA);
             HANDLE_INST(ADDQ);
             HANDLE_INST(AND);
+            HANDLE_INST(ASL);
+            HANDLE_INST(ASR);
             HANDLE_INST(Bcc);
             HANDLE_INST(BRA);
             HANDLE_INST(BSR);
+            HANDLE_INST(BCHG);
             HANDLE_INST(BCLR);
             HANDLE_INST(BSET);
             HANDLE_INST(BTST);
             HANDLE_INST(CLR);
             HANDLE_INST(CMP);
             HANDLE_INST(CMPA);
+            HANDLE_INST(CMPM);
             HANDLE_INST(DBcc);
             HANDLE_INST(EOR);
             HANDLE_INST(EXG);
@@ -891,6 +931,7 @@ public:
             HANDLE_INST(JMP);
             HANDLE_INST(JSR);
             HANDLE_INST(LEA);
+            HANDLE_INST(LINK);
             HANDLE_INST(LSL);
             HANDLE_INST(LSR);
             HANDLE_INST(MOVE);
@@ -898,15 +939,20 @@ public:
             HANDLE_INST(MOVEM);
             HANDLE_INST(MOVEQ);
             HANDLE_INST(MULU);
+            HANDLE_INST(NEG);
             HANDLE_INST(NOT);
+            HANDLE_INST(NOP);
             HANDLE_INST(OR);
             HANDLE_INST(PEA);
+            HANDLE_INST(RTE);
             HANDLE_INST(RTS);
+            HANDLE_INST(Scc);
             HANDLE_INST(SUB);
             HANDLE_INST(SUBA);
             HANDLE_INST(SUBQ);
             HANDLE_INST(SWAP);
             HANDLE_INST(TST);
+            HANDLE_INST(UNLK);
 #undef HANDLE_INST
         default: {
             std::ostringstream oss;
@@ -917,12 +963,13 @@ public:
 
         assert(iword_idx_ == inst_->ilen);
 
-        // Post-increment
-        for (uint8_t i = 0; i < inst_->nea; ++i) {
-            const auto ea = inst_->ea[i];
-            // MOVEM handles any increments
-            if (inst_->type != inst_type::MOVEM && (ea >> ea_m_shift) == ea_m_A_ind_post) {
-                state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
+        // Post-increment, MOVEM handles this on its own
+        if (inst_->type != inst_type::MOVEM) {
+            for (uint8_t i = 0; i < inst_->nea; ++i) {
+                const auto ea = inst_->ea[i];
+                if ((ea >> ea_m_shift) == ea_m_A_ind_post) {
+                    state_.A(ea & ea_xn_mask) += opsize_bytes(inst_->size);
+                }
             }
         }
 
@@ -936,10 +983,10 @@ private:
     cpu_state state_;
 
     // Decoder state
-    uint32_t start_pc_;
-    uint16_t iwords_[max_instruction_words];
-    uint8_t iword_idx_;
-    const instruction* inst_;
+    uint32_t start_pc_ = 0;
+    uint16_t iwords_[max_instruction_words] = { illegal_instruction_num };
+    uint8_t iword_idx_ = 0;
+    const instruction* inst_ = &instructions[illegal_instruction_num];
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     uint64_t instruction_count_ = 0;
     bool trace_ = false;
@@ -954,8 +1001,7 @@ private:
         case opsize::l:
             return val;
         }
-        assert(!"invalid opsize");
-        return val;
+        throw std::runtime_error { "Invalid opsize" };
     }
 
     uint32_t read_mem(uint32_t addr)
@@ -968,8 +1014,7 @@ private:
         case opsize::l:
             return mem_.read_u32(addr);
         }
-        assert(!"invalid opsize");
-        return 0;
+        throw std::runtime_error { "Invalid opsize" };
     }
 
     void handle_ea(uint8_t idx)
@@ -1045,7 +1090,7 @@ private:
                 break;
             }
             break;
-        case ea_m_inst_data:
+        default:
             if (ea == ea_sr) {
                 res = state_.sr;
                 return;
@@ -1059,6 +1104,10 @@ private:
             } else if (ea == ea_bitnum) {
                 assert(iword_idx_ < inst_->ilen);
                 res = iwords_[iword_idx_++];
+                return;
+            } else if (ea == ea_usp) {
+                assert(state_.sr & srm_s);
+                res = state_.usp;
                 return;
             }
             assert(ea <= ea_disp);
@@ -1105,7 +1154,7 @@ private:
                 return val;
             }
             break;
-        case ea_m_inst_data:
+        default:
             return val;
         }
         throw std::runtime_error { "Not handled in " + std::string { __func__ } + ": " + ea_string(ea) };
@@ -1183,10 +1232,16 @@ private:
                 break;
             }
             break;
-        case ea_m_inst_data:
+        default:
             if (ea == ea_sr) {
                 assert(!(val & srm_illegal));
+                // Note: MOVE to SR is not actually privileged until 68010
+                assert((state_.sr & srm_s) || inst_->type == inst_type::MOVE);
                 state_.sr = static_cast<uint16_t>(val);
+                return;
+            } else if (ea == ea_usp) {
+                assert(state_.sr & srm_s); // Checked
+                state_.usp = val;
                 return;
             }
             break;
@@ -1231,6 +1286,34 @@ private:
         state_.update_sr(cnt ? srm_ccr : srm_ccr_no_x, ccr);
     }
 
+    void do_left_shift(bool arit)
+    {
+        uint32_t val, cnt;
+        if (inst_->nea == 1) {
+            val = read_ea(0);
+            cnt = 1;
+        } else {
+            cnt = read_ea(0) & 63;
+            val = read_ea(1);
+        }
+        const auto orig_val = val;
+        bool carry;
+        if (!cnt) {
+            carry = false;
+        } else if (cnt <= 32) {
+            carry = !!((val << (cnt - 1)) & opsize_msb_mask(inst_->size));
+            val <<= cnt;
+        } else {
+            val = 0;
+            carry = false;
+        }
+
+        write_ea(inst_->nea - 1, val);
+        update_flags_rot(val, cnt, carry);
+        if (arit && ((val ^ orig_val) & opsize_msb_mask(inst_->size)))
+            state_.update_sr(srm_v, srm_v);
+    }
+
     void push_u16(uint16_t val)
     {
         auto& a7 = state_.A(7);
@@ -1245,9 +1328,25 @@ private:
         mem_.write_u32(a7, val);
     }
 
-    void do_interrupt(interrupt_vector vec)
+    uint16_t pop_u16()
     {
-        std::cerr << "[CPU] Interrupt $" << hexfmt(static_cast<uint8_t>(vec)) << " triggered at PC=$" << hexfmt(start_pc_) << "\n";
+        auto& a7 = state_.A(7);
+        const auto val = mem_.read_u16(a7);
+        a7 += 2;
+        return val;
+    }
+
+    uint32_t pop_u32()
+    {
+        auto& a7 = state_.A(7);
+        const auto val = mem_.read_u32(a7);
+        a7 += 4;
+        return val;
+    }
+
+    void do_trap(interrupt_vector vec)
+    {
+        std::cerr << "[CPU] Trap $" << hexfmt(static_cast<uint8_t>(vec)) << " triggered at PC=$" << hexfmt(start_pc_) << "\n";
 
         const uint16_t saved_sr = state_.sr;
         const uint8_t vec_num = static_cast<uint8_t>(vec);
@@ -1291,7 +1390,7 @@ private:
 
     void handle_ADDQ()
     {
-        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_inst_data) && inst_->ea[0] <= ea_disp);
+        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         handle_ADD();
     }
 
@@ -1304,6 +1403,42 @@ private:
         write_ea(1, res);
         update_flags(srm_ccr_no_x, res, 0);
     }
+
+    void handle_ASL()
+    {
+        do_left_shift(true);
+    }
+
+    void handle_ASR()
+    {
+        uint32_t val, cnt;
+        if (inst_->nea == 1) {
+            val = read_ea(0);
+            cnt = 1;
+        } else {
+            cnt = read_ea(0) & 63;
+            val = read_ea(1);
+        }
+        const auto msb = !!(val & opsize_msb_mask(inst_->size));
+
+        bool carry;
+        if (!cnt) {
+            carry = false;
+        } else if (cnt <= 32) {
+            carry = !!((val >> (cnt - 1)) & 1);
+            val >>= cnt;
+            if (msb) {
+                val |= ~0U << cnt;
+            }
+        } else {
+            val = msb ? ~0U : 0;
+            carry = false;
+        }
+
+        write_ea(inst_->nea - 1, val);
+        update_flags_rot(val, cnt, carry);
+    }
+
 
     void handle_Bcc()
     {
@@ -1337,9 +1472,14 @@ private:
             assert(inst_->size == opsize::l);
             bitnum &= 31;
         }
-        const bool is_set = !!((num >> bitnum) & 1);
-        state_.update_sr(srm_z, is_set ? srm_z : 0); // Set according to the previous state of the bit
+        state_.update_sr(srm_z, !((num >> bitnum) & 1) ? srm_z : 0); // Set according to the previous state of the bit
         return { bitnum, num };
+    }
+
+    void handle_BCHG()
+    {
+        const auto [bitnum, num] = bit_op_helper();
+        write_ea(1, num ^ (1 << bitnum));
     }
 
     void handle_BCLR()
@@ -1377,13 +1517,18 @@ private:
 
     void handle_CMPA()
     {
-        assert(inst_->nea == 2);
         assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
         const uint32_t r = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
         const uint32_t l = state_.A(inst_->ea[1] & ea_xn_mask);
         // And the performed on the full 32-bit value
         const auto res = l - r;
         update_flags(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res));
+    }
+
+    void handle_CMPM()
+    {
+        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift) == ea_m_A_ind_post && (inst_->ea[1] >> ea_m_shift) == ea_m_A_ind_post);
+        handle_CMP();
     }
 
     void handle_DBcc()
@@ -1456,29 +1601,19 @@ private:
         // No flags affected
     }
 
+    void handle_LINK()
+    {
+        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_An) && (inst_->ea[1] == ea_immediate) && inst_->size == opsize::w);
+        auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
+        push_u32(a);
+        auto& sp = state_.A(7);
+        a = sp;
+        sp += sext(ea_data_[1], inst_->size);
+    }
+
     void handle_LSL()
     {
-        uint32_t val, cnt;
-        if (inst_->nea == 1) {
-            val = read_ea(0);
-            cnt = 1;
-        } else {
-            cnt = read_ea(0) & 63;
-            val = read_ea(1);
-        }
-        bool carry;
-        if (!cnt) {
-            carry = false;
-        } else if (cnt <= 32) {            
-            carry = !!((val << (cnt - 1)) & opsize_msb_mask(inst_->size));
-            val <<= cnt;
-        } else {
-            val = 0;
-            carry = false;
-        }
-
-        write_ea(inst_->nea - 1, val);
-        update_flags_rot(val, cnt, carry);
+        do_left_shift(false);
     }
 
     void handle_LSR()
@@ -1525,60 +1660,63 @@ private:
     void handle_MOVEM()
     {
         assert(inst_->nea == 2);
-        assert(inst_->size == opsize::l); // TODO: Support word sized transfer
+
+        uint16_t reglist;
+        uint32_t addr;
+        bool reverse_mode = false;
+        bool mem_to_reg = false;
+        const auto nb = opsize_bytes(inst_->size);
 
         if (inst_->ea[0] == ea_reglist) {
-            uint16_t rl = static_cast<uint16_t>(ea_data_[0]);
-
-            // Latch values
-            uint32_t values[16];
-            for (unsigned i = 0; i < 16; ++i) {
-                if (i < 8)
-                    values[i] = state_.d[i];
-                else
-                    values[i] = state_.A(i & 7);
-            }
-
-            for (unsigned bit = 16; bit--;) {
-                if (!((rl >> bit) & 1))
-                    continue;
-                const auto val = values[15 - bit];
-
-                if (inst_->ea[1] >> ea_m_shift == ea_m_A_ind_pre) {
-                    auto& a = state_.A(inst_->ea[1] & ea_xn_mask);
-                    a -= opsize_bytes(inst_->size);
-                    write_mem(a, val);
-                } else {
-                    // Not checked...
-                    write_ea(1, val);
-                }
-            }
+            handle_ea(0);
+            handle_ea(1);
+            reglist = static_cast<uint16_t>(ea_data_[0]);
+            addr = ea_data_[1];
+            reverse_mode = inst_->ea[1] >> ea_m_shift == ea_m_A_ind_pre;
         } else {
-            assert(inst_->ea[1] == ea_reglist);
-            uint16_t rl = static_cast<uint16_t>(ea_data_[1]);
+            // reglist always immediately follows instruction
+            handle_ea(1);
+            handle_ea(0);
+            reglist = static_cast<uint16_t>(ea_data_[1]);
+            addr = ea_data_[0];
+            mem_to_reg = true;
+        }
 
+        if (reverse_mode) {
+            assert(inst_->ea[1] >> ea_m_shift == ea_m_A_ind_pre && !mem_to_reg);
             for (unsigned bit = 0; bit < 16; ++bit) {
-                if (!((rl >> bit) & 1))
+                if (!(reglist & (1 << bit)))
                     continue;
-                uint32_t val;
-                if (inst_->ea[0] >> ea_m_shift == ea_m_A_ind_post) {
-                    auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
-                    val = read_mem(a);
-                    a += opsize_bytes(inst_->size);
-                } else {
-                    // Not checked...
-                    val = read_ea(0);
+                const auto regnum = 15 - bit;
+                addr -= nb;
+                write_mem(addr, regnum < 8 ? state_.d[regnum] : state_.A(regnum & 7));
+            }
+            // Update address register
+            state_.A(inst_->ea[1] & ea_xn_mask) = addr;
+        } else {
+            for (unsigned bit = 0; bit < 16; ++bit) {
+                if (!(reglist & (1 << bit)))
+                    continue;
+                auto& reg = bit < 8 ? state_.d[bit] : state_.A(bit & 7);
+                if (mem_to_reg) {
+                    assert(inst_->size == opsize::l);
+                    reg = read_mem(addr);
                 }
-                auto& r = bit < 8 ? state_.d[bit] : state_.A(bit & 7);
-                assert(inst_->size == opsize::l);
-                r = val;
+                else
+                    write_mem(addr, reg);
+                addr += nb;
+            }
+
+            // Update address register if post-increment mode
+            if (inst_->ea[0] >> ea_m_shift == ea_m_A_ind_post) {
+                state_.A(inst_->ea[0] & ea_xn_mask) = addr;
             }
         }
     }
 
     void handle_MOVEQ()
     {
-        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_inst_data) && inst_->ea[0] <= ea_disp && (inst_->ea[1] >> ea_m_shift == ea_m_Dn));
+        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp && (inst_->ea[1] >> ea_m_shift == ea_m_Dn));
         const uint32_t src = static_cast<int32_t>(static_cast<int8_t>(read_ea(0)));
         write_ea(1, src);
         update_flags(srm_ccr_no_x, src, 0);
@@ -1594,12 +1732,29 @@ private:
         write_ea(1, res);
     }
 
+    void handle_NEG()
+    {
+        assert(inst_->nea == 1);
+        auto n = read_ea(0);
+        const bool overflow = (n == opsize_msb_mask(inst_->size));
+        n = -sext(n, inst_->size);
+        update_flags(srm_ccr_no_x, n, 0);
+        if (overflow) // Not tested...
+            state_.update_sr(srm_v, srm_v);
+        write_ea(0, n);
+    }
+
     void handle_NOT()
     {
         assert(inst_->nea == 1);
         auto n = ~read_ea(0);
         update_flags(srm_ccr_no_x, n, 0);
         write_ea(0, n);
+    }
+
+    void handle_NOP()
+    {
+        return;
     }
 
     void handle_OR()
@@ -1618,12 +1773,25 @@ private:
         push_u32(ea_data_[0]);
     }
 
+    void handle_RTE()
+    {
+        assert(inst_->nea == 0);
+        assert(state_.sr & srm_s);
+        state_.sr = pop_u16();
+        state_.pc = pop_u32();
+    }
+
     void handle_RTS()
     {
         assert(inst_->nea == 0);
-        auto& a7 = state_.A(7);
-        state_.pc = mem_.read_u32(a7);
-        a7 += 4;
+        state_.pc = pop_u32();
+    }
+
+    void handle_Scc()
+    {
+        assert(inst_->nea == 1 && inst_->size == opsize::b && (inst_->extra & extra_cond_flag));
+        const bool cond = state_.eval_cond(static_cast<conditional>(inst_->extra >> 4));
+        write_ea(0, cond ? 0xff : 0x00);
     }
 
     void handle_SUB()
@@ -1647,7 +1815,7 @@ private:
 
     void handle_SUBQ()
     {
-        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift == ea_m_inst_data) && inst_->ea[0] <= ea_disp);
+        assert(inst_->nea == 2 && (inst_->ea[0] >> ea_m_shift > ea_m_Other) && inst_->ea[0] <= ea_disp);
         handle_SUB();
     }
 
@@ -1664,28 +1832,282 @@ private:
         assert(inst_->nea == 1);
         update_flags(srm_ccr_no_x, read_ea(0), 0);
     }
+
+    void handle_UNLK()
+    {
+        assert(inst_->nea == 1 && (inst_->ea[0] >> ea_m_shift) == ea_m_An);
+        auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
+        state_.A(7) = a;
+        a = pop_u32();
+    }
 };
 
-int main()
+constexpr uint32_t get_test_field(uint32_t val, uint32_t start, uint32_t len)
+{
+    return (val >> (32 - (start + len))) & ((1 << len) - 1);
+}
+
+void run_test_case(const std::string& filename)
+{
+    const char signature[] = "binary\r";
+    const auto signature_len = sizeof(signature) - 1;
+    const auto data = read_file(filename);    
+    const auto size = data.size();
+    if (size < signature_len + 4 || !memcmp(&data[0], signature, signature_len)) {
+        throw std::runtime_error { filename + " has unexpected format" };
+    }
+
+
+    const uint32_t code_pos = 0x1000;
+    const uint32_t code_size = 0x2000;
+    memory_handler mem { code_pos + code_size };
+    auto& ram = mem.ram();
+
+    size_t pos = signature_len;
+    std::string name;
+    std::vector<uint16_t> inst_words;
+    struct test_state {
+        uint8_t  regs[5];
+        uint32_t regvals[5];
+        uint8_t  ccr;
+    } states[3];
+
+    unsigned state_pos = 0;
+
+    auto build_state = [](const test_state& s, const uint32_t pc_add = 0) {
+        cpu_state st {};
+        st.pc = code_pos + pc_add;
+        st.sr = s.ccr;
+        for (unsigned i = 0; i < 5; ++i) {
+            const auto& r = s.regs[i];
+            switch (r >> 3) {
+            case 1:
+                st.d[r & 7] = s.regvals[i];
+                break;
+            case 2:
+                st.A(r & 7) = s.regvals[i];
+                break;
+            }
+        }
+        return st;
+    };
+
+    while (pos < size) {
+        const auto w = get_u32(&data[pos]);
+        pos += 4;
+        //std::cout << "W: " << hexfmt(w) << " " << binfmt(w) << "\n";
+        switch (get_test_field(w, 0, 2)) {
+        case 0: {
+            // 1 = end test, 2 = end series
+            const auto type = get_test_field(w, 2, 2);
+            switch (type) {
+            case 1: { // Run test
+                assert(state_pos == 3);
+                const cpu_state input_state    = build_state(states[0]);
+                const cpu_state expected_state = build_state(states[1], static_cast<uint32_t>(2 * inst_words.size())); 
+
+                memset(&ram[0], 0, ram.size());
+                for (unsigned i = 0; i < inst_words.size(); ++i)
+                    put_u16(&ram[static_cast<size_t>(code_pos) + i * 2], inst_words[i]);
+
+                m68000 cpu { mem, input_state };
+                cpu.step();
+
+                const auto& outst = cpu.state();
+                if (memcmp(&outst, &expected_state, sizeof(cpu_state))) {
+                    std::cerr << "Test failed for " << name;
+                    for (const auto iw : inst_words)
+                        std::cerr << " " << hexfmt(iw);
+                    std::cerr << "\n";
+                    std::cerr << "\n\nInput state:\n";
+                    print_cpu_state(std::cerr, input_state);
+                    disasm(std::cerr, code_pos, &inst_words[0], inst_words.size());
+                    std::cerr << "\n";
+                    std::cerr << "\n\nExpected state:\n";
+                    print_cpu_state(std::cerr, expected_state);
+                    std::cerr << "\n\nActual state:\n";
+                    print_cpu_state(std::cerr, outst);
+                    throw std::runtime_error { "Test failed for " + name };
+                }
+
+                state_pos = 0;
+                break;
+            }
+            case 2:
+                std::cout << "\nEnd of test series\n\n";
+                break;
+            default:
+                throw std::runtime_error { "Unsupported END type " + std::to_string(type) };
+            }
+            break;
+        }
+        case 1: { // Instruction
+            const auto name_len    = get_test_field(w, 2, 3);
+            const auto extra_longs = get_test_field(w, 5, 11);
+            const auto opcode      = static_cast<uint16_t>(w);
+            inst_words.clear();
+            inst_words.push_back(opcode);
+            for (unsigned i = 0; i < extra_longs; ++i) {
+                assert(pos < size);
+                const auto iw = get_u32(&data[pos]);
+                pos += 4;
+                inst_words.push_back(static_cast<uint16_t>(iw >> 16));
+                inst_words.push_back(static_cast<uint16_t>(iw));
+            }
+            name.assign(reinterpret_cast<const char*>(&data[pos]), name_len);
+            pos += name_len;
+            std::cout << "Name: " << name << ", iwords: ";
+            for (const auto& iw : inst_words) {
+                std::cout << " " << hexfmt(iw);
+            }
+            std::cout << "\n";
+            break;
+        }
+        case 2: { // CPU State
+            assert(state_pos < 3);
+            auto& s = states[state_pos++];
+            s.ccr = static_cast<uint8_t>(get_test_field(w, 27, 5));
+
+            for (unsigned i = 0, bitpos = 2; i < 5; ++i, bitpos += 5) {
+                const auto type = get_test_field(w, bitpos, 2);
+                const auto id   = get_test_field(w, bitpos+2, 3);
+                s.regs[i] = static_cast<uint8_t>(type << 3 | id);
+                // Type: None=0, Data=1, Addr=2
+                if (type) {
+                    assert(pos < size);
+                    assert(type == 1 || type == 2);
+                    s.regvals[i] = get_u32(&data[pos]);
+                    pos += 4;
+                }
+            }
+            break;
+        }
+        case 3: { // Results
+            // Type: 0 = tests, 1 = errors
+            const auto type = get_test_field(w, 2, 1);
+            const auto count = get_test_field(w, 3, 29);
+            std::cout << "Results: type = " << type << " count = " << count << "\n";
+            break;
+        }
+        }
+    }
+
+    assert(pos == size);
+}
+
+int main(int argc, char* argv[])
 {
     try {
+        const std::string test_path = "../../Misc/m68k-tester-work/m68k-tests/";
+        const char* const testnames[] = {
+            "gen-opcode-abcd.bin",
+            "gen-opcode-addb.bin",
+            "gen-opcode-addl.bin",
+            "gen-opcode-addw.bin",
+            "gen-opcode-addxb.bin",
+            "gen-opcode-addxl.bin",
+            "gen-opcode-addxw.bin",
+            "gen-opcode-andb.bin",
+            "gen-opcode-andl.bin",
+            "gen-opcode-andw.bin",
+            "gen-opcode-aslb.bin",
+            "gen-opcode-asll.bin",
+            "gen-opcode-aslw.bin",
+            "gen-opcode-asrb.bin",
+            "gen-opcode-asrl.bin",
+            "gen-opcode-asrw.bin",
+            "gen-opcode-bchg.bin",
+            "gen-opcode-bclr.bin",
+            "gen-opcode-bset.bin",
+            "gen-opcode-clrb.bin",
+            "gen-opcode-clrl.bin",
+            "gen-opcode-clrw.bin",
+            "gen-opcode-cmpb.bin",
+            "gen-opcode-cmpl.bin",
+            "gen-opcode-cmpw.bin",
+            "gen-opcode-divs.bin",
+            "gen-opcode-divu.bin",
+            "gen-opcode-eorb.bin",
+            "gen-opcode-eorl.bin",
+            "gen-opcode-eorw.bin",
+            "gen-opcode-extl.bin",
+            "gen-opcode-extw.bin",
+            "gen-opcode-lslb.bin",
+            "gen-opcode-lsll.bin",
+            "gen-opcode-lslw.bin",
+            "gen-opcode-lsrb.bin",
+            "gen-opcode-lsrl.bin",
+            "gen-opcode-lsrw.bin",
+            "gen-opcode-nbcd.bin",
+            "gen-opcode-negb.bin",
+            "gen-opcode-negl.bin",
+            "gen-opcode-negw.bin",
+            "gen-opcode-negxb.bin",
+            "gen-opcode-negxl.bin",
+            "gen-opcode-negxw.bin",
+            "gen-opcode-notb.bin",
+            "gen-opcode-notl.bin",
+            "gen-opcode-notw.bin",
+            "gen-opcode-orb.bin",
+            "gen-opcode-orl.bin",
+            "gen-opcode-orw.bin",
+            "gen-opcode-sbcd.bin",
+            "gen-opcode-scc.bin",
+            "gen-opcode-scs.bin",
+            "gen-opcode-seq.bin",
+            "gen-opcode-sge.bin",
+            "gen-opcode-sgt.bin",
+            "gen-opcode-shi.bin",
+            "gen-opcode-sle.bin",
+            "gen-opcode-sls.bin",
+            "gen-opcode-slt.bin",
+            "gen-opcode-smi.bin",
+            "gen-opcode-sne.bin",
+            "gen-opcode-spl.bin",
+            "gen-opcode-subb.bin",
+            "gen-opcode-subl.bin",
+            "gen-opcode-subw.bin",
+            "gen-opcode-subxb.bin",
+            "gen-opcode-subxl.bin",
+            "gen-opcode-subxw.bin",
+            "gen-opcode-svc.bin",
+            "gen-opcode-svs.bin",
+            "gen-opcode-tas.bin"
+        };
+
+        for (const auto& t : testnames) {
+            std::cout << "Running " << t << "\n";
+            try {
+                run_test_case(test_path + t);
+            } catch (const std::exception& e) {
+                std::cerr << e.what() << "\n";
+            }
+        }
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
-        const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
-        //const char* const rom_file = "../../rom.bin";
+        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        const char* const rom_file = "../../rom.bin";
         memory_handler mem { 1U<<20 };
         rom_area_handler rom { mem, read_file(rom_file) };
         cia_handler cias { mem, rom };
         custom_handler custom { mem };
         m68000 cpu { mem };
 
+        for (int i = 1; i < argc; ++i) {
+            if (!strcmp(argv[i], "-trace"))
+                cpu.trace(true);
+            else
+                throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
+        }
+
+        //cpu.trace(true);
         for (;;) {
             try {
                 cpu.step();
                 //if (cpu.state().pc == 0xFC00E2) // After delay loop
                 //    cpu.trace(true);
-                //if (cpu.state().pc == 0x00fc08f6)
+                //if (cpu.state().pc == 0xFC046C)
                 //    cpu.trace(true);
-                //if (cpu.instruction_count() == 7110-2)
+                //if (cpu.instruction_count() == 1524631 - 25)
                 //    cpu.trace(true);
                 //else if (cpu.instruction_count() == 7110+2)
                 //    break;

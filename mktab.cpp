@@ -21,13 +21,15 @@ constexpr uint8_t ea_sr      = 0b01'000'100;
 constexpr uint8_t ea_ccr     = 0b01'000'101;
 constexpr uint8_t ea_reglist = 0b01'000'110;
 constexpr uint8_t ea_bitnum  = 0b01'000'111;
+constexpr uint8_t ea_usp     = 0b01'001'000;
 
 constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
-
+constexpr uint8_t extra_priv_flag = 1 << 2; // Instruction is privileged (causes a trap if executed in user mode)
 
 constexpr const unsigned block_Dn  = 1U << 0;
 constexpr const unsigned block_An  = 1U << 1;
+constexpr const unsigned priv_inst = 1U << 30;
 constexpr const unsigned block_Imm = 1U << 31;
 
 struct inst_desc {
@@ -55,7 +57,7 @@ constexpr const inst_desc insts[] = {
     {"OR"                , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ORI to SR
     {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     //{"ANDI.B #I, CCR"    , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
-    //{"ANDI.W #I, SR"     , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" },
+    {"AND"               , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" , ~0U, ea_sr << 8 }, // ANDI to SR
     {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"ADD"               , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
@@ -89,13 +91,14 @@ constexpr const inst_desc insts[] = {
     {"TAS"               , "B  " , "0 1 0 0 1 0 1 0 1 1 M     Xn   " , "   " , block_An | block_Imm },
     {"TST"               , "BWL" , "0 1 0 0 1 0 1 0 Sx  M     Xn   " , "   " },
     {"TRAP"              , "   " , "0 1 0 0 1 1 1 0 0 1 0 0 Data4  " , "   " },
-    {"LINK"              , " W " , "0 1 0 0 1 1 1 0 0 1 0 1 0 An   " , "   " },
-    {"UNLK"              , "   " , "0 1 0 0 1 1 1 0 0 1 0 1 1 An   " , "   " },
-    //{"MOVE USP"          , "  L" , "0 1 0 0 1 1 1 0 0 1 1 0 DyAn   " , "   " },
-    {"RESET"             , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 0 0 0" , "   " },
+    {"LINK"              , " W " , "0 1 0 0 1 1 1 0 0 1 0 1 0 An   " , "   " , 0 , ea_imm << 8},
+    {"UNLK"              , "  L" , "0 1 0 0 1 1 1 0 0 1 0 1 1 An   " , "   " }, // Formally unsized
+    {"MOVE"              , "  L" , "0 1 0 0 1 1 1 0 0 1 1 0 0 An   " , "   " , priv_inst, ea_usp << 8 },
+    {"MOVE"              , "  L" , "0 1 0 0 1 1 1 0 0 1 1 0 1 An   " , "   " , priv_inst, ea_usp },
+    {"RESET"             , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 0 0 0" , "   " , priv_inst },
     {"NOP"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 0 0 1" , "   " },
-    {"STOP"              , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 0 1 0" , "W I" },
-    {"RTE"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 0 1 1" , "   " },
+    {"STOP"              , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 0 1 0" , "W I" , priv_inst },
+    {"RTE"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 0 1 1" , "   " , priv_inst },
     {"RTS"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 0 1" , "   " },
     {"TRAPV"             , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 1 0" , "   " },
     {"RTR"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 1 1" , "   " },
@@ -121,7 +124,7 @@ constexpr const inst_desc insts[] = {
     {"SUBA"              , " WL" , "1 0 0 1 An    Sz1 1 M     Xn   " , "   " , 0 },
     {"EOR"               , "BWL" , "1 0 1 1 Dn    1 Sx  M     Xn   " , "   " },
     {"CMPM"              , "BWL" , "1 0 1 1 An    1 Sx  0 0 1 An   " , "   " },
-    {"CMP"               , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " },
+    {"CMP"               , "BWL" , "1 0 1 1 Dn    0 Sx  M     Xn   " , "   " , 0 },
     {"CMPA"              , " WL" , "1 0 1 1 An    Sz1 1 M     Xn   " , "   " , 0 },
     {"MULU"              , " W " , "1 1 0 0 Dn    0 1 1 M     Xn   " , "   " },
     {"MULS"              , " W " , "1 1 0 0 Dn    1 1 1 M     Xn   " , "   " },
@@ -441,6 +444,14 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         ai.extra = 0;
         if (cond != -1)
             ai.extra |= extra_cond_flag | (cond << 4);
+
+        if (!strcmp(desc.name, "CMPM")) {
+            // Hack for CMPM, turn An into (An)+
+            assert(nea == 2 && (ea[0] >> 3) == 1 && (ea[1] >> 3) == 1);
+            ai.ea[0] |= 2 << 3;
+            ai.ea[1] |= 2 << 3;
+        }
+
         
         if (desc.imm[2] == 'D') {
             assert(!strcmp(desc.name, "DBcc"));
@@ -517,6 +528,10 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                     break;
             }
         }
+
+        if (desc.block & priv_inst)
+            ai.extra |= extra_priv_flag;
+
 
         if (desc.imm[2] == 'M') {
             --nea;
@@ -774,6 +789,10 @@ int main(int argc, char* argv[])
                 output_plain(match, i.name);
             else
                 output_plain_with_imm(match, i.name, i.imm, i.fixed_ea);
+
+            if (i.block & priv_inst)
+                all_instructions[match].extra |= extra_priv_flag;
+
             continue;
         }
 

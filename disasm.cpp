@@ -38,12 +38,14 @@ std::string ea_string(uint8_t ea)
             return "#IMM";
         }
         break;
-    case ea_m_inst_data:
+    default:
         switch (ea) {
         case ea_sr:
             return "SR";
         case ea_ccr:
             return "CCR";
+        case ea_usp:
+            return "USP";
         case ea_reglist:
             return "REGLIST";
         }
@@ -115,6 +117,16 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
         os << inst.name;
 
     unsigned eaw = 1;
+
+    uint16_t reglist = 0;
+    // Reglist always follows immediately after instruction
+    for (unsigned i = 0; i < inst.nea; ++i) {
+        if (inst.ea[i] == ea_reglist) {
+            assert(eaw < inst.ilen);
+            reglist = iwords[eaw++];            
+        }
+    }
+
     for (unsigned i = 0; i < inst.nea; ++i) {
         os << (i == 0 ? "\t" : ", ");
         const auto ea = inst.ea[i];
@@ -212,19 +224,20 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
                 assert(0);
             }
             break;
-        case ea_m_inst_data:
+        default:
             if (ea == ea_sr) {
                 os << "SR";
                 break;
             } else if (ea == ea_ccr) {
                 os << "CCR";
                 break;
+            } else if (ea == ea_usp) {
+                os << "USP";
+                break;
             } else if (ea == ea_reglist) {
-                assert(eaw < inst.ilen);
                 assert(inst.nea == 2);
-                const auto list = iwords[eaw++];
                 // Note: reversed for predecrement
-                os << reg_list_string(list, i == 0 && (inst.ea[1] >> 3) == ea_m_A_ind_pre);
+                os << reg_list_string(reglist, i == 0 && (inst.ea[1] >> 3) == ea_m_A_ind_pre);
                 break;
             } else if (ea == ea_bitnum) {
                 assert(eaw < inst.ilen);
@@ -248,9 +261,6 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
                 os << "#$" << hexfmt(inst.data);
             }
             break;
-        default:
-            os << "TODO: Handle EA=0x" << hexfmt(ea) << "\n";
-            assert(0);
         }
     }
 

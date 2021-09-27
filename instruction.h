@@ -111,8 +111,7 @@ enum ea_m {
     ea_m_A_ind_disp16  = 0b101, // (d16, An)
     ea_m_A_ind_index   = 0b110, // (d8, An, Xn)
     ea_m_Other         = 0b111, // (Other)
-
-    ea_m_inst_data     = 0b1000, // Hack value from mktab
+    // Other hack values (see below are possible)
 };
 
 enum ea_other {
@@ -125,15 +124,18 @@ enum ea_other {
 
 constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
+constexpr uint8_t extra_priv_flag = 1 << 2; // Instruction is privileged (causes a trap if executed in user mode)
 
 constexpr uint8_t ea_m_shift = 3;
 constexpr uint8_t ea_xn_mask = 7;
 
-constexpr uint8_t ea_disp    = 0b01'000'011;
-constexpr uint8_t ea_sr      = 0b01'000'100;
-constexpr uint8_t ea_ccr     = 0b01'000'101;
-constexpr uint8_t ea_reglist = 0b01'000'110;
-constexpr uint8_t ea_bitnum  = 0b01'000'111;
+constexpr uint8_t ea_immediate = ea_m_Other << ea_m_shift | ea_other_imm;
+constexpr uint8_t ea_disp      = 0b01'000'011;
+constexpr uint8_t ea_sr        = 0b01'000'100;
+constexpr uint8_t ea_ccr       = 0b01'000'101;
+constexpr uint8_t ea_reglist   = 0b01'000'110;
+constexpr uint8_t ea_bitnum    = 0b01'000'111;
+constexpr uint8_t ea_usp       = 0b01'001'000;
 
 constexpr unsigned max_instruction_words = 5; // 68020+ can be 11 words
 
