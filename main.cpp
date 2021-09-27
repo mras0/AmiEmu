@@ -285,11 +285,11 @@ int main(int argc, char* argv[])
                 const int trace_len = 50;
                 //f 00fc0f54
                 // w 0 dff058 2 w
-                //if (cpu.state().pc == 0x00FE8DCE) {
+                //if (cpu.state().pc == 0x00001168) {
                 //    cpu.trace(&std::cout);
                 //    trace_cnt = trace_len;
                 //}
-                //if (cpu.instruction_count() == 7092578-4) {
+                //if (cpu.instruction_count() == 64074349) {
                 //    cpu.trace(&std::cout);
                 //    trace_cnt = trace_len+1;
                 //}

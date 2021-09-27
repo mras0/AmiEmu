@@ -588,6 +588,33 @@ private:
             }
         }
         #endif
+#ifdef FLOPPY_DEBUG
+        auto prbits = [](const char* name, uint8_t b) {
+            std::cout << "  " << name << " $" << hexfmt(b) << " ";
+            const char* const names[8] = {
+                "/MOTOR",
+                "/SEL3 ",
+                "/SEL2 ",
+                "/SEL1 ",
+                "/SEL0 ",
+                "/SIDE ",
+                "/DIREC",
+                "/STEP ",
+            };
+
+            for (int bit = 7; bit >= 0; bit--) {
+                if (!(b & (1 << bit)))
+                    std::cout << names[7 - bit] << " ";
+                else
+                    std::cout << "       ";
+            }
+            std::cout << "\n";
+        };
+
+        std::cout << "CIAPRB:\n";
+        prbits("before", before);
+        prbits("after ", after);
+#endif
         for (uint8_t dsk = 0; dsk < 4; ++dsk) {
             if (!drives_[dsk])
                 continue;
@@ -601,7 +628,7 @@ private:
 #endif
                 d.set_motor(!(after & CIAF_DSKMOTOR));
             }
-            if (diff & (CIAF_DSKSIDE | CIAF_DSKDIREC)) {
+            /*if (diff & (CIAF_DSKSIDE | CIAF_DSKDIREC)) */{
                 // seekdir out -> towards 0
 #ifdef FLOPPY_DEBUG
                 std::cout << "DF" << (int)dsk << " side=" << (after & CIAF_DSKSIDE ? "lower" : "upper") << " seekdir=" << (after & CIAF_DSKDIREC ? "out" : "in") << "\n";

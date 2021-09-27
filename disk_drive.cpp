@@ -4,6 +4,12 @@
 #include "ioutil.h"
 #include "memory.h"
 
+//#define DISK_DEBUG
+
+#ifdef DISK_DEBUG
+#include <iostream>
+#endif
+
 namespace {
 
 constexpr uint16_t NUMSECS        = 11;                  // sectors per track
@@ -75,32 +81,50 @@ public:
     
     void set_motor(bool enabled)
     {
+#ifdef DISK_DEBUG
+        if (motor_ != enabled)
+            std::cout << "Motor turning " << (enabled ? "on" : "off") << "\n";
+#endif
         motor_ = enabled;
     }
 
     void set_side_dir(bool side, bool dir)
     {
+#ifdef DISK_DEBUG
+        if (side != side_ || seek_dir_ != dir)
+            std::cout << "Changing side/stp direction cyl = " << (int)cyl_ << " new side = " << (side ? "lower" : "upper") << " new direction = " << (dir ? "out (towards 0)" : "in (towards 79)") << "\n";
+#endif
         side_ = side;
         seek_dir_ = dir;
     }
 
     void dir_step()
     {
+#ifdef DISK_DEBUG
+        std::cout << "Stepping cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
+#endif
         if (!seek_dir_ && cyl_ < NUM_CYLINDERS - 1)
             ++cyl_;
         else if (seek_dir_ && cyl_)
             --cyl_;
+#ifdef DISK_DEBUG
+        std::cout << "New cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << " direction = " << (seek_dir_ ? "out (towards 0)" : "in (towards 79)") << "\n";
+#endif
     }
 
     void read_mfm_track(uint8_t* dest, uint16_t wordcount)
     {
-        if (wordcount < MFM_TRACK_SIZE)
+        if (wordcount < (1088 / 2) * NUMSECS)
             throw std::runtime_error { "Unsupported MFM read from drive (count=$" + hexstring(wordcount) + ")" };
         if (!motor_)
             throw std::runtime_error { "Reading while motor is not on" };
 
         // Lower side=first
         const uint8_t tracknum = !side_ + cyl_ * 2;
+
+#ifdef DISK_DEBUG
+        std::cout << "Reading track $" << hexfmt(tracknum) << " cyl = " << (int)cyl_ << " side = " << (side_ ? "lower" : "upper") << "\n";
+#endif
 
         if (disk_activity_handler_)
             disk_activity_handler_(tracknum, false);

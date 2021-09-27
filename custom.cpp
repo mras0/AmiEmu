@@ -1085,23 +1085,28 @@ public:
                 if ((colclock == 7 || colclock == 9 || colclock == 11) && (s_.dmacon & DMAF_DISK) && (s_.dsklen & 0x8000) && s_.dsklen_act) {
                     // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
                     ++s_.dskwait;
-                    if (s_.dskwait == 10) {
+                    if (s_.dskwait == 100) {
 #ifdef DISK_DMA_DEBUG
                         std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Setting DSKSYNC\n";
 #endif
                         s_.intreq |= INTF_DSKSYNC;
-                    } else if (s_.dskwait >= 20) {
+                    } else if (s_.dskwait >= 200) {
                         const uint16_t nwords = s_.dsklen_act & 0x3FFF;
                         TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
                         TODO_ASSERT(nwords > 0);
 #ifdef DISK_DMA_DEBUG
-                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading $" << hexfmt(nwords) << " words\n";
+                        std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(colclock) << ") Reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << "\n";
 #endif
                         std::vector<uint8_t> data(nwords * 2);
                         cia_.active_drive().read_mfm_track(&data[0], nwords);
 
                         for (uint16_t i = 0; i < nwords; ++i)
                             mem_.write_u16(s_.dskpt + i * 2, get_u16(&data[i * 2]));
+
+                        #if 0
+                        hexdump(std::cout, &data[0], 1088 / 2);
+
+                        #endif
 
                         s_.intreq |= INTF_DSKBLK;
                         s_.dsklen_act = 0;
@@ -1414,7 +1419,7 @@ public:
             s_.dsklen = val;
             s_.dskwait = 0;
 #ifdef DISK_DMA_DEBUG
-            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Write to DSKLEN: $" << hexfmt(val) << (s_.dsklen_act ? " - Active!" : "") << "\n";
+            std::cout << "vpos=$" << hexfmt(s_.vpos) << " hpos=$" << hexfmt(s_.hpos) << " (clock $" << hexfmt(s_.hpos >> 1, 4) << ") Write to DSKLEN: $" << hexfmt(val) << (s_.dsklen_act && (s_.dsklen_act & 0x8000) ? " - Active!" : "") << "\n";
 #endif
             return;
         case VPOSW:  // $02A
