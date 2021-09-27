@@ -1157,6 +1157,8 @@ class gui::impl : public window_base<impl> {
 public:
     static impl* create(int width, int height, const std::array<std::string, 4>& disk_filenames)
     {
+        SetProcessDPIAware(); // Avoid GUI scaling (must be called before any windows are created)
+
         std::unique_ptr<impl> wnd { new impl { width, height, disk_filenames } };
         const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
         RECT r = { 0, 0, width, height + extra_height };
