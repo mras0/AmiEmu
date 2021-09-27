@@ -15,6 +15,7 @@ public:
     uint8_t active_irq_mask() const;
     void increment_tod_counter(uint8_t cia);
     void keyboard_event(bool pressed, uint8_t raw);
+    bool power_led_on() const;
 
 private:
     class impl;

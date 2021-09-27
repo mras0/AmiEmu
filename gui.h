@@ -27,6 +27,7 @@ public:
 
     std::vector<event> update();
     void update_image(const uint32_t* data);
+    void led_state(uint8_t s);
 
 private:
     class impl;

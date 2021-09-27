@@ -69,6 +69,7 @@ int main(int argc, char* argv[])
                 }
                 if (!steps_to_update--) {
                 update:
+                    g.led_state(cias.power_led_on());
                     auto new_events = g.update();
                     assert(events.empty()); // events are comming too fast to process
                     events.insert(events.end(), new_events.begin(), new_events.end());

@@ -88,6 +88,26 @@ constexpr uint8_t CIACRAF_LOAD    = 1 << CIACRAB_LOAD;
 constexpr uint8_t CIACRAF_INMODE  = 1 << CIACRAB_INMODE;
 constexpr uint8_t CIACRAF_SPMODE  = 1 << CIACRAB_SPMODE;
 constexpr uint8_t CIACRAF_TODIN   = 1 << CIACRAB_TODIN;
+
+// ciaa port A (0xbfe001)
+constexpr uint8_t CIAB_GAMEPORT1 = 7; // gameport 1, pin 6 (fire button*)
+constexpr uint8_t CIAB_GAMEPORT0 = 6; // gameport 0, pin 6 (fire button*)
+constexpr uint8_t CIAB_DSKRDY    = 5; // disk ready*
+constexpr uint8_t CIAB_DSKTRACK0 = 4; // disk on track 00*
+constexpr uint8_t CIAB_DSKPROT   = 3; // disk write protect*
+constexpr uint8_t CIAB_DSKCHANGE = 2; // disk change*
+constexpr uint8_t CIAB_LED       = 1; // led light control (0==>bright)
+constexpr uint8_t CIAB_OVERLAY   = 0; // memory overlay bit
+
+constexpr uint8_t CIAF_GAMEPORT1 = 1 << CIAB_GAMEPORT1;
+constexpr uint8_t CIAF_GAMEPORT0 = 1 << CIAB_GAMEPORT0;
+constexpr uint8_t CIAF_DSKRDY    = 1 << CIAB_DSKRDY;
+constexpr uint8_t CIAF_DSKTRACK0 = 1 << CIAB_DSKTRACK0;
+constexpr uint8_t CIAF_DSKPROT   = 1 << CIAB_DSKPROT;
+constexpr uint8_t CIAF_DSKCHANGE = 1 << CIAB_DSKCHANGE;
+constexpr uint8_t CIAF_LED       = 1 << CIAB_LED;
+constexpr uint8_t CIAF_OVERLAY   = 1 << CIAB_OVERLAY;
+
 #if 0
 
 /* control register A bit numbers */
@@ -140,15 +160,6 @@ constexpr uint8_t CIACRAF_TODIN   = 1 << CIACRAB_TODIN;
  * Port definitions -- what each bit in a cia peripheral register is tied to
  */
 
-/* ciaa port A (0xbfe001) */
-#define CIAB_GAMEPORT1 (7) /* gameport 1, pin 6 (fire button*) */
-#define CIAB_GAMEPORT0 (6) /* gameport 0, pin 6 (fire button*) */
-#define CIAB_DSKRDY (5) /* disk ready* */
-#define CIAB_DSKTRACK0 (4) /* disk on track 00* */
-#define CIAB_DSKPROT (3) /* disk write protect* */
-#define CIAB_DSKCHANGE (2) /* disk change* */
-#define CIAB_LED (1) /* led light control (0==>bright) */
-#define CIAB_OVERLAY (0) /* memory overlay bit */
 
 /* ciaa port B (0xbfe101) -- parallel port */
 
@@ -172,15 +183,6 @@ constexpr uint8_t CIACRAF_TODIN   = 1 << CIACRAB_TODIN;
 #define CIAB_DSKDIREC (1) /* disk direction of seek* */
 #define CIAB_DSKSTEP (0) /* disk step heads* */
 
-/* ciaa port A (0xbfe001) */
-#define CIAF_GAMEPORT1 (1L << 7)
-#define CIAF_GAMEPORT0 (1L << 6)
-#define CIAF_DSKRDY (1L << 5)
-#define CIAF_DSKTRACK0 (1L << 4)
-#define CIAF_DSKPROT (1L << 3)
-#define CIAF_DSKCHANGE (1L << 2)
-#define CIAF_LED (1L << 1)
-#define CIAF_OVERLAY (1L << 0)
 
 /* ciaa port B (0xbfe101) -- parallel port */
 
@@ -291,6 +293,11 @@ public:
         kbd_buffer_[(kbd_buffer_head_++) % sizeof(kbd_buffer_)] = (pressed & 1) | (~raw) << 1;
     }
 
+    bool power_led_on() const
+    {
+        return !(s_[0].port_value(0) & CIAF_LED);
+    }
+
 private:
     memory_handler& mem_handler_;
     rom_area_handler& rom_handler_;
@@ -304,7 +311,6 @@ private:
 
         uint32_t counter;
         uint32_t counter_latch;
-
 
         uint8_t port_value(uint8_t port) const
         {
@@ -430,10 +436,8 @@ private:
             const uint8_t port_a_after = s.port_value(0);
             const uint8_t port_a_diff = port_a_before ^ port_a_after;
             // OVL changed
-            if (port_a_diff & 1)
+            if (port_a_diff & CIAF_OVERLAY)
                 rom_handler_.set_overlay(!!(port_a_after & 1));
-            if (port_a_diff & 2)
-                std::cerr << "[CIA] Turn LED " << (port_a_after & 2 ? "off" : "on") << '\n';
         }
     }
 
@@ -464,4 +468,9 @@ void cia_handler::increment_tod_counter(uint8_t cia)
 void cia_handler::keyboard_event(bool pressed, uint8_t raw)
 {
     impl_->keyboard_event(pressed, raw);
+}
+
+bool cia_handler::power_led_on() const
+{
+    return impl_->power_led_on();
 }

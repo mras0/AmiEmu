@@ -131,6 +131,11 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     return map;
 }();
 
+constexpr int border_height = 8;
+constexpr int led_width = 64;
+constexpr int led_height = 8;
+constexpr int extra_height = border_height*2 + led_height;
+
 }
 
 class gui::impl {
@@ -153,7 +158,7 @@ public:
             throw_system_error("RegisterClass");
         }
         const DWORD style = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~WS_THICKFRAME;
-        RECT r = { 0, 0, width_ , height_ };
+        RECT r = { 0, 0, width_, height_ + extra_height };
         AdjustWindowRect(&r, style, FALSE);
 
         const char* title = "Amiemu";
@@ -191,7 +196,16 @@ public:
         u.bmi.bmiHeader.biBitCount = 32;
         u.bmi.bmiHeader.biCompression = BI_RGB;
         SetDIBits(hdc_, hbm_, 0, height_, data, &u.bmi, DIB_RGB_COLORS);
-        RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        redraw();
+    }
+
+    void led_state(uint8_t s)
+    {
+        assert(s < 2);
+        if (s != led_state_) {
+            led_state_ = s;
+            redraw();
+        }
     }
 
 private:
@@ -202,6 +216,12 @@ private:
     HDC hdc_ = nullptr;
     HBITMAP hbm_ = nullptr;
     std::vector<event> events_;
+    uint8_t led_state_ = 0;
+
+    void redraw()
+    {
+        RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    }
 
     static LRESULT CALLBACK s_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
@@ -299,7 +319,13 @@ private:
             RECT r;
             GetClientRect(hwnd_, &r);
             assert(r.left == 0 && r.top == 0);
-            StretchBlt(ps.hdc, 0, 0, r.right, r.bottom, hdc_, 0, 0, width_, height_, SRCCOPY);
+            BitBlt(ps.hdc, 0, 0, width_, height_, hdc_, 0, 0, SRCCOPY);
+
+            RECT power_led_rect = { width_ - led_width - 16, (height_ + extra_height) - led_height - border_height, width_ - 16, (height_ + extra_height) - border_height };
+            HBRUSH power_led_brush = CreateSolidBrush(led_state_ & 1 ? RGB(0, 255, 0) : RGB(0, 0, 0));
+            FillRect(ps.hdc, &power_led_rect, power_led_brush);
+            DeleteObject(power_led_brush);
+
             EndPaint(hwnd_, &ps);
         }
     }
@@ -322,4 +348,9 @@ std::vector<gui::event> gui::update()
 void gui::update_image(const uint32_t* data)
 {
     impl_->update_image(data);
+}
+
+void gui::led_state(uint8_t s)
+{
+    impl_->led_state(s);
 }
