@@ -658,6 +658,7 @@ int main(int argc, char* argv[])
 
         std::unique_ptr<wavedev> audio;
 
+        //#define WRITE_SOUND
         #ifdef WRITE_SOUND
         std::ofstream sound_out { "c:/temp/sound.raw" };
         #endif

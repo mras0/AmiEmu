@@ -1513,26 +1513,24 @@ public:
                 }
                 break;
             case custom_state::audio_channel_state::dma_samp1:
+                ch.actdat = ch.dat;
                 if (ch.percnt == 1) {
+                    if (DEBUG_AUDIO)
+                        DBGOUT << "Audio channel " << (int)idx << " finished playing sample one - DMA request\n";
                     ch.state = custom_state::audio_channel_state::dma_samp2;
                     ch.load_per();
+                    // This isn't exactly right, but gives much better quality
+                    ch.dmareq = true;
                 } else {
                     ch.percnt--; // period 0 => period 65536
                 }
                 break;
             case custom_state::audio_channel_state::dma_samp2:
                 if (ch.percnt == 1) {
+                    if (DEBUG_AUDIO)
+                        DBGOUT << "Audio channel " << (int)idx << " finished playing sample two -> 1, per=$" << hexfmt(ch.per) << "\n";
+                    ch.state = custom_state::audio_channel_state::dma_samp1;
                     ch.load_per();
-                    ch.dmareq = true;
-                    if (ch.actlen == 1) {
-                        if (DEBUG_AUDIO)
-                            DBGOUT << "Audio channel " << (int)idx << " finished playing (restarting)\n";
-                        ch.ptr = ch.lc;
-                        ch.actlen = ch.len;
-                        s_.intreq |= 1 << (idx + INTB_AUD0);
-                    } else {
-                        ch.actlen--;
-                    }
                 } else {
                     ch.percnt--; // period 0 => period 65536
                 }
@@ -1576,21 +1574,32 @@ public:
         ch.dat = chip_read(ch.ptr);
         ch.ptr += 2;
         ch.dmareq = false;
-        ch.actdat = ch.dat;
         switch (ch.state) {
         case custom_state::audio_channel_state::dma_starting:
             if (DEBUG_AUDIO)
-                DBGOUT << "Audio channel " << (int)idx << " DMA started\n";
+                DBGOUT << "Audio channel " << (int)idx << " DMA started actlen=$" << hexfmt(ch.actlen) << "\n";
             if (ch.actlen != 1)
                 ch.actlen--;
             s_.intreq |= 1 << (idx + INTB_AUD0);
             ch.state = custom_state::audio_channel_state::dma_samp1;
             break;
+        case custom_state::audio_channel_state::dma_samp1:
+            // TODO: This shouldn't happen, but can if the sample is playing quickly... Deliver it 14 cycles later to match real HW (or something)
         case custom_state::audio_channel_state::dma_samp2:
-            ch.state = custom_state::audio_channel_state::dma_samp1;
+            if (ch.actlen == 1) {
+                if (DEBUG_AUDIO)
+                    DBGOUT << "Audio channel " << (int)idx << " finished playing (restarting)\n";
+                ch.ptr = ch.lc;
+                ch.actlen = ch.len;
+                s_.intreq |= 1 << (idx + INTB_AUD0);
+            } else {
+                if (DEBUG_AUDIO)
+                    DBGOUT << "Audio channel " << (int)idx << " DMA actlen=$" << hexfmt(ch.actlen) << "\n";
+                --ch.actlen;
+            }
             break;
         default:
-            DBGOUT << "Audio channel " << (int)idx << " in unknown state " << (int)ch.state << " in audio_dma\n";
+            DBGOUT << "Audio channel " << (int)idx << " in unknown state " << (int)ch.state << " in audio_dma actlen=$" << hexfmt(ch.actlen) << " period=$" << hexfmt(ch.per) << "\n";
             throw std::runtime_error { "FIXME" };
         }
         return true;
