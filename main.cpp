@@ -602,7 +602,7 @@ int main(int argc, char* argv[])
         uint8_t pending_disk_drive = 0xff;
         uint32_t disk_chosen_countdown = 0;
         constexpr uint32_t invalid_pc = ~0U;
-        enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_rtx, wait_non_rom_pc, wait_vpos} wait_mode = wait_none;
+        enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_rtx, wait_non_rom_pc, wait_vpos, wait_frames } wait_mode = wait_none;
         uint32_t wait_arg = 0;
         std::vector<uint32_t> breakpoints;
         bool debug_mode = false;
@@ -650,6 +650,8 @@ int main(int argc, char* argv[])
 
         auto handle_machine_state = [&](state_file& sf) {
             mem.handle_state(sf);
+            if (slow_ram)
+                slow_ram->handle_state(sf);
             custom.handle_state(sf);
             cias.handle_state(sf);
             rtc.handle_state(sf);
@@ -687,6 +689,10 @@ int main(int argc, char* argv[])
                 wait_mode = wait_none;
             } else if (!(custom_step.vpos | custom_step.hpos)) {
                 new_frame = true;
+                if (wait_mode == wait_frames && wait_arg-- == 0) {
+                    active_debugger();
+                    wait_mode = wait_none;
+                }
                 
                 if (audio)
                 {
@@ -1146,10 +1152,21 @@ int main(int argc, char* argv[])
                             wait_arg = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
                             break;
                         } else if (args[0] == "zf") {
-                            // Wait for next frame
-                            wait_mode = wait_vpos;
-                            wait_arg = 0;
-                            break;
+                            // Wait for next frame(s)
+                            if (args.size() > 1) {
+                                auto [valid, count] = get_simple_expr(args[1]);
+                                if (valid) {
+                                    wait_mode = wait_frames;
+                                    wait_arg = count;
+                                    break;
+                                } else {
+                                    std::cerr << "Invalid argument (expected number of frames)\n";
+                                }
+                            } else {
+                                wait_mode = wait_vpos;
+                                wait_arg = 0;
+                                break;
+                            }
                         } else if (args[0] == "zv") {
                             // Wait for video position
                             if (args.size() > 1) {
@@ -1228,6 +1245,7 @@ unknown_command:
                             goto check_breakpoint;
                         break;
                     case wait_vpos: // Handled in cstep
+                    case wait_frames:
                         goto check_breakpoint;
                     }
 
