@@ -160,9 +160,8 @@ uint8_t memory_handler::read_u8(uint32_t addr)
 {
     addr &= 0xffffff;
     auto& a = find_area(addr);
-    const uint8_t data = a.handler->read_u8(addr, addr - a.base);
-    track(addr, data, 1, false);
-    return data;
+    track(addr, 0, 1, false);
+    return a.handler->read_u8(addr, addr - a.base);
 }
 
 uint16_t memory_handler::read_u16(uint32_t addr)
@@ -173,9 +172,8 @@ uint16_t memory_handler::read_u16(uint32_t addr)
         throw std::runtime_error { "Word read from odd address " + hexstring(addr) };
     }
     auto& a = find_area(addr);
-    const uint16_t data = a.handler->read_u16(addr, addr - a.base);
-    track(addr, data, 2, false);
-    return data;
+    track(addr, 0, 2, false);
+    return a.handler->read_u16(addr, addr - a.base);
 }
 
 uint32_t memory_handler::read_u32(uint32_t addr)
@@ -187,9 +185,8 @@ uint32_t memory_handler::read_u32(uint32_t addr)
         throw std::runtime_error { "Long read from odd address " + hexstring(addr) };
     }
     auto& a = find_area(addr);
-    const uint32_t data = a.handler->read_u32(addr, addr - a.base);
-    track(addr, data, 4, false);
-    return data;
+    track(addr, 0, 4, false);
+    return a.handler->read_u32(addr, addr - a.base);
 }
 
 void memory_handler::write_u8(uint32_t addr, uint8_t val)

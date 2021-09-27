@@ -770,12 +770,11 @@ int main(int argc, char* argv[])
                 cycles_todo += 4;
                 return;
             }
-            cycles_todo += 2;
             do_all_custom_cylces();
             while (!custom_step.free_chip_cycle) {
                 cstep(true);
             } 
-            cycles_todo = 2;
+            cycles_todo = 4;
         });
 
         //cpu.trace(&std::cout);

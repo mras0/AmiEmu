@@ -1185,7 +1185,7 @@ public:
         const uint8_t period = blitcycles[usef][0];
         assert(s_.bltcycle < period);
         const uint8_t cycle = blitcycles[usef][1 + s_.bltcycle];
-        bool no_dma = s_.bltblockingcpu == 3;
+        bool no_dma = s_.bltblockingcpu >= 3;
 
         const bool reverse = !!(s_.bltcon1 & BC1F_BLITREVERSE);
         bool dma = false;
@@ -1909,8 +1909,12 @@ public:
             }
         }
 
-        if (!(s_.hpos & 1))
+        if (!(s_.hpos & 1)) {
             do_audio();
+
+            if (cpu_wants_access && !(s_.dmacon & DMAF_BLITHOG) && s_.bltblockingcpu < 3)
+                ++s_.bltblockingcpu;
+        }
 
         bool copper_dma = false;
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
@@ -2045,14 +2049,12 @@ public:
                     break;
 
                 res.free_chip_cycle = true;
+                s_.bltblockingcpu = 0;
             } while (0);
-        } else if (!(s_.hpos & 1))
+        } else if (!(s_.hpos & 1)) {
             res.free_chip_cycle = true;
-
-        if (!res.free_chip_cycle && cpu_wants_access && !(s_.dmacon & DMAF_BLITHOG))
-            ++s_.bltblockingcpu;
-        else
             s_.bltblockingcpu = 0;
+        }
 
         if (s_.copstate == copper_state::jmp_delay1 && !copper_dma && !(s_.hpos & 3)) {
             // vAmigaTS jump1b test
