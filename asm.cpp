@@ -29,36 +29,41 @@ constexpr bool range16(uint32_t val)
     return static_cast<int32_t>(val) >= -32768 && static_cast<int32_t>(val) <= 32767;
 }
 
-#define INSTRUCTIONS(X)        \
-    X(ADD   , bwl  , w    , 2) \
-    X(ADDQ  , bwl  , w    , 2) \
-    X(AND   , bwl  , w    , 2) \
-    X(BCHG  , bl   , none , 2) \
-    X(BCLR  , bl   , none , 2) \
-    X(BSET  , bl   , none , 2) \
-    X(BTST  , bl   , none , 2) \
-    X(BRA   , bw   , none , 1) \
-    X(CLR   , bwl  , w    , 1) \
-    X(CMP   , bwl  , w    , 2) \
-    X(EOR   , bwl  , w    , 2) \
-    X(EXT   , wl   , w    , 1) \
-    X(EXG   , l    , none , 2) \
-    X(JMP   , none , none , 1) \
-    X(JSR   , none , none , 1) \
-    X(LEA   , l    , l    , 2) \
-    X(MOVE  , bwl  , w    , 2) \
-    X(MOVEQ , l    , l    , 2) \
-    X(NBCD  , b    , b    , 1) \
-    X(NEG   , bwl  , w    , 1) \
-    X(NEGX  , bwl  , w    , 1) \
-    X(NOT   , bwl  , w    , 1) \
-    X(OR    , bwl  , w    , 2) \
-    X(PEA   , l    , l    , 1) \
-    X(RTS   , none , none , 0) \
-    X(SUB   , bwl  , w    , 2) \
-    X(SUBQ  , bwl  , w    , 2) \
-    X(SWAP  , w    , w    , 1) \
-    X(TST   , bwl  , w    , 1) \
+#define INSTRUCTIONS(X)            \
+    X(ADD       , bwl  , w    , 2) \
+    X(ADDQ      , bwl  , w    , 2) \
+    X(AND       , bwl  , w    , 2) \
+    X(BCHG      , bl   , none , 2) \
+    X(BCLR      , bl   , none , 2) \
+    X(BSET      , bl   , none , 2) \
+    X(BTST      , bl   , none , 2) \
+    X(BRA       , bw   , none , 1) \
+    X(CLR       , bwl  , w    , 1) \
+    X(CMP       , bwl  , w    , 2) \
+    X(EOR       , bwl  , w    , 2) \
+    X(EXT       , wl   , w    , 1) \
+    X(EXG       , l    , none , 2) \
+    X(ILLEGAL   , none , none , 0) \
+    X(JMP       , none , none , 1) \
+    X(JSR       , none , none , 1) \
+    X(LEA       , l    , l    , 2) \
+    X(MOVE      , bwl  , w    , 2) \
+    X(MOVEQ     , l    , l    , 2) \
+    X(NBCD      , b    , b    , 1) \
+    X(NEG       , bwl  , w    , 1) \
+    X(NEGX      , bwl  , w    , 1) \
+    X(NOP       , none , none , 0) \
+    X(NOT       , bwl  , w    , 1) \
+    X(OR        , bwl  , w    , 2) \
+    X(PEA       , l    , l    , 1) \
+    X(RESET     , none , none , 0) \
+    X(RTE       , none , none , 0) \
+    X(RTS       , none , none , 0) \
+    X(STOP      , none , none , 1) \
+    X(SUB       , bwl  , w    , 2) \
+    X(SUBQ      , bwl  , w    , 2) \
+    X(SWAP      , w    , w    , 1) \
+    X(TST       , bwl  , w    , 1) \
 
 constexpr struct instruction_info_type {
     const char* const name;
@@ -753,6 +758,9 @@ operands_done:
         case token_type::OR:
             iwords[0] = encode_binop(info, ea, osize, 0x0000, 0x8000);
             break;
+        case token_type::ILLEGAL:
+            iwords[0] = 0x4afc;
+            break;
         case token_type::JMP:
             iwords[0] = encode_ea_instruction(info, ea[0], 0x4ec0);
             break;
@@ -765,12 +773,26 @@ operands_done:
                 ASSEMBLER_ERROR("Destination register must be address register for LEA");
             iwords[0] = encode_ea_instruction(info, ea[0], 0x41c0 | (ea[1].type & 7) << 9);
             break;
+        case token_type::NOP:
+            iwords[0] = 0x4e71;
+            break;
         case token_type::PEA:
             assert(osize == opsize::l);
             iwords[0] = encode_ea_instruction(info, ea[0], 0x4840);
             break;
+        case token_type::RESET:
+            iwords[0] = 0x4e70;
+            break;
+        case token_type::RTE:
+            iwords[0] = 0x4e73;
+            break;
         case token_type::RTS:
             iwords[0] = 0x4e75;
+            break;
+        case token_type::STOP:
+            if (ea[0].type != ea_immediate)
+                ASSEMBLER_ERROR("Expeceted immediate for STOP");
+            iwords[0] = 0x4e72;
             break;
         case token_type::SUB:
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0400, 0x9000);

@@ -168,7 +168,37 @@ bool simple_asm_tests()
         { "exg d0, d1", { 0xc141 } },
         { "exg a0, a1", { 0xc149 } },
         { "exg.l d0, a1", { 0xc189 } },
-        // also TODO: destination CCR
+        { "rte", { 0x4e73 } },
+        { "nop", { 0x4e71, } },
+        { "illegal", { 0x4afc } },
+        { "reset", { 0x4e70 } },
+        { "stop #$2700", { 0x4e72, 0x2700 } },
+        // ORI, ANDI, EORI to SR/CCR
+        // BCHG,BSET,BCLR,BTST
+        // MOVEP
+        // MOVE from SR
+        // MOVE to CCR, SR
+        // MOVEM
+        // TAS
+        // CHK
+        // MOVE USP
+        // RTR
+        // TRAPV
+        // TRAP
+        // Scc
+        // DBcc
+        // LINK
+        // UNLNK
+        // BSR
+        // Bcc
+        // MOVEQ
+        // ABCD/SBCD
+        // DIVU
+        // DIVS
+        // MULU
+        // MULS
+        // ADDX/SUBX
+        // CMPM
     };  
 
     for (const auto& tc : test_cases) {
