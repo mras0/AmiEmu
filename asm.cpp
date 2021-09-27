@@ -29,7 +29,6 @@ constexpr bool range16(uint32_t val)
     return static_cast<int32_t>(val) >= -32768 && static_cast<int32_t>(val) <= 32767;
 }
 
-//n, m, d, no
 #define WITH_CC(X, prefix, tname, fname, m, d, no) \
     X(tname      , m, d, no) \
     X(fname      , m, d, no) \
@@ -54,6 +53,8 @@ constexpr bool range16(uint32_t val)
     X(ADDQ      , bwl  , w    , 2)        \
     X(ADDX      , bwl  , w    , 2)        \
     X(AND       , bwl  , w    , 2)        \
+    X(ASL       , bwl  , w    , 3)        \
+    X(ASR       , bwl  , w    , 3)        \
     X(BCHG      , bl   , none , 2)        \
     X(BCLR      , bl   , none , 2)        \
     X(BSET      , bl   , none , 2)        \
@@ -74,6 +75,8 @@ constexpr bool range16(uint32_t val)
     X(JSR       , none , none , 1)        \
     X(LEA       , l    , l    , 2)        \
     X(LINK      , w    , w    , 2)        \
+    X(LSL       , bwl  , w    , 3)        \
+    X(LSR       , bwl  , w    , 3)        \
     X(MOVE      , bwl  , w    , 2)        \
     X(MOVEM     , wl   , w    , 2)        \
     X(MOVEQ     , l    , l    , 2)        \
@@ -87,6 +90,10 @@ constexpr bool range16(uint32_t val)
     X(OR        , bwl  , w    , 2)        \
     X(PEA       , l    , l    , 1)        \
     X(RESET     , none , none , 0)        \
+    X(ROL       , bwl  , w    , 3)        \
+    X(ROR       , bwl  , w    , 3)        \
+    X(ROXL       , bwl  , w    , 3)       \
+    X(ROXR       , bwl  , w    , 3)       \
     X(RTE       , none , none , 0)        \
     X(RTR       , none , none , 0)        \
     X(RTS       , none , none , 0)        \
@@ -708,11 +715,10 @@ number:
 
     void process_instruction(token_type inst)
     {
-        const auto& info = instruction_info[static_cast<uint32_t>(inst) - static_cast<uint32_t>(token_type::instruction_start_minus_1) - 1];
+        auto info = instruction_info[static_cast<uint32_t>(inst) - static_cast<uint32_t>(token_type::instruction_start_minus_1) - 1];
         ea_result ea[2] = {};
         auto osize = info.default_size;
         bool explicit_size = true;
-        assert(info.num_operands <= 2);
 
         if (info.num_operands == 0) {
             assert(info.opsize_mask == opsize_mask_none);
@@ -741,6 +747,14 @@ number:
         for (uint8_t arg = 0; arg < info.num_operands; ++arg) {
             expect(arg == 0 ? token_type::whitespace : token_type::comma);
             ea[arg] = process_ea();
+            if (info.num_operands == 3) {
+                if (token_type_ == token_type::comma) {
+                    info.num_operands = 2;
+                } else {
+                    info.num_operands = 1;
+                    break;
+                }
+            }
         }
 
 operands_done:
@@ -771,6 +785,12 @@ operands_done:
             } else {
                 iwords[0] = encode_binop(info, ea, osize, 0x0200, 0xC000);
             }
+            break;
+        case token_type::ASL:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b00, true);
+            break;
+        case token_type::ASR:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b00, false);
             break;
         case token_type::BCHG:
             iwords[0] = encode_bitop(info, ea, osize, 0x0840, 0x0140);
@@ -899,6 +919,34 @@ operands_done:
                 ASSEMBLER_ERROR("Invalid operand to EXT");
             iwords[0] = 0x4800 | (osize == opsize::w ? 0b010 : 0b011) << 6 | (ea[0].type & 7);
             goto done;
+        case token_type::ILLEGAL:
+            iwords[0] = 0x4afc;
+            break;
+        case token_type::JMP:
+            iwords[0] = encode_ea_instruction(info, ea[0], 0x4ec0);
+            break;
+        case token_type::JSR:
+            iwords[0] = encode_ea_instruction(info, ea[0], 0x4e80);
+            break;
+        case token_type::LEA:
+            assert(osize == opsize::l);
+            if (ea[1].type >> ea_m_shift != ea_m_An)
+                ASSEMBLER_ERROR("Destination register must be address register for LEA");
+            iwords[0] = encode_ea_instruction(info, ea[0], 0x41c0 | (ea[1].type & 7) << 9);
+            break;
+        case token_type::LINK:
+            if (ea[0].type >> ea_m_shift != ea_m_An)
+                ASSEMBLER_ERROR("First operand must be address register");
+            if (ea[1].type != ea_immediate)
+                ASSEMBLER_ERROR("Second operand must be immediate");
+            iwords[0] = 0x4e50 | (ea[0].type & 7);
+            break;
+        case token_type::LSL:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b01, true);
+            break;
+        case token_type::LSR:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b01, false);
+            break;
         case token_type::MOVE: {
             // Unlike ANDI/EORI/ORI to CCR, MOVE to/from CCR is word sized
             // Note: MOVE to CCR is 68010+ only
@@ -1003,6 +1051,9 @@ operands_done:
         case token_type::NEGX:
             iwords[0] = encode_unary(info, ea[0], osize, 0x4000);
             break;
+        case token_type::NOP:
+            iwords[0] = 0x4e71;
+            break;
         case token_type::NOT:
             iwords[0] = encode_unary(info, ea[0], osize, 0x4600);
             break;
@@ -1016,37 +1067,24 @@ operands_done:
                 iwords[0] = encode_binop(info, ea, osize, 0x0000, 0x8000);
             }
             break;
-        case token_type::ILLEGAL:
-            iwords[0] = 0x4afc;
-            break;
-        case token_type::JMP:
-            iwords[0] = encode_ea_instruction(info, ea[0], 0x4ec0);
-            break;
-        case token_type::JSR:
-            iwords[0] = encode_ea_instruction(info, ea[0], 0x4e80);
-            break;
-        case token_type::LEA:
-            assert(osize == opsize::l);
-            if (ea[1].type >> ea_m_shift != ea_m_An)
-                ASSEMBLER_ERROR("Destination register must be address register for LEA");
-            iwords[0] = encode_ea_instruction(info, ea[0], 0x41c0 | (ea[1].type & 7) << 9);
-            break;
-        case token_type::LINK:
-            if (ea[0].type >> ea_m_shift != ea_m_An)
-                ASSEMBLER_ERROR("First operand must be address register");
-            if (ea[1].type != ea_immediate)
-                ASSEMBLER_ERROR("Second operand must be immediate");
-            iwords[0] = 0x4e50 | (ea[0].type & 7);
-            break;
-        case token_type::NOP:
-            iwords[0] = 0x4e71;
-            break;
         case token_type::PEA:
             assert(osize == opsize::l);
             iwords[0] = encode_ea_instruction(info, ea[0], 0x4840);
             break;
         case token_type::RESET:
             iwords[0] = 0x4e70;
+            break;
+        case token_type::ROL:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b11, true);
+            break;
+        case token_type::ROR:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b11, false);
+            break;
+        case token_type::ROXL:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b10, true);
+            break;
+        case token_type::ROXR:
+            iwords[0] = encode_shift_rotate(info, ea, osize, 0b10, false);
             break;
         case token_type::RTE:
             iwords[0] = 0x4e73;
@@ -1396,6 +1434,31 @@ done:
         if (ea[1].type >> ea_m_shift != ea_m_Dn)
             ASSEMBLER_ERROR("Destination must be data register for " << info.name);
         return 0x80c0 | is_mul << 14 | (ea[1].type & 7) << 9 | is_signed << 8 | (ea[0].type & 0x3f);
+    }
+
+    uint16_t encode_shift_rotate(const instruction_info_type& info, ea_result* ea, opsize osize, uint8_t code, bool left)
+    {
+        if (info.num_operands == 1) {
+            if (osize != opsize::w)
+                ASSEMBLER_ERROR("Must be word size for one-argument version of " << info.name);
+            if (ea[0].type >> ea_m_shift <= ea_m_An || ea[0].type >= ea_immediate)
+                ASSEMBLER_ERROR("Invalid operand for " << info.name);
+            return 0xe000 | code << 9 | left << 8 | 0b11 << 6 | (ea[0].type & 0x3f);
+        } else if (ea[1].type >> ea_m_shift != ea_m_Dn) {
+            ASSEMBLER_ERROR("Destination must be data register for " << info.name);
+        }
+        constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
+        const uint16_t op = 0xe000 | left << 8 | size_encoding[static_cast<uint8_t>(osize)] << 6 | code << 3 | (ea[1].type & 7);
+        if (ea[0].type >> ea_m_shift == ea_m_Dn) {
+            return op | (ea[0].type & 7) << 9 | 1 << 5;
+        } else if (ea[0].type == ea_immediate) {
+            if (ea[0].val < 1 || ea[0].val > 8)
+                ASSEMBLER_ERROR("Immediate out of range for " << info.name);
+            ea[0].type = 0; // Don't encode the immediate
+            return op | (ea[0].val & 7) << 9;
+        } else {
+            ASSEMBLER_ERROR("Invalid source operand for " << info.name);
+        }
     }
 };
 
