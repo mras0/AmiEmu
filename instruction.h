@@ -50,6 +50,7 @@ enum class inst_type {
     LSR,
     MOVE,
     MOVEA,
+    MOVEM,
     MOVEQ,
     MULS,
     MULU,
@@ -98,8 +99,10 @@ struct instruction {
 constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
 
-constexpr uint8_t ea_disp = 0b01'000'011;
-constexpr uint8_t ea_sr   = 0b01'000'100;
+constexpr uint8_t ea_disp    = 0b01'000'011;
+constexpr uint8_t ea_sr      = 0b01'000'100;
+constexpr uint8_t ea_ccr     = 0b01'000'101;
+constexpr uint8_t ea_reglist = 0b01'000'110;
 
 extern const instruction instructions[65536];
 

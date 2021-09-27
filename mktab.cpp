@@ -13,11 +13,13 @@
 constexpr uint8_t ea_imm = 0b00'111'100;
 
 // Note: Sync these with instruction.cpp/h
-constexpr uint8_t ea_data3 = 0b01'000'000;
-constexpr uint8_t ea_data4 = 0b01'000'001;
-constexpr uint8_t ea_data8 = 0b01'000'010;
-constexpr uint8_t ea_disp  = 0b01'000'011;
-constexpr uint8_t ea_sr    = 0b01'000'100;
+constexpr uint8_t ea_data3   = 0b01'000'000;
+constexpr uint8_t ea_data4   = 0b01'000'001;
+constexpr uint8_t ea_data8   = 0b01'000'010;
+constexpr uint8_t ea_disp    = 0b01'000'011;
+constexpr uint8_t ea_sr      = 0b01'000'100;
+constexpr uint8_t ea_ccr     = 0b01'000'101;
+constexpr uint8_t ea_reglist = 0b01'000'110;
 
 constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
@@ -98,7 +100,7 @@ constexpr const inst_desc insts[] = {
     {"RTR"               , "   " , "0 1 0 0 1 1 1 0 0 1 1 1 0 1 1 1" , "   " },
     {"JSR"               , "   " , "0 1 0 0 1 1 1 0 1 0 M     Xn   " , "   " },
     {"JMP"               , "   " , "0 1 0 0 1 1 1 0 1 1 M     Xn   " , "   " },
-    //{"MOVEM"             , " WL" , "0 1 0 0 1 Dy0 0 1 SzM     Xn   " , "W M" },
+    {"MOVEM"             , " WL" , "0 1 0 0 1 Dy0 0 1 SzM     Xn   " , "W M", block_An | block_Dn | block_Imm },
     {"LEA"               , "  L" , "0 1 0 0 An    1 1 1 M     Xn   " , "   " },
     {"CHK"               , " W " , "0 1 0 0 Dn    1 1 0 M     Xn   " , "   " },
     {"ADDQ"              , "BWL" , "0 1 0 1 Data3 0 Sx  M     Xn   " , "   " },
@@ -399,6 +401,13 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         else if (rot_dir != -1)
             name = make_rot_name(name);
 
+        if (desc.imm[2] == 'M') {
+            assert(!strcmp(desc.name, "MOVEM"));
+            assert(!strcmp(desc.imm, "W M"));
+            assert(nea == 1);
+            ea[nea++] = ea_reglist;
+        }
+
         assert(!swap_ea || nea == 2);
         ai.type = rot_dir != -1 ? name : desc.name;
         ai.nea = static_cast<uint8_t>(nea);
@@ -454,6 +463,10 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
             } else {
                 ai.ea[ai.nea++] = static_cast<uint8_t>(desc.fixed_ea >> 8);
             }
+        }
+
+        if (desc.imm[2] == 'M') {
+            --nea;
         }
 
         #if 0
@@ -631,6 +644,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         }
         --nea;
         break;
+    case field_type::Dy:
     case field_type::Dz:
         swap_ea = true;
         recur(0);

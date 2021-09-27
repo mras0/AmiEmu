@@ -126,12 +126,54 @@ unsigned ea_extra_words(uint8_t ea, opsize size)
             assert(size != opsize::none);
             return size == opsize::l ? 2 : 1;
         }
+        break;
     case ea_m_inst_data:
+        if (ea == ea_reglist)
+            return 1;
         return 0;
     }
     std::cout << "Unsupported EA: 0x" << hexfmt(ea) << "\n";
     assert(0);
     return 0;
+}
+
+
+
+std::string reg_list_string(uint16_t list, bool reverse)
+{
+    // postincrement a7..d0 (bit 15..0) reversed for predecrement mode
+    // d0..d7a0..a7
+    bool first = true;
+    int last_reg = -1;
+    std::string res;
+
+    auto reg_str = [](int reg) -> std::string {
+        assert(reg >= 0 && reg < 16);
+        return (reg < 8 ? "D" : "A") + std::to_string(reg & 7);
+    };
+    for (int reg = 0; reg < 16; ++reg) {
+        const int bit = reverse ? 15-reg : reg;
+        if (list & (1 << bit)) {
+            if (last_reg < 0) {
+                last_reg = reg;
+            }
+        } else if (last_reg != -1) {
+            if (first) {
+                first = false;
+            } else {
+                res += '/';
+            }
+
+            res += reg_str(last_reg);
+            if (last_reg != reg - 1) {
+                res += '-';
+                res += reg_str(reg - 1);
+            }
+            last_reg = -1;
+        }
+    }
+    assert(last_reg == -1); // TODO: Handle this...
+    return res;
 }
 
 int main()
@@ -239,6 +281,16 @@ int main()
                 case ea_m_inst_data:
                     if (ea == ea_sr) {
                         std::cout << "SR";
+                        break;
+                    } else if (ea == ea_ccr) {
+                        std::cout << "CCR";
+                        break;
+                    } else if (ea == ea_reglist) {
+                        assert(eaw < ea_words);
+                        assert(inst.nea == 2);
+                        const auto list = eawords[eaw++];
+                        // Note: reversed for predecrement
+                        std::cout << reg_list_string(list, i == 0 && (inst.ea[1] >> 3) == ea_m_A_ind_pre);
                         break;
                     }
 
