@@ -943,7 +943,7 @@ bool run_winuae_tests()
     test_testmem = read_file((basedir / "tmem.dat").string());
 
     //debug_winuae_tests = true;
-    //run_winuae_mnemonic_test(basedir / "DIVU.W");
+    //run_winuae_mnemonic_test(basedir / "DIVS.W");
     //assert(0);
 
     const std::vector<const char*> skip = {
@@ -955,7 +955,6 @@ bool run_winuae_tests()
         // TODO (Undefinde flags?)
         "ABCD", "SBCD", "NBCD",
     };
-    // Failed: DIVS.W DIVU.W (Division by zero)
     std::vector<std::string> failed;
     int errors = 0;
     for (auto& p : fs::directory_iterator(basedir)) {

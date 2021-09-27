@@ -922,7 +922,28 @@ private:
 
     void handle_DIVS()
     {
-        handle_DIVU();
+        assert(inst_->nea == 2 && inst_->size == opsize::w && (inst_->ea[1] >> ea_m_shift) == ea_m_Dn);
+        const auto d = sext(read_ea(0), opsize::w);
+        if (!d) {
+            do_trap(interrupt_vector::zero_divide);
+            return;
+        }
+
+        auto& reg = state_.d[inst_->ea[1] & ea_xn_mask];
+
+        const auto q = static_cast<int32_t>(reg) / d;
+        const auto r = static_cast<int32_t>(reg) % d;
+        uint16_t ccr = 0;
+        if (q > 0x7fff || q < -0x8000) {
+            ccr = srm_v | srm_n;
+        } else {
+            if (q & 0x8000)
+                ccr |= srm_n;
+            if (!q)
+                ccr |= srm_z;
+            reg = (q & 0xffff) | (r & 0xffff) << 16;
+        }
+        state_.update_sr(srm_ccr_no_x, ccr);
     }
 
     void handle_EOR()
