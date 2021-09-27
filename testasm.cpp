@@ -264,11 +264,18 @@ bool simple_asm_tests()
         { "CMPM.B (a1)+, (a6)+", { 0xbd09 } },
         { "CMPM.W (a2)+, (a3)+", { 0xb74a } },
         { "CMPM.L (a7)+, (a0)+", { 0xb18f } },
+        { "MOVEM.W d0-d7/a0-a6, -(a7)", { 0x48a7, 0xfffe } },
+        { "MOVEM d0/d3/d2/a0-a2/a3-a4, (a1)", { 0x4891, 0x1f0d } },
+        { "MOVEM.L d0-d1/a2-a3, $1234.l", { 0x48f9, 0x0c03, 0x0000, 0x1234 } },
+        { "MOVEM.W (sp)+, d0-d2/a2/a3", { 0x4c9f, 0x0c07 } },
+        { "MOVEM.L 12(a0), d0-a7", { 0x4ce8, 0xffff, 0x000c } },
+        { "l MOVEM.L l(pc,d0.w), d0-a7", { 0x4cfb, 0xffff, 0x00fc } },
+        { "MOVEM d0, 2(a1,d0.w)", { 0x48b1, 0x0001, 0x0002 } }, 
+        { "MOVEM.L a7, 2(a3)", { 0x48eb, 0x8000, 0x0002 } }, 
         // MOVEP
-        // MOVEM
         // TAS
         // ASL, ASR, LSL, LSR, ROL, ROR, ROXL, ROXR
-    };  
+    };
 
     for (const auto& tc : test_cases) {
         const uint32_t start_pc = 0x1000;
@@ -292,9 +299,49 @@ bool simple_asm_tests()
     return true;
 }
 
+bool test_reglist_string()
+{
+    const struct {
+        uint16_t rl;
+        bool rev;
+        const char* expected;
+    } test_cases[] = {
+        { 0, false, "(empty register list)" },
+        { 1 << 0, false, "D0" },
+        { 1 << 7, false, "D7" },
+        { 1 << 0 | 1 << 1 | 1 << 4, false, "D0-D1/D4" },
+        { 0x7fff, false, "D0-A6" },
+        { 0xfffe, false, "D1-A7" },
+        { 0xf00f, false, "D0-D3/A4-A7" },
+        { 0x8000, false, "A7" },
+        { 0, true, "(empty register list)" },
+        { 1 << 0, true, "A7" },
+        { 1 << 7, true, "A0" },
+        { 1 << 0 | 1 << 1 | 1 << 4, true, "A3/A6-A7" },
+        { 0x7fff, true, "D1-A7" },
+        { 0xfffe, true, "D0-A6" },
+        { 0xf00f, true, "D0-D3/A4-A7" },
+        { 0x8000, true, "D0" },
+    };
+
+    for (const auto& tc : test_cases) {
+        const auto res = reg_list_string(tc.rl, tc.rev);
+        if (res != tc.expected) {
+            std::cerr << "Test case failure for reg_list_string. List=$" << hexfmt(tc.rl) << " Reverse=" << (tc.rev ? "yes" : "no") << "\n";
+            std::cerr << "Expected: \"" << tc.expected << "\"\n";
+            std::cerr << "Got:      \"" << res << "\"\n";
+            return false;
+        }
+    }
+    return true;
+}
+
 int main()
 {
     try {
+        if (!test_reglist_string())
+            return 1;
+
         if (!simple_asm_tests())
             return 1;
         //const uint32_t start_pc = 0x1000;

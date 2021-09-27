@@ -66,22 +66,25 @@ std::string reg_list_string(uint16_t list, bool reverse)
     int last_reg = -1;
     std::string res;
 
+    if (list == 0)
+        return "(empty register list)";
+
     auto reg_str = [](int reg) -> std::string {
         assert(reg >= 0 && reg < 16);
         return (reg < 8 ? "D" : "A") + std::to_string(reg & 7);
     };
+
     for (int reg = 0; reg < 16; ++reg) {
-        const int bit = reverse ? 15-reg : reg;
+        const int bit = reverse ? 15 - reg : reg;
         if (list & (1 << bit)) {
             if (last_reg < 0) {
                 last_reg = reg;
             }
         } else if (last_reg != -1) {
-            if (first) {
+            if (first)
                 first = false;
-            } else {
+            else
                 res += '/';
-            }
 
             res += reg_str(last_reg);
             if (last_reg != reg - 1) {
@@ -91,7 +94,17 @@ std::string reg_list_string(uint16_t list, bool reverse)
             last_reg = -1;
         }
     }
-    assert(last_reg == -1); // TODO: Handle this...
+    if (last_reg != -1) {
+        if (!first)
+            res += '/';
+        res += reg_str(last_reg);
+        if (last_reg != 15) {
+            res += '-';
+            res += reg_str(15);
+        }
+    }
+    assert(!res.empty());
+
     return res;
 }
 

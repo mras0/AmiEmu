@@ -75,6 +75,7 @@ constexpr bool range16(uint32_t val)
     X(LEA       , l    , l    , 2)        \
     X(LINK      , w    , w    , 2)        \
     X(MOVE      , bwl  , w    , 2)        \
+    X(MOVEM     , wl   , w    , 2)        \
     X(MOVEQ     , l    , l    , 2)        \
     X(MULS      , w    , w    , 2)        \
     X(MULU      , w    , w    , 2)        \
@@ -238,6 +239,7 @@ private:
         plus = '+',
         comma = ',',
         minus = '-',
+        slash = '/',
         colon = ':',
 
         last_operator=127,
@@ -406,6 +408,7 @@ private:
         case '+':
         case ',':
         case '-':
+        case '/':
         case ':':
             token_type_ = static_cast<token_type>(c);
             return;
@@ -634,6 +637,43 @@ number:
             ea_result res {};
             res.type = static_cast<uint8_t>(static_cast<uint32_t>(token_type_) - static_cast<uint32_t>(token_type::d0));
             get_token();
+            if (token_type_ == token_type::minus || token_type_ == token_type::slash) {
+                // register list
+                auto first = res.type;
+                res.type = ea_reglist;
+                res.val = 0;
+                for (;;) {
+                    if (token_type_ == token_type::slash) {
+                        if (first <= 15) {
+                            res.val |= 1 << first;
+                        }
+                        first = 0xff;
+                        get_token();
+                    } else if (token_type_ == token_type::minus) {
+                        if (first > 15)
+                            ASSEMBLER_ERROR("Invalid register list");
+                        get_token();
+                        if (!is_register(token_type_))
+                            ASSEMBLER_ERROR("Invalid register list");
+                        const auto last = static_cast<uint8_t>(static_cast<uint32_t>(token_type_) - static_cast<uint32_t>(token_type::d0));
+                        if (last <= first)
+                            ASSEMBLER_ERROR("Invalid order in register list");
+                        for (auto r = first; r <= last; ++r)
+                            res.val |= 1 << r;
+                        first = 0xff;
+                        get_token();
+                    } else if (is_register(token_type_)) {
+                        if (first != 0xff)
+                            ASSEMBLER_ERROR("Invalid register list");
+                        first = static_cast<uint8_t>(static_cast<uint32_t>(token_type_) - static_cast<uint32_t>(token_type::d0));
+                        get_token();
+                    } else {
+                        break;
+                    }
+                }
+                if (first <= 15)
+                    res.val |= 1 << first;
+            }
             return res;
         } else if (token_type_ == token_type::sr) {
             get_token();
@@ -893,6 +933,52 @@ operands_done:
             }
             break;
         }
+        case token_type::MOVEM: {
+            iwords[0] = 0x4880;
+            if (ea[0].type == ea_reglist || ea[0].type >> ea_m_shift <= ea_m_An) {
+                // Reg-to-mem
+                if (ea[0].type != ea_reglist) {
+                    ea[0].val = 1 << ea[0].type;
+                    ea[0].type = ea_reglist;
+                }
+
+                if (ea[1].type >= ea_immediate || ea[1].type >> ea_m_shift <= ea_m_An || ea[1].type >> ea_m_shift == ea_m_A_ind_post || (ea[1].type >> ea_m_shift == ea_m_Other && (ea[1].type & 7) > ea_other_abs_l))
+                    ASSEMBLER_ERROR("Invalid destination for MOVEM");
+
+                uint16_t rl = static_cast<uint16_t>(ea[0].val);
+
+                if (ea[1].type >> ea_m_shift == ea_m_A_ind_pre) {
+                    // Reverse bits
+                    rl = ((rl >> 1) & 0x55555) | ((rl & 0x5555) << 1);
+                    rl = ((rl >> 2) & 0x33333) | ((rl & 0x3333) << 2);
+                    rl = ((rl >> 4) & 0xf0f0f) | ((rl & 0x0f0f) << 4);
+                    rl = ((rl >> 8) & 0xf00ff) | ((rl & 0x00ff) << 8);
+                }
+
+                iwords[0] |= ea[1].type & 0x3f;
+                iwords[iword_cnt++] = rl;
+            } else if (ea[1].type == ea_reglist || ea[1].type >> ea_m_shift <= ea_m_An) {
+                // Mem-to-reg
+                if (ea[1].type != ea_reglist) {
+                    ea[1].val = 1 << ea[1].type;
+                    ea[1].type = ea_reglist;
+                }
+
+                // TODO: Check invalid
+
+                if ((ea[0].type >> ea_m_shift == ea_m_Other) && ((ea[0].type & 7) == ea_other_pc_disp16 || (ea[0].type & 7) == ea_other_pc_index))
+                    ea[0].val -= 2;
+
+                iwords[0] |= 1 << 10;
+                iwords[0] |= ea[0].type & 0x3f;
+                iwords[iword_cnt++] = static_cast<uint16_t>(ea[1].val);
+            } else {
+                ASSEMBLER_ERROR("Invalid operands to MOVEM");
+            }
+            if (osize == opsize::l)
+                iwords[0] |= 1 << 6;
+            break;
+        }
         case token_type::MOVEQ: {
             if (ea[0].type != ea_immediate || ea[0].fixup || ea[1].type >> ea_m_shift != ea_m_Dn)
                 ASSEMBLER_ERROR("Invalid operands to MOVEQ");
@@ -1037,8 +1123,6 @@ operands_done:
             ASSEMBLER_ERROR("TODO: Encode " << info.name);
         }
 
-        // TODO: Register list always immediately follows instruction
-
         for (uint8_t arg = 0; arg < info.num_operands; ++arg) {
             switch (ea[arg].type >> ea_m_shift) {
             case ea_m_Dn:
@@ -1096,7 +1180,7 @@ operands_done:
                 break;
             }
             default:
-                if (ea[arg].type == ea_sr || ea[arg].type == ea_ccr || ea[arg].type == ea_usp)
+                if (ea[arg].type == ea_sr || ea[arg].type == ea_ccr || ea[arg].type == ea_usp || ea[arg].type == ea_reglist)
                     break;
                 ASSEMBLER_ERROR("TODO: Encoding for " << ea_string(ea[arg].type));
             }
