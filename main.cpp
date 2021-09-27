@@ -500,6 +500,18 @@ int main(int argc, char* argv[])
                             } else {
                                 std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
                             }
+                        } else if (args[0] == "write_mem") {
+                            if (args.size() > 1) {
+                                std::ofstream f(args[1], std::ofstream::binary);
+                                if (f) {
+                                    f.write(reinterpret_cast<const char*>(mem.ram().data()), mem.ram().size());
+                                } else {
+                                    std::cout << "Error creating \"" << args[1] << "\"\n";
+                                }
+                            } else {
+                                std::cout << "Missing argument (file)\n";
+                            }
+
                         } else if (args[0] == "z") {
                             wait_for_pc = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
                             goto exit_debug;
