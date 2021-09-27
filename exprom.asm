@@ -2,6 +2,19 @@ RomStart=0
 
 VERSION=0
 REVISION=1
+
+RT_MATCHWORD=$00		; UWORD word to match on (ILLEGAL)
+RT_MATCHTAG=$02			; APTR  pointer to the above (RT_MATCHWORD)
+RT_ENDSKIP=$06			; APTR  address to continue scan
+RT_FLAGS=$0A			; UBYTE various tag flags
+RT_VERSION=$0B			; UBYTE release version number
+RT_TYPE=$0C			; UBYTE type of module (NT_XXXXXX)
+RT_PRI=$0D			; BYTE  initialization priority
+RT_NAME=$0E			; APTR  pointer to node name
+RT_IDSTRING=$12			; APTR  pointer to identification string
+RT_INIT=$16			; APTR  pointer to init code
+RT_SIZE=$1A
+
 RTC_MATCHWORD=$4afc
 RTF_AUTOINIT=$80	; rt_Init points to data structure
 RTF_COLDSTART=$01
@@ -14,18 +27,27 @@ NT_MSGPORT=4
 NT_MESSAGE=5
 NT_FREEMSG=6
 NT_REPLYMSG=7
+NT_BOOTNODE=16
 
 ; exec.library
+_LVOFindResident=-96
+_LVOForbid=-132
+_LVOPermit=-138
 _LVOAllocMem=-198
 _LVOFreeMem=-210
+_LVOEnqueue=-270
 _LVOReplyMsg=-378
 _LVOCloseLibrary=-414
 _LVOOpenLibrary=-552
 
 ; expansion.library
+_LVOAddBootNode=-36
 _LVOGetCurrentBinding=-138
 _LVOMakeDosNode=-144
 _LVOAddDosNode=-150
+
+eb_MountList=74
+
 
 INITBYTE=$e000
 INITWORD=$d000
@@ -113,6 +135,11 @@ UNIT_FLAGS=$22                  ; UBYTE
 UNIT_OPENCNT=$24                ; UWORD
 UNIT_SIZE=$26
 
+; starts at LN_SIZE
+bn_Flags=$0E                    ; UWORD
+bn_DeviceNode=$10               ; APTR
+BootNode_SIZEOF=$14
+
 dev_SysLib=$22  ; LIB_SIZE
 dev_SegList=$26
 dev_Base=$2A
@@ -162,13 +189,14 @@ rt_End:     dc.l    EndCopy-DiagStart  ; APTR  RT_ENDSKIP
             dc.b    VERSION            ; UBYTE RT_VERSION
             dc.b    NT_DEVICE          ; UBYTE RT_TYPE
             dc.b    20                 ; BYTE  RT_PRI
-rt_Name:    dc.l    DevName-DiagStart  ; APTR  RT_NAME
+rt_NamePtr: dc.l    DevName-DiagStart  ; APTR  RT_NAME
 rt_Id:      dc.l    IdString-DiagStart ; APTR  RT_IDSTRING
-rt_Init:    dc.l    Init-DiagStart     ; APTR  RT_INIT
+rt_InitPtr: dc.l    Init-DiagStart     ; APTR  RT_INIT
 
 
 DevName:    dc.b 'hello.device', 0
 IdString:   dc.b 'hello ',VERSION+48,'.',REVISION+48, 0
+DosLibName: dc.b 'dos.library', 0
     even
 
 Init:
@@ -200,54 +228,57 @@ dt_Id:      DC.L IdString-DiagStart
             DC.W 0   ; terminate list
 
 BootEntry:
-            moveq   #$66,d0
-            bra BootEntry
-            rts
+        lea     DosLibName(pc), a1
+        jsr     _LVOFindResident(a6)    ; find the DOS resident tag
+        move.l  d0, a0
+        move.l  RT_INIT(a0), a0         ; set vector to DOS INIT
+        jsr     (a0)                    ; initialize DOS
+        rts
 
 DiagEntry:
-            ;lea     patchTable-RomStart(a0), a1
-            move.l  #patchTable, a1
-            sub.l   #RomStart, a1
-            add.l   a0, a1
-            move.l  a2, d1
+        ;lea     patchTable-RomStart(a0), a1
+        move.l  #patchTable, a1
+        sub.l   #RomStart, a1
+        add.l   a0, a1
+        move.l  a2, d1
 dloop:
-            move.w  (a1)+, d0
-            bmi.b   bpatches
-            add.l   d1, 0(a2,d0.w)
-            bra.b   dloop
+        move.w  (a1)+, d0
+        bmi.b   bpatches
+        add.l   d1, 0(a2,d0.w)
+        bra.b   dloop
 bpatches:
-            move.l  a0, d1
+        move.l  a0, d1
 bloop:
-            move.w  (a1)+, d0
-            bmi.b   endpatches
-            add.l   d1, 0(a2,d0.w)
-            bra.b   bloop
+        move.w  (a1)+, d0
+        bmi.b   endpatches
+        add.l   d1, 0(a2,d0.w)
+        bra.b   bloop
 endpatches:
-            moveq   #1,d0 ; success
-            rts
+        moveq   #1,d0 ; success
+        rts
 EndCopy:
 
 patchTable:
 ; Word offsets into Diag area where pointers need Diag copy address added
-            dc.w   rt_Match-DiagStart
-            dc.w   rt_End-DiagStart
-            dc.w   rt_Name-DiagStart
-            dc.w   rt_Id-DiagStart
-            dc.w   rt_Init-DiagStart
-            dc.w   Init-DiagStart+$4
-            dc.w   Init-DiagStart+$8
-            dc.w   dt_Name-DiagStart
-            dc.w   dt_Id-DiagStart
-            dc.w   -1
+        dc.w   rt_Match-DiagStart
+        dc.w   rt_End-DiagStart
+        dc.w   rt_NamePtr-DiagStart
+        dc.w   rt_Id-DiagStart
+        dc.w   rt_InitPtr-DiagStart
+        dc.w   Init-DiagStart+$4
+        dc.w   Init-DiagStart+$8
+        dc.w   dt_Name-DiagStart
+        dc.w   dt_Id-DiagStart
+        dc.w   -1
 ; Word offsets into Diag area where pointers need boardbase+ROMOFFS added
-            dc.w   Init-DiagStart+$c
-            dc.w   funcTable-DiagStart+$00
-            dc.w   funcTable-DiagStart+$04
-            dc.w   funcTable-DiagStart+$08
-            dc.w   funcTable-DiagStart+$0C
-            dc.w   funcTable-DiagStart+$10
-            dc.w   funcTable-DiagStart+$14
-            dc.w   -1
+        dc.w   Init-DiagStart+$c
+        dc.w   funcTable-DiagStart+$00
+        dc.w   funcTable-DiagStart+$04
+        dc.w   funcTable-DiagStart+$08
+        dc.w   funcTable-DiagStart+$0C
+        dc.w   funcTable-DiagStart+$10
+        dc.w   funcTable-DiagStart+$14
+        dc.w   -1
 
 DosName: dc.b 'DH0',0
          even
@@ -273,9 +304,9 @@ initRoutine:
         lea     dev_Base(a5), a0
         moveq   #4, d0 ; Just get address (length = 4)
         jsr     _LVOGetCurrentBinding(a6)
-        move.l  dev_Base(a5), d0
+        move.l  dev_Base(a5), d6         ; d6 = ConfigNode
         beq     irError
-        move.l  d0, a0
+        move.l  d6, a0
         move.l  cd_BoardAddr(a0), dev_Base(a5) ; Save base address
         bclr.b  #CDB_CONFIGME, cd_Flags(a0)    ; Mark as configured
 
@@ -310,18 +341,50 @@ initRoutine:
 
         move.l  a3, a0
         jsr     _LVOMakeDosNode(a6)
-
-        tst.l   d0
-        beq.b   irError
-        move.l  d0, a0
-        moveq   #0, d0 ; Boot priority
-        moveq   #ADNF_STARTPROC, d1 ; Flags
-        jsr     _LVOAddDosNode(a6)
-        tst.l   d0
-        beq.b   irError
-
         add.l   #devn_Sizeof, a7 ; Free dos packet
+        move.l  d0, d7 ; d7 = DosNode
+        beq.b   irError
 
+        ; If disk is not supposed to be bootable do this instead
+        ;move.l  d7, a0
+        ;moveq   #0, d0 ; Boot priority
+        ;moveq   #ADNF_STARTPROC, d1 ; Flags
+        ;jsr     _LVOAddDosNode(a6)
+        ;tst.l   d0
+        ;beq.b   irError
+
+        cmp.w   #36, LIB_VERSION(a6)
+        bcs.b   irPrev36
+
+        move.l  d7, a0 ; deviceNode
+        move.l  d6, a1 ; configDev
+        moveq   #0, d0 ; bootpri
+        moveq   #ADNF_STARTPROC, d1 ; flags
+        jsr     _LVOAddBootNode(a6)
+        tst.l   d0
+        beq.b   irError
+
+        bra.b   irDone
+
+irPrev36:
+        ; Enqueue boot node
+        move.l  dev_SysLib(a5), a6
+        moveq   #BootNode_SIZEOF, d0
+        move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
+        move.l  dev_SysLib(a5), a6
+        jsr     _LVOAllocMem(a6)
+        tst.l   d0
+        beq     irError
+        move.l  d0, a1
+        move.b  #NT_BOOTNODE, LN_TYPE(a1)
+        move.l  d6, LN_NAME(a1)
+        move.l  d7, bn_DeviceNode(a1)
+        lea     eb_MountList(a4), a0
+        jsr     _LVOForbid(a6)
+        jsr     _LVOEnqueue(a6)
+        jsr     _LVOPermit(a6)
+
+irDone:
         move.l  a5, d0
         bra.b   irExit
 irError:
@@ -342,33 +405,33 @@ irNoClose:
 ExLibName:  dc.b 'expansion.library', 0
             even
 
-msg1:   dc.b 'Debugmsg: ',0
-hexchars: dc.b '0123456789abcdef'
-        even
-DebugMsg:
-        movem.l d0-d2/a0, -(sp)
-        move.l  d0, d1
-        lea     msg1(pc), a0
-        move.w  #$100, d0 ; Stop bit
-dmLoop:
-        move.b  (a0)+,d0
-        beq.b   dmDone
-        move.w  d0, $dff030
-        bra.b   dmLoop
-dmDone:
-        lea     hexchars(pc), a0
-        moveq   #7, d2
-dmHexPrint:
-        rol.l   #4, d1
-        move.w  d1, d0
-        and.w   #$f, d0
-        move.b  0(a0,d0.w), d0
-        or.w    #$100, d0
-        move.w  d0, $dff030
-        dbf     d2, dmHexPrint
-        move.w  #$010a, $dff030
-        movem.l (sp)+, d0-d2/a0
-        rts
+;msg1:   dc.b 'Debugmsg: ',0
+;hexchars: dc.b '0123456789abcdef'
+;        even
+;DebugMsg:
+;        movem.l d0-d2/a0, -(sp)
+;        move.l  d0, d1
+;        lea     msg1(pc), a0
+;        move.w  #$100, d0 ; Stop bit
+;dmLoop:
+;        move.b  (a0)+,d0
+;        beq.b   dmDone
+;        move.w  d0, $dff030
+;        bra.b   dmLoop
+;dmDone:
+;        lea     hexchars(pc), a0
+;        moveq   #7, d2
+;dmHexPrint:
+;        rol.l   #4, d1
+;        move.w  d1, d0
+;        and.w   #$f, d0
+;        move.b  0(a0,d0.w), d0
+;        or.w    #$100, d0
+;        move.w  d0, $dff030
+;        dbf     d2, dmHexPrint
+;        move.w  #$010a, $dff030
+;        movem.l (sp)+, d0-d2/a0
+;        rts
 
 Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         movem.l d0-d7/a0-a6, -(sp)

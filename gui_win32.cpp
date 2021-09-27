@@ -131,7 +131,7 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     map[VK_LMENU] = 0x64;
     map[VK_RMENU] = 0x65;
     map[VK_HOME] = 0x66;  // left amiga 0x66
-    map[VK_INSERT] = 0x67; // right amiga 0x67
+    map[VK_END] = 0x67; // right amiga 0x67
  
     return map;
 }();

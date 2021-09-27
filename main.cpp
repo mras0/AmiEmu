@@ -188,6 +188,7 @@ struct command_line_arguments {
     std::string rom;
     std::string df0;
     std::string df1;
+    std::string hd;
     uint32_t chip_size;
     uint32_t slow_size;
     uint32_t fast_size;
@@ -197,7 +198,7 @@ struct command_line_arguments {
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0 adf-file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-help]\n";
+    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -242,6 +243,8 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
             if (get_string_arg("df0", args.df0))
                 continue;
             else if (get_string_arg("df1", args.df1))
+                continue;
+            else if (get_string_arg("hd", args.hd))
                 continue;
             else if (get_string_arg("rom", args.rom))
                 continue;
@@ -641,7 +644,7 @@ private:
         mem_.write_u32(ptr_hold_ + devn_sizeBlock, sector_size_bytes / 4);
         mem_.write_u32(ptr_hold_ + devn_numHeads, num_heads_);
         mem_.write_u32(ptr_hold_ + devn_blkTrack, sectors_per_track_);
-        mem_.write_u32(ptr_hold_ + devn_upperCyl, num_cylinders_);
+        mem_.write_u32(ptr_hold_ + devn_upperCyl, num_cylinders_- 1);
     }
 
     void handle_disk_cmd()
@@ -921,8 +924,11 @@ int main(int argc, char* argv[])
         std::ofstream sound_out { "c:/temp/sound.raw" };
         #endif
 
-        harddisk b { mem, cpu_active, "test.disk" };
-        autoconf.add_device(b);
+        std::unique_ptr<harddisk> hd;
+        if (!cmdline_args.hd.empty()) {
+            hd = std::make_unique<harddisk>(mem, cpu_active, cmdline_args.hd);
+            autoconf.add_device(*hd);
+        }
 
         auto cstep = [&](bool cpu_waiting) {
             const bool cpu_was_active = cpu_active;
