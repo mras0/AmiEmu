@@ -9,6 +9,14 @@
 #include <iomanip>
 #endif
 
+// Test cases:
+// Fairlight.242.dms            store (0) + deep (6), has banner as "track 0"
+// KEFRENS-DesertDream-B.dms    rle
+// ANARCHY-3dDemo2.dms          deep + rle/no-rle
+// PHENOMENA-Enigma.DMS         medium (3)
+// SANITY-woc92.dms             banner track (0xffff)
+// THEUNTO1.dms                 banner track (0 with size 1024)
+
 namespace {
 
 constexpr uint32_t dms_header_id = 'D' << 24 | 'M' << 16 | 'S' << 8 | '!';
@@ -256,11 +264,36 @@ private:
     uint16_t *left, *right;
 };
 
-class heavy_decruncher {
+class decruncher {
 public:
-    explicit heavy_decruncher() = default;
+    explicit decruncher() = default;
 
-    void decrunch(const uint8_t* src, uint32_t src_size, uint8_t* output, uint16_t output_size, bool init_table, bool heavy2)
+    void medium(const uint8_t* src, uint32_t src_size, uint8_t* output, uint16_t output_size)
+    {
+        bitbuf_.init(src, src_size);
+        for (size_t i = 0; i < output_size;) {
+            if (bitbuf_.get(1)) {
+                // literal
+                output[i++] = text_[medium_text_loc_++ & medium_bitmask] = static_cast<uint8_t>(bitbuf_.get(8));
+            } else {
+                // match
+                uint16_t c = bitbuf_.get(8);
+                uint16_t len = d_code[c] + 3;
+                uint8_t u = d_len[c];
+                c = (c << u | bitbuf_.get(u)) & 0xff;
+                u = d_len[c];
+                c = d_code[c] << 8 | ((c << u | bitbuf_.get(u)) & 0xff);
+                uint16_t ofs = medium_text_loc_ - c - 1;
+                if (i + len > output_size)
+                    throw invalid_dms_file { "Output overrun" };
+                while (len--)
+                    output[i++] = text_[medium_text_loc_++ & medium_bitmask] = text_[ofs++ & medium_bitmask];
+            }
+        }
+        medium_text_loc_ += 66;
+    }
+
+    void heavy(const uint8_t* src, uint32_t src_size, uint8_t* output, uint16_t output_size, bool init_table, bool heavy2)
     {
         bitbuf_.init(src, src_size);
         if (heavy2) {
@@ -282,15 +315,15 @@ public:
             const uint16_t c = decode_c();
             if (c < 256) {
                 // Literal
-                output[i++] = text_[text_loc_++ & bitmask_] = static_cast<uint8_t>(c);
+                output[i++] = text_[heavy_text_loc_++ & bitmask_] = static_cast<uint8_t>(c);
             } else {
                 // Copy match
                 uint16_t len = c - OFFSET;
-                uint16_t ofs = text_loc_ - decode_p() - 1;
+                uint16_t ofs = heavy_text_loc_ - decode_p() - 1;
                 if (i + len > output_size)
                     throw invalid_dms_file {"Output overrun"};
                 while (len--)
-                    output[i++] = text_[text_loc_++ & bitmask_] = text_[ofs++ & bitmask_];
+                    output[i++] = text_[heavy_text_loc_++ & bitmask_] = text_[ofs++ & bitmask_];
             }
         }
     }
@@ -298,27 +331,37 @@ public:
     void reset()
     {
         memset(text_, 0, sizeof(text_));
-        text_loc_ = 0;
+        heavy_text_loc_ = 0;
+        //quick_text_loc = 251;
+        medium_text_loc_ = 0x3fbe;
+        //deep_text_loc = 0x3fc4;
+        //init_deep_tabs = 1;
+
     }
 
 private:
+    // Shared
+    bitbuf bitbuf_;
+    uint8_t text_[0x4000];
+
+    // Medium decrunching
+    static constexpr uint16_t medium_bitmask = 0x3fff;
+    static const uint8_t d_code[256], d_len[256]; // also used for deep compression
+    uint16_t medium_text_loc_ = 0;
+
+    // Heavy decrunching
     static constexpr uint16_t NC = 510;
     static constexpr uint16_t NPT = 20;
     static constexpr uint16_t N1 = 510;
     static constexpr uint16_t OFFSET = 253;
-    bitbuf bitbuf_;
     uint8_t np_;
     uint16_t bitmask_;
-
     uint8_t c_len_[NC];
     uint16_t c_table_[4096];
-
     uint8_t pt_len_[NPT];
     uint16_t pt_table_[256];
-
     uint16_t left_[2 * NC - 1], right_[2 * NC - 1 + 9];
-    uint8_t text_[0x2000];
-    uint16_t text_loc_ = 0;
+    uint16_t heavy_text_loc_ = 0;
     uint16_t last_len_ = 0;
 
     void read_tree_c()
@@ -419,27 +462,27 @@ private:
     }
 };
 
-std::vector<uint8_t> rle_decode(const std::vector<uint8_t>& input)
+std::vector<uint8_t> rle_decode(const uint8_t* input, size_t input_size)
 {
     std::vector<uint8_t> out;
-    for (size_t i = 0; i < input.size();) {
+    for (size_t i = 0; i < input_size;) {
         uint8_t a = input[i++];
         if (a != 0x90) {
             out.push_back(a);
             continue;
         }
-        if (i == input.size())
+        if (i == input_size)
             throw invalid_dms_file { "RLE decode failed" };
         uint16_t b = input[i++];
         if (!b) {
             out.push_back(a);
             continue;
         }
-        if (i == input.size())
+        if (i == input_size)
             throw invalid_dms_file { "RLE decode failed" };
         a = input[i++];
         if (b == 0xff) {
-            if (i + 1 >= input.size())
+            if (i + 1 >= input_size)
                 throw invalid_dms_file { "RLE decode failed" };
             b = get_u16(&input[i]);
             i += 2;
@@ -450,6 +493,76 @@ std::vector<uint8_t> rle_decode(const std::vector<uint8_t>& input)
 
     return out;
 }
+
+const uint8_t decruncher::d_code[256] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+    0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+    0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+    0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+    0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09, 0x09,
+    0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A,
+    0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B,
+    0x0C, 0x0C, 0x0C, 0x0C, 0x0D, 0x0D, 0x0D, 0x0D,
+    0x0E, 0x0E, 0x0E, 0x0E, 0x0F, 0x0F, 0x0F, 0x0F,
+    0x10, 0x10, 0x10, 0x10, 0x11, 0x11, 0x11, 0x11,
+    0x12, 0x12, 0x12, 0x12, 0x13, 0x13, 0x13, 0x13,
+    0x14, 0x14, 0x14, 0x14, 0x15, 0x15, 0x15, 0x15,
+    0x16, 0x16, 0x16, 0x16, 0x17, 0x17, 0x17, 0x17,
+    0x18, 0x18, 0x19, 0x19, 0x1A, 0x1A, 0x1B, 0x1B,
+    0x1C, 0x1C, 0x1D, 0x1D, 0x1E, 0x1E, 0x1F, 0x1F,
+    0x20, 0x20, 0x21, 0x21, 0x22, 0x22, 0x23, 0x23,
+    0x24, 0x24, 0x25, 0x25, 0x26, 0x26, 0x27, 0x27,
+    0x28, 0x28, 0x29, 0x29, 0x2A, 0x2A, 0x2B, 0x2B,
+    0x2C, 0x2C, 0x2D, 0x2D, 0x2E, 0x2E, 0x2F, 0x2F,
+    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+};
+
+const uint8_t decruncher::d_len[256] = {
+    0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+    0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+    0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+    0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+    0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+    0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+};
 
 } // unnamed namespace
 
@@ -491,9 +604,10 @@ std::vector<uint8_t> dms_unpack(const std::vector<uint8_t>& data)
     PR(crunchmode);
     PR(header_sum);
 #undef PR
+    std::cout << "Track Flags Psize RSize USize PF  PM  USum  DSum\n";
 #endif
-    heavy_decruncher heavyd;
-    heavyd.reset();
+    decruncher decrunch;
+    decrunch.reset();
 
     constexpr uint16_t track_size = 11 * 512 * 2;
 
@@ -509,26 +623,11 @@ std::vector<uint8_t> dms_unpack(const std::vector<uint8_t>& data)
             throw invalid_dms_file{"Invalid track header ID"};
         if (crc16(&data[offset], dms_track_header_size - 2) != tr_hdr.header_sum)
             throw invalid_dms_file{"Track header CRC mismatch"};
+
 #ifdef DMS_TRACE
-#define PR(f) std::cout << std::left << std::setw(32) << #f << "\t$" << hexfmt(tr_hdr.f) << "\n"
-        PR(track);
-        PR(flags);
-        PR(pack_size);
-        PR(rle_size);
-        PR(unpack_size);
-        PR(pack_flag);
-        PR(pack_mode);
-        PR(unpack_sum);
-        PR(data_sum);
-#undef PR
+        std::cout << "$" << hexfmt(tr_hdr.track) << " $" << hexfmt(tr_hdr.flags) << " $" << hexfmt(tr_hdr.pack_size) << " $" << hexfmt(tr_hdr.rle_size) << " $" << hexfmt(tr_hdr.unpack_size) << " $" << hexfmt(tr_hdr.pack_flag) << " $" << hexfmt(tr_hdr.pack_mode) << " $" << hexfmt(tr_hdr.unpack_sum) << " $" << hexfmt(tr_hdr.data_sum) << "\n";
 #endif
         offset += dms_track_header_size;
-
-        if (tr_hdr.track > hdr.hightrack)
-            throw invalid_dms_file { "Track $" + hexstring(tr_hdr.track) + " is out range $" + hexstring(hdr.hightrack) }; 
-
-        if (tr_hdr.unpack_size != track_size)
-            throw invalid_dms_file { "Track $" + hexstring(tr_hdr.track) + " has invalid size $" + hexstring(tr_hdr.unpack_size) };
 
         if (offset + tr_hdr.pack_size > data.size())
             throw invalid_dms_file { "End of file while reading track packed data" };
@@ -544,12 +643,22 @@ std::vector<uint8_t> dms_unpack(const std::vector<uint8_t>& data)
                 throw invalid_dms_file { "Invalid unpack size for store" };
             memcpy(&track_data[0], &data[offset], tr_hdr.unpack_size);
             break;
+        case 1: // Simple (= RLE only)
+            if (tr_hdr.pack_size != tr_hdr.rle_size)
+                throw invalid_dms_file { "Invalid rle/pack size for simple crunch mode" };
+            track_data = rle_decode(&data[offset], tr_hdr.rle_size);
+            break;
+        case 3: // Medium
+            track_data.resize(tr_hdr.rle_size);
+            decrunch.medium(&data[offset], tr_hdr.pack_size, &track_data[0], tr_hdr.rle_size);
+            track_data = rle_decode(track_data.data(), track_data.size());
+            break;
         case 5: // Heavy1
         case 6: // Heavy2
             track_data.resize(tr_hdr.rle_size);
-            heavyd.decrunch(&data[offset], tr_hdr.pack_size, &track_data[0], tr_hdr.rle_size, !!(tr_hdr.pack_flag & 2), tr_hdr.pack_mode == 6);
+            decrunch.heavy(&data[offset], tr_hdr.pack_size, &track_data[0], tr_hdr.rle_size, !!(tr_hdr.pack_flag & 2), tr_hdr.pack_mode == 6);
             if (tr_hdr.pack_flag & 4)
-                track_data = rle_decode(track_data);
+                track_data = rle_decode(track_data.data(), track_data.size());
             break;
         default:
             throw invalid_dms_file { "Unsupported DMS packing method $" + hexstring(tr_hdr.pack_mode) };
@@ -562,9 +671,23 @@ std::vector<uint8_t> dms_unpack(const std::vector<uint8_t>& data)
             throw invalid_dms_file { "Track checksum invalid" };
 
         if (!(tr_hdr.pack_flag & 1))
-            heavyd.reset();
+            decrunch.reset();
 
-        memcpy(&res[tr_hdr.track * track_size], track_data.data(), track_size);
+        // Track 0 of size 1024 is also a banner track
+        if (tr_hdr.track == 0xffff || (tr_hdr.unpack_size == 1024 && tr_hdr.track == 0)) {
+#ifdef DMS_TRACE
+            std::cout << "Skipping track $" << hexfmt(tr_hdr.track) << " - Banner track\n";
+            hexdump(std::cout, track_data.data(), track_data.size());
+#endif
+        } else {
+            if (tr_hdr.track > hdr.hightrack)
+                throw invalid_dms_file { "Track $" + hexstring(tr_hdr.track) + " is out range $" + hexstring(hdr.hightrack) };
+
+            if (tr_hdr.unpack_size != track_size)
+                throw invalid_dms_file { "Track $" + hexstring(tr_hdr.track) + " has invalid size $" + hexstring(tr_hdr.unpack_size) };
+
+            memcpy(&res[tr_hdr.track * track_size], track_data.data(), track_size);
+        }
 
         offset += tr_hdr.pack_size;
     }

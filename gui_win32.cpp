@@ -1113,7 +1113,7 @@ private:
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
             } else if (id >= 200 && id < 200 + max_disks && code == BN_CLICKED) {
                 std::string f;
-                if (browse_for_file(hwnd, "Amiga Disk File (*.adf)\0*.adf\0All files (*.*)\0*.*\0", f))
+                if (browse_for_file(hwnd, "Floppy image (*.adf;*.dms)\0*.adf;*.dms\0Amiga Disk File (*.adf)\0*.adf\0Disk Masher System (*.dms)\0*.adf\0All files (*.*)\0*.*\0", f))
                     SetWindowTextA(filename_edit_[id - 200], f.c_str());
             } else if (id >= 300 && id < 300 + max_disks && code == BN_CLICKED) {
                 SetWindowTextA(filename_edit_[id - 300], "");
