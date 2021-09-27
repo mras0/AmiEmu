@@ -790,12 +790,12 @@ void validate_test(winuae_test_file& tf, const cpu_state& after, winuae_test_sta
         check("D" + std::to_string(i), check_state.regs[i], after.d[i]);
     for (int i = 0; i < 7; ++i)
         check("A" + std::to_string(i), check_state.regs[CT_AREG+i], after.A(i));
-    check("USP", check_state.regs[CT_AREG + 7], after.usp);
     if (exc) {
         // TODO: This is pretty insufficient
         check("PC (after exception)", 0xECC000U | exc << 4, after.pc);
-        // TODO: SR...
+        // TODO: SR&SP...
     } else {
+        check("SP", check_state.regs[CT_AREG + 7], after.usp);
         check("PC", check_state.pc, after.pc);
         check("SR", static_cast<uint16_t>(check_state.sr), after.sr);
     }
@@ -883,8 +883,6 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
                     cpu_state input_state {};
                     memcpy(input_state.d, &cur_state.regs[0], sizeof(input_state.d));
                     memcpy(input_state.a, &cur_state.regs[8], sizeof(input_state.a));
-                    input_state.ssp = test_header.super_stack_memory;
-                    input_state.usp = cur_state.regs[15];
                     input_state.pc = cur_state.pc;
                     if (maxccr >= 32)
                         input_state.sr = ccr & 0xff;
@@ -893,6 +891,8 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
 
                     if (extraccr & 1)
                         input_state.sr |= srm_s;
+                    input_state.ssp = test_header.super_stack_memory - 0x80;
+                    input_state.usp = cur_state.regs[15];
 
                     m68000 cpu { mem, input_state };
 
@@ -947,9 +947,8 @@ bool run_winuae_tests()
     //assert(0);
 
     const std::vector<const char*> skip = {
-        "MV2SR", // Bugged?
         // Require excpetion handling
-        "MVR2USP", "MVUSP2R", "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
+        "RESET", "RTE", "STOP", "TRAPV", "ILLEGAL",
         // Not implemented
         "CHK", "TRAP", "MVPMR", "MVPRM", "RTR", "TAS",
         // TODO (Undefinde flags?)
