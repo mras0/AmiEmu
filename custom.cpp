@@ -1186,6 +1186,7 @@ public:
 
         uint8_t spriteidx[8];
         for (uint8_t spr = 0; spr < 8; ++spr) {
+            spriteidx[spr] = 0;
             if (s_.spr_vpos_states[spr] == sprite_vpos_state::vpos_waiting && s_.sprite_vpos_start(spr) == s_.vpos) {
                 if (DEBUG_SPRITE)
                     DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_states[spr] << " Now active\n";
@@ -1202,17 +1203,16 @@ public:
                 s_.spr_hold_a[spr] = s_.sprdata[spr];
                 s_.spr_hold_b[spr] = s_.sprdatb[spr];
                 s_.spr_hold_cnt[spr] = 16;
-            }
-
-            spriteidx[spr] = 0;
-            if (s_.spr_hold_cnt[spr]) {
-                if (s_.spr_hold_a[spr] & 0x8000)
-                    spriteidx[spr] |= 1;
-                if (s_.spr_hold_b[spr] & 0x8000)
-                    spriteidx[spr] |= 2;
-                s_.spr_hold_a[spr] <<= 1;
-                s_.spr_hold_b[spr] <<= 1;
-                --s_.spr_hold_cnt[spr];
+            } else if (s_.spr_hold_cnt[spr]) {
+                if (s_.spr_hold_cnt[spr]) {
+                    if (s_.spr_hold_a[spr] & 0x8000)
+                        spriteidx[spr] |= 1;
+                    if (s_.spr_hold_b[spr] & 0x8000)
+                        spriteidx[spr] |= 2;
+                    s_.spr_hold_a[spr] <<= 1;
+                    s_.spr_hold_b[spr] <<= 1;
+                    --s_.spr_hold_cnt[spr];
+                }
             }
         }
 
