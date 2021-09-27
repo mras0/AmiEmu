@@ -1058,8 +1058,7 @@ public:
                                 idx = pf2 + 8;
                         }
                         return rgb4_to_8(s_.color[idx]);
-                    } else if (s_.bplcon0 & BPLCON0F_HOMOD) {
-                        // TODO: HAM5
+                    } else if ((s_.bplcon0 & BPLCON0F_HOMOD) && nbpls >= 5) { // HAM is only active if 5 or 6 bitplanes
                         const int ibits = ((nbpls + 1) & ~1) - 2;
                         const int val = (pf1 & 0xf) << (8 - ibits);
                         auto& col = s_.ham_color;
