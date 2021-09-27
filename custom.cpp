@@ -1809,7 +1809,7 @@ public:
             uint8_t active_sprite_group = 8;
 
             // Sprites are only visible after write to BPL1DAT
-            if (s_.bpl1dat_written_this_line) {
+            if (any_sprite_active_ && s_.bpl1dat_written_this_line) {
                 // Sprite 0 has highest priority, 7 lowest
                 for (uint8_t spr = 0; spr < 8; ++spr) {
                     if (!(spr & 1) && (s_.sprctl[spr + 1] & 0x80)) {
@@ -1984,6 +1984,7 @@ public:
         // Sprite vpos check is 4 CCKs ahead
         const uint16_t spr_vpos_check = s_.vpos + (s_.hpos + 8 >= hpos_per_line);
         uint8_t spriteidx[8];
+        any_sprite_active_ = false;
         for (uint8_t spr = 0; spr < 8; ++spr) {
             spriteidx[spr] = 0;
 
@@ -2016,6 +2017,7 @@ public:
                     s_.spr_hold_a[spr] <<= 1;
                     s_.spr_hold_b[spr] <<= 1;
                     --s_.spr_hold_cnt[spr];
+                    any_sprite_active_ = true;
                 }
             }
         }
@@ -2773,6 +2775,7 @@ private:
     uint32_t current_pc_; // For debug output
     uint32_t floppy_speed_;
     uint32_t col32_[32];
+    bool any_sprite_active_;
     // bitplane debugging (don't need to be saved)
     int rem_pixels_odd_;
     int rem_pixels_even_;
