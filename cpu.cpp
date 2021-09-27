@@ -118,8 +118,12 @@ public:
 
     step_result step(uint8_t current_ipl)
     {
-        if (state_.stopped && !current_ipl) {
-            return { state_.pc, state_.pc, 0, 0 };
+        bool trace_active = !!(state_.sr & srm_trace);
+
+        if (state_.stopped) {
+            if (!trace_active && !current_ipl)
+                return { state_.pc, state_.pc, 0, 0 };
+            state_.stopped = false;
         }
         assert(current_ipl < 8);
 
@@ -128,7 +132,6 @@ public:
         step_res_ = { state_.pc, 0, 0, 0 };
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
-            state_.stopped = false;
             do_interrupt(current_ipl);
             if (trace_) {
                 *trace_ << "Interrupt switching to IPL " << static_cast<int>(current_ipl) << "\n";
@@ -141,20 +144,29 @@ public:
             print_cpu_state(*trace_, state_);
 
         start_pc_ = state_.pc;
-        iword_idx_ = 0;        
+        iword_idx_ = 0;
+        if (state_.pc & 1) {
+            invalid_access_address_ = state_.pc;
+            invalid_access_info_ = 16 | 2; // 16=Read, 2=Program
+            if (state_.sr & srm_s)
+                invalid_access_info_ |= 4;
+            trace_active = false;
+            do_trap(interrupt_vector::address_error);
+            goto out;
+        }
         (void)read_iword();
         inst_ = &instructions[iwords_[0]];
 
         if ((inst_->extra & extra_priv_flag) && !(state_.sr & srm_s)) {
             state_.pc = start_pc_; // "The saved value of the program counter is the address of the first word of the instruction causing the privilege violation.
             do_trap(interrupt_vector::privililege_violation);
-            //step_res_.clock_cycles = 34;
-            //step_res_.mem_accesses = 7;
+            trace_active = false;
             goto out;
         }
 
         if (inst_->type == inst_type::ILLEGAL) {
             state_.pc = start_pc_; // Same as for privililege violation
+            trace_active = false;
             switch (iwords_[0] >> 12) {
             case 0xA:
                 do_trap(interrupt_vector::line_1010);
@@ -171,88 +183,95 @@ public:
         assert(inst_->nea <= 2);
 
         ea_calced_[0] = ea_calced_[1] = false;
+        try {
 
-        switch (inst_->type) {
+            switch (inst_->type) {
 #define HANDLE_INST(t) \
     case inst_type::t: \
         handle_##t();  \
         break;
-            HANDLE_INST(ABCD);
-            HANDLE_INST(ADD);
-            HANDLE_INST(ADDA);
-            HANDLE_INST(ADDQ);
-            HANDLE_INST(ADDX);
-            HANDLE_INST(AND);
-            HANDLE_INST(ASL);
-            HANDLE_INST(ASR);
-            HANDLE_INST(Bcc);
-            HANDLE_INST(BRA);
-            HANDLE_INST(BSR);
-            HANDLE_INST(BCHG);
-            HANDLE_INST(BCLR);
-            HANDLE_INST(BSET);
-            HANDLE_INST(BTST);
-            HANDLE_INST(CHK);
-            HANDLE_INST(CLR);
-            HANDLE_INST(CMP);
-            HANDLE_INST(CMPA);
-            HANDLE_INST(CMPM);
-            HANDLE_INST(DBcc);
-            HANDLE_INST(DIVU);
-            HANDLE_INST(DIVS);
-            HANDLE_INST(EOR);
-            HANDLE_INST(EXG);
-            HANDLE_INST(EXT);
-            HANDLE_INST(JMP);
-            HANDLE_INST(JSR);
-            HANDLE_INST(LEA);
-            HANDLE_INST(LINK);
-            HANDLE_INST(LSL);
-            HANDLE_INST(LSR);
-            HANDLE_INST(MOVE);
-            HANDLE_INST(MOVEA);
-            HANDLE_INST(MOVEM);
-            HANDLE_INST(MOVEP);
-            HANDLE_INST(MOVEQ);
-            HANDLE_INST(MULS);
-            HANDLE_INST(MULU);
-            HANDLE_INST(NBCD);
-            HANDLE_INST(NEG);
-            HANDLE_INST(NEGX);
-            HANDLE_INST(NOT);
-            HANDLE_INST(NOP);
-            HANDLE_INST(OR);
-            HANDLE_INST(PEA);
-            HANDLE_INST(ROL);
-            HANDLE_INST(ROR);
-            HANDLE_INST(ROXL);
-            HANDLE_INST(ROXR);
-            HANDLE_INST(RTE);
-            HANDLE_INST(RTR);
-            HANDLE_INST(RTS);
-            HANDLE_INST(SBCD);
-            HANDLE_INST(Scc);
-            HANDLE_INST(STOP);
-            HANDLE_INST(SUB);
-            HANDLE_INST(SUBA);
-            HANDLE_INST(SUBQ);
-            HANDLE_INST(SUBX);
-            HANDLE_INST(SWAP);
-            HANDLE_INST(TAS);
-            HANDLE_INST(TRAP);
-            HANDLE_INST(TRAPV);
-            HANDLE_INST(TST);
-            HANDLE_INST(UNLK);
+                HANDLE_INST(ABCD);
+                HANDLE_INST(ADD);
+                HANDLE_INST(ADDA);
+                HANDLE_INST(ADDQ);
+                HANDLE_INST(ADDX);
+                HANDLE_INST(AND);
+                HANDLE_INST(ASL);
+                HANDLE_INST(ASR);
+                HANDLE_INST(Bcc);
+                HANDLE_INST(BRA);
+                HANDLE_INST(BSR);
+                HANDLE_INST(BCHG);
+                HANDLE_INST(BCLR);
+                HANDLE_INST(BSET);
+                HANDLE_INST(BTST);
+                HANDLE_INST(CHK);
+                HANDLE_INST(CLR);
+                HANDLE_INST(CMP);
+                HANDLE_INST(CMPA);
+                HANDLE_INST(CMPM);
+                HANDLE_INST(DBcc);
+                HANDLE_INST(DIVU);
+                HANDLE_INST(DIVS);
+                HANDLE_INST(EOR);
+                HANDLE_INST(EXG);
+                HANDLE_INST(EXT);
+                HANDLE_INST(JMP);
+                HANDLE_INST(JSR);
+                HANDLE_INST(LEA);
+                HANDLE_INST(LINK);
+                HANDLE_INST(LSL);
+                HANDLE_INST(LSR);
+                HANDLE_INST(MOVE);
+                HANDLE_INST(MOVEA);
+                HANDLE_INST(MOVEM);
+                HANDLE_INST(MOVEP);
+                HANDLE_INST(MOVEQ);
+                HANDLE_INST(MULS);
+                HANDLE_INST(MULU);
+                HANDLE_INST(NBCD);
+                HANDLE_INST(NEG);
+                HANDLE_INST(NEGX);
+                HANDLE_INST(NOT);
+                HANDLE_INST(NOP);
+                HANDLE_INST(OR);
+                HANDLE_INST(PEA);
+                HANDLE_INST(ROL);
+                HANDLE_INST(ROR);
+                HANDLE_INST(ROXL);
+                HANDLE_INST(ROXR);
+                HANDLE_INST(RTE);
+                HANDLE_INST(RTR);
+                HANDLE_INST(RTS);
+                HANDLE_INST(SBCD);
+                HANDLE_INST(Scc);
+                HANDLE_INST(STOP);
+                HANDLE_INST(SUB);
+                HANDLE_INST(SUBA);
+                HANDLE_INST(SUBQ);
+                HANDLE_INST(SUBX);
+                HANDLE_INST(SWAP);
+                HANDLE_INST(TAS);
+                HANDLE_INST(TRAP);
+                HANDLE_INST(TRAPV);
+                HANDLE_INST(TST);
+                HANDLE_INST(UNLK);
 #undef HANDLE_INST
-        default: {
-            std::ostringstream oss;
-            disasm(oss, start_pc_, iwords_, inst_->ilen);
-            throw std::runtime_error { "Unhandled instruction: " + oss.str() };
+            default: {
+                std::ostringstream oss;
+                disasm(oss, start_pc_, iwords_, inst_->ilen);
+                throw std::runtime_error { "Unhandled instruction: " + oss.str() };
+            }
+            }
+            assert(iword_idx_ == inst_->ilen);
+            assert(inst_->nea == 0 || (ea_calced_[0] && (inst_->nea == 1 || ea_calced_[1])));
+        } catch (const address_error_exception&) {
+            trace_active = false;
+            state_.pc = start_pc_; // ??
+            if (state_.sr & srm_s)
+                invalid_access_info_ |= 4;
+            do_trap(interrupt_vector::address_error);
         }
-        }
-
-        assert(iword_idx_ == inst_->ilen);
-        assert(inst_->nea == 0 || (ea_calced_[0] && (inst_->nea == 1 || ea_calced_[1])));
 
     out:
         if (trace_) {
@@ -262,13 +281,26 @@ public:
 
         step_res_.current_pc = state_.pc;
 
-        prefetch();
+        if (state_.pc & 1) {
+            invalid_access_address_ = state_.pc;
+            invalid_access_info_ = 16 | 2; // 16=Read, 2=Program
+            if (state_.sr & srm_s)
+                invalid_access_info_ |= 4;
+            do_trap(interrupt_vector::address_error);
+        } else {
+            prefetch();
+
+            if (trace_active)
+                do_trap(interrupt_vector::trace);
+        }
 
         return step_res_;
     }
 
 private:
     static constexpr uint32_t invalid_prefetch_address = ~0U;
+    struct address_error_exception {
+    };
 
     memory_handler& mem_;
     cpu_state state_;
@@ -282,9 +314,11 @@ private:
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     bool ea_calced_[2];
     uint32_t prefetch_address_ = invalid_prefetch_address;
-    uint16_t prefecth_val_ = 0;
+    uint16_t prefecth_val_ = 0;    
     std::ostream* trace_ = nullptr;
     step_result step_res_ { 0, 0 };
+    uint32_t invalid_access_address_ = 0;
+    uint16_t invalid_access_info_ = 0;
 
     void add_cycles(uint8_t cnt)
     {
@@ -307,6 +341,11 @@ private:
 
     uint16_t mem_read16(uint32_t addr)
     {
+        if (addr & 1) {
+            invalid_access_address_ = addr;
+            invalid_access_info_ = 16 | 8 | 1; // 16=Read 8=Not instruction 1=Data
+            throw address_error_exception {};
+        }
         add_mem_access();
         return mem_.read_u16(addr);
     }
@@ -326,6 +365,11 @@ private:
 
     void mem_write16(uint32_t addr, uint16_t val)
     {
+        if (addr & 1) {
+            invalid_access_address_ = addr;
+            invalid_access_info_ = 8 | 1; // 8=Not instruction 1=Data
+            throw address_error_exception {};
+        }
         add_mem_access();
         mem_.write_u16(addr, val);
     }
@@ -355,12 +399,19 @@ private:
     {
         if (prefetch_address_ == state_.pc)
             return;
+        if (state_.pc & 1)
+            throw std::runtime_error { "Prefetch from odd address: $" + hexstring(state_.pc) };
         prefetch_address_ = state_.pc;
         prefecth_val_ = mem_read16(prefetch_address_);
     }
 
     void useless_prefetch()
     {
+        if (state_.pc & 1) {
+            invalid_access_address_ = state_.pc;
+            invalid_access_info_ = 0;
+            throw address_error_exception {};
+        }
         mem_read16(state_.pc);
         prefetch_address_ = invalid_prefetch_address;
     }
@@ -834,12 +885,14 @@ private:
         switch (vec) {
         case interrupt_vector::reset_ssp:
         case interrupt_vector::reset_pc:
+            // /RESET              | 40(6/0)  |38   (n-)*5   nn       nF nf nV nv np np
+            assert(!"Not implemented");
+            break;
         case interrupt_vector::bus_error:
         case interrupt_vector::address_error:
             // Address error       | 50(4/7)  |48   nn ns ns nS ns ns ns nS nV nv np np
             // Bus error           | 50(4/7)  |48   nn ns ns nS ns ns ns nS nV nv np np
-            // /RESET              | 40(6/0)  |38   (n-)*5   nn       nF nf nV nv np np
-            assert(!"Not implemented");
+            add_cycles(6); // 4 more words are stacked (=
             break;
         case interrupt_vector::zero_divide:
             // Divide by Zero      | 38(4/3)+ |36         nn nn    ns ns nS nV nv np np
@@ -882,6 +935,10 @@ private:
         state_.update_sr(static_cast<sr_mask>(srm_trace | srm_s | srm_ipl), srm_s | ipl << sri_ipl); // Clear trace, set superviser mode
         // Now always on supervisor stack
 
+        if (state_.A(7) & 1) {
+            throw std::runtime_error { "Supervisor stack at odd address: $" + hexstring(state_.A(7)) };
+        }
+
         // From MC68000UM 6.2.5
         // "The current program
         // counter value and the saved copy of the status register are stacked using the SSP. The
@@ -893,6 +950,14 @@ private:
         push_u16(saved_sr);
 
         state_.pc = mem_read32(static_cast<uint32_t>(vec) * 4);
+        if (vec == interrupt_vector::address_error || vec == interrupt_vector::bus_error) {
+            if (state_.pc & 1) {
+                throw std::runtime_error { "Double fault. Address error vector at odd address: $" + hexstring(state_.pc) };
+            }
+            push_u16(iwords_[0]);
+            push_u32(invalid_access_address_);
+            push_u16(invalid_access_info_);
+        }
         useless_prefetch();
     }
 
