@@ -905,7 +905,8 @@ public:
             const uint32_t addr = s_.bltpt[2];
             const bool draw = !(s_.bltcon1 & BC1F_ONEDOT) || !dot_this_line;
             s_.bltdat[2] = chip_read(addr);
-            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> ashift, (s_.bltdat[1] & 1) ? 0xFFFF : 0, s_.bltdat[2]);
+            s_.bltbhold = s_.bltdat[1] & 1 ? 0xFFFF : 0;
+            s_.bltdat[3] = blitter_func(s_.bltcon0 & 0xff, (s_.bltdat[0] & s_.bltafwm) >> ashift, s_.bltbhold, s_.bltdat[2]);
             s_.bltpt[0] += sign ? s_.bltmod[1] : s_.bltmod[0];
             dot_this_line = true;
 
@@ -992,6 +993,9 @@ public:
                 incr_ptr(s_.bltpt[index]);
             };
 
+            bool dwrite = false;
+            uint32_t dpt = 0;
+            uint16_t dval = 0;
             for (uint16_t y = 0; y < s_.blth; ++y) {
                 bool inpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);
                 for (uint16_t x = 0; x < s_.bltw; ++x) {
@@ -1024,6 +1028,9 @@ public:
                     if (s_.bltcon0 & BC0F_SRCC)
                         do_dma(2);
 
+                    if (dwrite)
+                        chip_write(dpt, dval);
+
                     uint16_t val = blitter_func(static_cast<uint8_t>(s_.bltcon0), ahold, s_.bltbhold, s_.bltdat[2]);
                     if (s_.bltcon1 & (BC1F_FILL_OR|BC1F_FILL_XOR)) {
                         for (uint8_t bit = 0; bit < 16; ++bit) {
@@ -1041,7 +1048,9 @@ public:
                     }
                     any |= val;
                     if (s_.bltcon0 & BC0F_DEST) {
-                        chip_write(s_.bltpt[3], val);
+                        dwrite = true;
+                        dpt = s_.bltpt[3];
+                        dval = val;
                         incr_ptr(s_.bltpt[3]);
                     }
                 }
@@ -1050,6 +1059,8 @@ public:
                 if (s_.bltcon0 & BC0F_SRCC) incr_ptr(s_.bltpt[2], s_.bltmod[2]);
                 if (s_.bltcon0 & BC0F_DEST) incr_ptr(s_.bltpt[3], s_.bltmod[3]);
             }
+            if (dwrite)
+                chip_write(dpt, dval);
         }
         s_.intreq |= INTF_BLIT;
         s_.dmacon &= ~(DMAF_BLTDONE|DMAF_BLTNZERO);
