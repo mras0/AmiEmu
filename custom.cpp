@@ -890,6 +890,8 @@ public:
 #endif
 
                 auto one_pixel = [&]() {
+                    TODO_ASSERT(!(s_.bplcon0 & BPLCON0F_DBLPF));
+
                     uint8_t index = 0;
                     for (int i = 0; i < nbpls; ++i) {
                         if (s_.bpldat_shift[i] & 0x8000)
@@ -905,8 +907,10 @@ public:
                         rem_pixelsO = rem_pixelsE = 0;
                     }
 #endif
-                    if (nbpls < 6)
+                    if (nbpls < 6) {
+                        assert(!(s_.bplcon0 & BPLCON0F_HOMOD));
                         return rgb4_to_8(s_.color[index]);
+                    }
                     if (s_.bplcon0 & BPLCON0F_HOMOD) {
                         // TODO: HAM5
                         const int ibits = ((nbpls + 1) & ~1) - 2;
@@ -930,8 +934,7 @@ public:
                         }
                         return col;
                     } else {
-                        // EHB
-                        TODO_ASSERT(!"EHB not impemented");
+                        // EHB bpls=6 && !HAM && !DPU
                         const auto col = rgb4_to_8(s_.color[index & 0x1f]);
                         return index & 0x20 ? (col & 0xfefefe) >> 1 : col;
                     }
@@ -1422,6 +1425,8 @@ public:
             assert(!s_.bltw && !s_.blth && !(s_.dmacon & DMAF_BLTDONE));
             s_.bltw = val & 0x3f ? val & 0x3f : 0x40;
             s_.blth = val >> 6 ? val >> 6 : 0x400;
+            s_.bltaold = 0;
+            s_.bltbold = 0;
             s_.dmacon |= DMAF_BLTDONE;
             return;
         case BLTCMOD:
