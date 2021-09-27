@@ -32,7 +32,7 @@ enum sr_mask : uint16_t {
     srm_s     = 1 << sri_s,
     srm_trace = 3 << sri_trace,
 
-    srm_illegal  = 1 << 5 | 1 << 6 | 1 << 7 | 1 << 11,
+    srm_illegal  = 1 << 5 | 1 << 6 | 1 << 7 | 1 << 11 | srm_m | 1 << sri_trace,
     srm_ccr_no_x = srm_c | srm_v | srm_z | srm_n,
     srm_ccr      = srm_ccr_no_x | srm_x,
 };

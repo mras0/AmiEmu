@@ -1849,11 +1849,10 @@ private:
     {
         assert(inst_->nea == 0);
         assert(state_.sr & srm_s);
-        const auto sr = pop_u16();
+        const uint16_t sr = pop_u16() & ~srm_illegal;
         state_.pc = pop_u32();
         state_.sr = sr; // Only after popping PC (otherwise we switch stacks too early)
         useless_prefetch();
-
     }
 
     void handle_RTR()
