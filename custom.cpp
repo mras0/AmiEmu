@@ -2,93 +2,7 @@
 #include "ioutil.h"
 
 #include <iostream>
-
-class custom_handler::impl : public memory_area_handler {
-public:
-    explicit impl(memory_handler& mem_handler)
-        : mem_handler_ { mem_handler }
-    {
-        mem_handler_.register_handler(*this, 0xDFF000, 0x1000);
-    }
-
-    void step()
-    {
-    }
-
-    uint8_t read_u8(uint32_t, uint32_t offset) override
-    {
-        switch (offset) {
-        case POTGOR:
-            std::cerr << "[CUSTOM] Ignoring read from " << regname(offset) << "\n";
-            return 0xff;
-        }
-        std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
-        return 0xff;
-    }
-    uint16_t read_u16(uint32_t, uint32_t offset) override
-    {
-        if (offset == SERDATR) {
-            // Don't spam in DiagROM
-            return 0xff;
-        }
-
-        std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
-        return 0xffff;
-    }
-    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
-    {
-        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
-                  << " val $" << hexfmt(val) << "\n";
-    }
-    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
-    {
-        switch (offset) {
-        case SERDAT:
-            std::cerr << "[CUSTOM] Serial output ($" << hexfmt(val) << ") '" << (isprint(val&0xff)?static_cast<char>(val&0xff):' ') << "'\n"; 
-            return;
-        case INTREQ:
-            // Don't spam
-            return;
-
-        case SERPER:
-        case POTGO:
-        case COP1LCH:
-        case COP1LCL:
-        case COP2LCH:
-        case COP2LCL:
-        case COPJMP1:
-        case COPJMP2:
-        case DIWSTRT:
-        case DIWSTOP:
-        case DDFSTRT:
-        case DDFSTOP:
-        case INTENA:
-        case DMACON:
-        case BPL1PTH:
-        case BPL1PTL:
-        case BPLCON0:
-        case BPLCON1:
-        case BPLCON2:
-        case BPLCON3:
-        case BPLMOD1:
-        case BPLMOD2:
-        case BPL1DAT:
-        ignore:
-            std::cerr << "[CUSTOM] Ignoring write to " << regname(offset) << " val $" << hexfmt(val) << "\n";
-            return;
-        }
-
-        if (offset >= COLOR00 && offset <= COLOR31)
-            goto ignore;
-
-        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
-    }
-
-private:
-    memory_handler& mem_handler_;
-
-    //uint16_t hpos = 0; // 1/160 of screen width (280 ns)
-    //uint16_t vpos = 0;
+#include <cassert>
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
@@ -172,21 +86,175 @@ private:
     X(COLOR31 , 0x1BE , 1) /* Color table 31                                          */ \
 // keep this line clear (for macro continuation)
 
-    static std::string regname(uint32_t offset)
+
+namespace {
+
+static std::string regname(uint32_t offset)
+{
+    switch (offset) {
+#define CHECK_NAME(name, offset, _) case offset: return #name;
+        CUSTOM_REGS(CHECK_NAME)
+#undef CHECK_NAME
+    }
+    return "$" + hexstring(offset, 3);
+}
+
+enum regnum {
+#define REG_NUM(name, offset, _) name = offset,
+    CUSTOM_REGS(REG_NUM)
+#undef REG_NUM
+};
+
+// 454 virtual Lores pixels
+// 625 lines/frame (interlaced)
+// https://retrocomputing.stackexchange.com/questions/44/how-to-obtain-256-arbitrary-colors-with-limitation-of-64-per-line-in-amiga-ecs
+
+// Maximum overscan (http://coppershade.org/articles/AMIGA/Denise/Maximum_Overscan/)
+// DIWSTRT = $1b51
+// DIWSTOP = $37d1
+// DDFSTRT = $0020
+// DDFSTOP = $00d8
+// BPLCON2 = $0000
+
+// Color clocks per line
+// 0..$E2 (227.5 actually, on NTSC they alternate between 227 and 228)
+// 64us per line (52us visible), ~454 virtual lorespixels (~369 max visible)
+// Each color clock produces 2 lores or 4 hires pixels
+
+static constexpr uint16_t hpos_per_line    = 455; // 227.5 color clocks, lores pixels
+
+static constexpr uint16_t lores_min_pixel  = 0x51; 
+static constexpr uint16_t lores_max_pixel  = 0x1d1;
+static constexpr uint16_t hires_min_pixel  = 2 * lores_min_pixel;
+static constexpr uint16_t hires_max_pixel  = 2 * lores_max_pixel;
+
+static constexpr uint16_t vpos_per_field  = 312;
+static constexpr uint16_t vpos_per_frame  = 625;
+static constexpr uint16_t vblank_end_vpos = 28;
+
+static_assert(graphics_width == hires_max_pixel - hires_min_pixel);
+static_assert(graphics_height == (vpos_per_field - vblank_end_vpos) * 2);
+
+constexpr uint32_t rgb4_to_8(const uint16_t rgb4)
+{
+    const uint32_t r = (rgb4 >> 8) & 0xf;
+    const uint32_t g = (rgb4 >> 4) & 0xf;
+    const uint32_t b = rgb4 & 0xf;
+    return r << 20 | r << 16 | g << 12 | g << 8 | b << 4 | b;
+}
+
+struct custom_state {
+    uint16_t hpos; // Resolution is in low-res pixels
+    uint16_t vpos;
+
+    uint16_t color[32];   // $180..$1C0
+};
+
+}
+
+class custom_handler::impl : public memory_area_handler {
+public:
+    explicit impl(memory_handler& mem_handler)
+        : mem_handler_ { mem_handler }
     {
-        switch (offset) {
-    #define CHECK_NAME(name, offset, _) case offset: return #name;
-            CUSTOM_REGS(CHECK_NAME)
-    #undef CHECK_NAME
-        }
-        return "$" + hexstring(offset, 3);
+        mem_handler_.register_handler(*this, 0xDFF000, 0x1000);
+        reset();
     }
 
-    enum regnum {
-    #define REG_NUM(name, offset, _) name = offset,
-        CUSTOM_REGS(REG_NUM)
-    #undef REG_NUM
-    };
+    void reset()
+    {
+        memset(gfx_buf_, 0, sizeof(gfx_buf_));
+        memset(&s_, 0, sizeof(s_));
+    }
+
+    void step()
+    {
+        // First readble hpos that's interpreted as being on a new line is $005 (since it's resolution is half that of lowres pixels -> 20) 
+        const unsigned virt_pixel = s_.hpos * 2 + 20;
+        const unsigned disp_pixel = virt_pixel - hires_min_pixel;
+
+        if (s_.vpos >= vblank_end_vpos && disp_pixel < graphics_width) {
+            uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel];
+            assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
+            // TODO: Interlace and hires
+            row[0] = row[1] = row[0 + graphics_width] = row[1 + graphics_width] = rgb4_to_8(s_.color[0]);
+        }
+
+        if (++s_.hpos == hpos_per_line) {
+            s_.hpos = 0;
+            if (++s_.vpos == vpos_per_field) {
+                s_.vpos = 0;
+            }
+        }
+    }
+
+    uint8_t read_u8(uint32_t addr, uint32_t offset) override
+    {
+        const auto v = read_u16(addr & ~1, offset & ~1);
+        return (offset & 1 ? v : v >> 8) & 0xff;
+    }
+
+    uint16_t read_u16(uint32_t, uint32_t offset) override
+    {
+        switch (offset) {
+        case VPOSR:
+            // TODO: Bit15 LOF (long frame)
+            return (s_.vpos >> 8)&1;
+        case VHPOSR:
+            return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
+        case SERDATR:
+            // Don't spam in DiagROM
+            return 0xff;
+        }
+
+        std::cerr << "Unhandled read from custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")\n";
+        return 0xffff;
+    }
+    void write_u8(uint32_t, uint32_t offset, uint8_t val) override
+    {
+        auto write_partial = [offset, val](uint16_t& r) {
+            if (offset & 1)
+                r = (r & 0xff00) | val;
+            else
+                r = val << 8 | (r & 0xff);
+        };
+
+        if (offset >= COLOR00 && offset <= COLOR31 + 1) {
+            write_partial(s_.color[(offset - COLOR00) / 2]);
+            return;
+        }
+
+        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
+                  << " val $" << hexfmt(val) << "\n";
+    }
+    void write_u16(uint32_t, uint32_t offset, uint16_t val) override
+    {
+        if (offset >= COLOR00 && offset <= COLOR31) {
+            s_.color[(offset-COLOR00)/2] = val;
+            return;
+        }
+
+        switch (offset) {
+        case SERDAT:
+            std::cerr << "[CUSTOM] Serial output ($" << hexfmt(val) << ") '" << (isprint(val & 0xff) ? static_cast<char>(val & 0xff) : ' ') << "'\n";
+            return;
+        }
+        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
+                  << " val $" << hexfmt(val) << "\n";
+    }
+
+    const uint32_t* new_frame()
+    {
+        if (s_.hpos == 0 && s_.vpos == 0) {
+            return gfx_buf_;
+        }
+        return nullptr;
+    }
+
+private:
+    memory_handler& mem_handler_;
+    uint32_t gfx_buf_[graphics_width * graphics_height];
+    custom_state s_;
 };
 
 custom_handler::custom_handler(memory_handler& mem_handler)
@@ -199,4 +267,9 @@ custom_handler::~custom_handler() = default;
 void custom_handler::step()
 {
     impl_->step();
+}
+
+const uint32_t* custom_handler::new_frame()
+{
+    return impl_->new_frame();
 }

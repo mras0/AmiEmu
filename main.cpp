@@ -10,6 +10,7 @@
 #include "cia.h"
 #include "custom.h"
 #include "cpu.h"
+#include "gui.h"
 
 int main(int argc, char* argv[])
 {
@@ -30,11 +31,17 @@ int main(int argc, char* argv[])
                 throw std::runtime_error { "Unrecognized command line parameter: " + std::string { argv[i] } };
         }
 
-        //cpu.trace(true);
+
+        gui g {graphics_width, graphics_height};
+        const unsigned steps_per_update = 10000;
+        unsigned steps_to_update = 0;
+
         for (;;) {
             try {
                 cpu.step();
                 custom.step();
+                if (auto f = custom.new_frame())
+                    g.update_image(f);
                 //if (cpu.state().pc == 0xFC00E2) // After delay loop
                 //    cpu.trace(true);
                 //if (cpu.state().pc == 0xFC046C)
@@ -43,6 +50,13 @@ int main(int argc, char* argv[])
                 //    cpu.trace(true);
                 //else if (cpu.instruction_count() == 7110+2)
                 //    break;
+
+
+                if (!steps_to_update--) {
+                    if (!g.update())
+                        break;
+                    steps_to_update = steps_per_update;
+                }
             } catch (...) {
                 cpu.show_state(std::cerr);
                 throw;

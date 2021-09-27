@@ -47,9 +47,10 @@ target_include_directories(m68k PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 add_executable(test68k test68k.cpp)
 target_link_libraries(test68k PRIVATE utils m68k)
 
-add_executable(amiemu 
+add_executable(amiemu
     main.cpp
     cia.cpp cia.h
     custom.cpp custom.h
+    gui_win32.cpp gui.h
     )
 target_link_libraries(amiemu PRIVATE utils m68k)
