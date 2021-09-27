@@ -823,7 +823,7 @@ int main(int argc, char* argv[])
                     continue;
                 const auto end = mw.address + (mw.size ? mw.size : 4);
                 if (addr < end && mw.address < addr + size) {
-                    std::cout << "Memwatch $" << hexfmt(&mw - &memwatches[0]) << " " << mw << " hit! Address=$" << hexfmt(addr) << " Access size=" << (int)size;
+                    std::cout << "PC=" << hexfmt(cpu_step.last_pc) << " Memwatch $" << hexfmt(&mw - &memwatches[0]) << " " << mw << " hit! Address=$" << hexfmt(addr) << " Access size=" << (int)size;
                     if (write)
                         std::cout << " Write of value: $" << hexfmt(data, size * 2) << "\n";
                     else
