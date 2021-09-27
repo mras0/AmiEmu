@@ -1491,7 +1491,7 @@ public:
         }
 
         if (s_.vpos >= vblank_end_vpos && disp_pixel < graphics_width) {
-            uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? graphics_width : 0)];
+            uint32_t* row = &gfx_buf_[(s_.vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? 0 : graphics_width)];
             assert(&row[1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
 
             if (vert_disp && horiz_disp) {
@@ -1635,9 +1635,9 @@ public:
             }
 
             if (!(s_.bplcon0 & BPLCON0F_LACE) && s_.long_frame) {
-                assert(&row[1-static_cast<int>(graphics_width)] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
-                row[0 - static_cast<int>(graphics_width)] = row[0];
-                row[1 - static_cast<int>(graphics_width)] = row[1];
+                assert(&row[graphics_width + 1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
+                row[0 + graphics_width] = row[0];
+                row[1 + graphics_width] = row[1];
             }
         }
 

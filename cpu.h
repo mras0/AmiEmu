@@ -103,7 +103,7 @@ struct cpu_state {
 
     void update_sr(sr_mask mask, uint16_t val)
     {
-        assert((mask & srm_illegal) == 0);
+        assert(((val & mask) & srm_illegal) == 0);
         assert((val & ~mask) == 0);
         sr = (sr & ~mask) | val;
     }
