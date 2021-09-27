@@ -8,12 +8,16 @@
 
 #define TODO_ASSERT(expr) do { if (!(expr)) throw std::runtime_error{("TODO: " #expr " in ") + std::string{__FILE__} + " line " + std::to_string(__LINE__) }; } while (0)
 
+//#define COPPER_DEBUG
+
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
     X(BLTDDAT , 0x000 , 0) /* Blitter destination early read (dummy address)          */ \
     X(DMACONR , 0x002 , 0) /* DMA control (and blitter status) read                   */ \
     X(VPOSR   , 0x004 , 0) /* Read vert most signif. bit (and frame flop)             */ \
     X(VHPOSR  , 0x006 , 0) /* Read vert and horiz. position of beam                   */ \
+    X(JOY0DAT , 0x00A , 0) /* Joystick-mouse 0 data (vert,horiz)                      */ \
+    X(JOY1DAT , 0x00C , 0) /* Joystick-mouse 1 data (vert,horiz)                      */ \
     X(POTGOR  , 0x016 , 0) /* Pot port data read(formerly POTINP)                     */ \
     X(SERDATR , 0x018 , 0) /* Serial port data and status read                        */ \
     X(INTENAR , 0x01C , 0) /* Interrupt enable bits read                              */ \
@@ -280,7 +284,7 @@ static constexpr uint16_t hires_min_pixel  = 2 * lores_min_pixel;
 static constexpr uint16_t hires_max_pixel  = 2 * lores_max_pixel;
 
 static constexpr uint16_t vpos_per_field  = 312;
-static constexpr uint16_t vpos_per_frame  = 625;
+//static constexpr uint16_t vpos_per_frame  = 625;
 static constexpr uint16_t vblank_end_vpos = 28;
 
 static_assert(graphics_width == hires_max_pixel - hires_min_pixel);
@@ -345,10 +349,33 @@ public:
     {
         memset(gfx_buf_, 0, sizeof(gfx_buf_));
         memset(&s_, 0, sizeof(s_));
+        pause_copper();
+    }
+
+    void pause_copper()
+    {
         // Indefinte wait
         s_.copper_inst[0] = 0xffff;
         s_.copper_inst[1] = 0xfffe;
         s_.copper_inst_ofs = 2; // Don't fetch new instructions until vblank
+    }
+
+    void set_serial_data_handler(const serial_data_handler& handler)
+    {
+        serial_data_handler_ = handler;
+    }
+
+    void do_blit(uint16_t size)
+    {
+        std::cout << "TODO: Blit size=$" << hexfmt(size) << " bltcon0=$" << hexfmt(s_.bltcon0) << " bltcon1=$" << hexfmt(s_.bltcon1) << " bltafwm=$" << hexfmt(s_.bltafwm) << " bltalwm=$" << hexfmt(s_.bltalwm) << "\n";
+        for (int i = 0; i < 4; ++i) {
+            const char name[5] = { 'B', 'L', 'T', static_cast<char>('A' + i), 0 };
+            std::cout << "  " << name << "PT=$" << hexfmt(s_.bltpt[i]) << " " << name << "DAT=$" << hexfmt(i < 4 ? s_.bltdat[i] : 0) << " " << name << "MOD=" << (int)s_.bltmod[i] << "\n";
+        }
+        assert(!s_.bltcon0);
+        s_.intreq |= INTF_BLIT;
+        s_.dmacon &= ~DMAF_BLTDONE;
+        s_.dmacon |= DMAF_BLTNZERO;
     }
 
     void step()
@@ -364,16 +391,36 @@ public:
         if (s_.copper_inst_ofs == 2) {
             if (s_.copper_inst[0] & 1) {
                 // Wait/skip
-                TODO_ASSERT(!(s_.copper_inst[1] & 1));
-                TODO_ASSERT((s_.copper_inst[1] & 0x8000)); // Blitter wait
                 const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
                 const auto hp = s_.copper_inst[0] & 0xfe;
-                const auto ve = (s_.copper_inst[1] >> 8) & 0xff;
+                const auto ve = 0x80 | ((s_.copper_inst[1] >> 8) & 0x7f);
                 const auto he = s_.copper_inst[1] & 0xfe;
 
-                if ((s_.vpos & ve) >= (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he)) {
+#ifdef COPPER_DEBUG
+                static bool blitter_wait_warn = false;
+                if (s_.vpos < 2)
+                    blitter_wait_warn = true;
+#endif
+
+                if (!(s_.copper_inst[1] & 0x8000) && !(s_.dmacon & DMAF_BLTDONE)) {
+                    // Blitter wait
+#ifdef COPPER_DEBUG
+                    if (blitter_wait_warn) {
+                        std::cout << "Waiting for blitter\n";
+                        blitter_wait_warn = false;
+                    }
+#endif
+                } else if ((s_.vpos & ve) >= (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he)) {
                     //std::cout << "Wait done $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
                     s_.copper_inst_ofs = 0; // Fetch next instruction
+                    if (s_.copper_inst[1] & 1) {
+                        // SKIP instruction. Actually reads next instruction, but does nothing?
+#ifdef COPPER_DEBUG
+                        std::cout << "Warning: SKIP processed\n";
+#endif
+                        assert(0);
+                    }
+
                 }
 
                 //std::cout << "Wait $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
@@ -467,7 +514,16 @@ public:
                 // Copper
                 if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2) {
                     s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
-                    //if (s_.copper_inst_ofs == 2) std::cout << "Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt-4) << "\n";
+
+#ifdef COPPER_DEBUG
+                    if (s_.copper_inst_ofs == 2) std::cout << "Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << " from $" << hexfmt(s_.copper_pt-4) << "\n";
+#endif
+                    if (s_.copper_inst[0] == 0 && s_.copper_inst[1] == 0) {
+#ifdef COPPER_DEBUG
+                        std::cout << "Hack, halting copper after reading 0,0\n";
+#endif
+                        pause_copper();
+                    }
                 }
                 
                 // TODO: Blitter
@@ -500,6 +556,8 @@ public:
                 s_.vpos = 0;
                 s_.intreq |= INTF_VERTB;
                 cia_.increment_tod_counter(0);
+                if (!(s_.dmacon & DMAF_COPPER))
+                    pause_copper();
             }
         }
     }
@@ -514,16 +572,26 @@ public:
     {
         switch (offset) {
         case DMACONR: // $002
-            // TODO: blitter status
             return s_.dmacon;
-        case VPOSR:   // $004
+        case JOY0DAT: // $00A
+            return 0;
+        case JOY1DAT: // $00C
+            return 0;
+        case VPOSR: // $004
             // TODO: Bit15 LOF (long frame)
+            // Hack: Just return a fixed V/HPOS when external sync is enabled (needed for KS1.2)
+            if (s_.bplcon0 & BPLCON0F_ERSY)
+                return 0x8040;
+
             return 0x8000 | ((s_.vpos >> 8)&1);
         case VHPOSR:  // $006
+            // Hack: Just return a fixed V/HPOS when external sync is enabled (needed for KS1.2)
+            if (s_.bplcon0 & BPLCON0F_ERSY)
+                return 0x80;
             return (s_.vpos & 0xff) << 8 | ((s_.hpos >> 1) & 0xff);
         case POTGOR:  // $016
             // Don't spam in DiagROM
-            return 0xff;
+            return 0xFF00;
         case SERDATR: // $018
             return (3<<12); // Just return transmit buffer empty
         case INTENAR: // $01C
@@ -602,67 +670,74 @@ public:
 
         switch (offset) {
         case SERDAT: // $018
-            std::cerr << "[CUSTOM] Serial output ($" << hexfmt(val) << ") '" << (isprint(val & 0xff) ? static_cast<char>(val & 0xff) : ' ') << "'\n";
+            if (serial_data_handler_) {
+                uint8_t numbits = 9;
+                while (numbits && !(val & (1 << numbits)))
+                    --numbits;
+                serial_data_handler_(numbits, val & ((1 << numbits) - 1));
+            }
             return;
-        //case BLTCON0:
-        //    s_.bltcon0 = val;
-        //    return;
-        //case BLTCON1:
-        //    s_.bltcon1 = val;
-        //    return;
-        //case BLTAFWM:
-        //    s_.bltafwm = val;
-        //    return;
-        //case BLTALWM:
-        //    s_.bltalwm = val;
-        //    return;
-        //case BLTCPTH:
-        //case BLTCPTL:
-        //    write_partial(s_.bltpt[2]);
-        //    return;
-        //case BLTBPTH:
-        //case BLTBPTL:
-        //    write_partial(s_.bltpt[1]);
-        //    return;
-        //case BLTAPTH:
-        //case BLTAPTL:
-        //    write_partial(s_.bltpt[0]);
-        //    return;
-        //case BLTDPTH:
-        //case BLTDPTL:
-        //    write_partial(s_.bltpt[3]);
-        //    return;
-        //case BLTSIZE:
-        //    throw std::runtime_error { "TODO: Blit" };
-        //    return;
-        //case BLTCMOD:
-        //    s_.bltmod[2] = val;
-        //    return;
-        //case BLTBMOD:
-        //    s_.bltmod[1] = val;
-        //    return;
-        //case BLTAMOD:
-        //    s_.bltmod[0] = val;
-        //    return;
-        //case BLTDMOD:
-        //    s_.bltmod[3] = val;
-        //    return;
-        //case BLTCDAT:
-        //    s_.bltdat[2] = val;
-        //    return;
-        //case BLTBDAT:
-        //    s_.bltdat[1] = val;
-        //    return;
-        //case BLTADAT:
-        //    s_.bltdat[0] = val;
-        //    return;
+        case BLTCON0:
+            s_.bltcon0 = val;
+            return;
+        case BLTCON1:
+            s_.bltcon1 = val;
+            return;
+        case BLTAFWM:
+            s_.bltafwm = val;
+            return;
+        case BLTALWM:
+            s_.bltalwm = val;
+            return;
+        case BLTCPTH:
+        case BLTCPTL:
+            write_partial(s_.bltpt[2]);
+            return;
+        case BLTBPTH:
+        case BLTBPTL:
+            write_partial(s_.bltpt[1]);
+            return;
+        case BLTAPTH:
+        case BLTAPTL:
+            write_partial(s_.bltpt[0]);
+            return;
+        case BLTDPTH:
+        case BLTDPTL:
+            write_partial(s_.bltpt[3]);
+            return;
+        case BLTSIZE:
+            do_blit(val);
+            return;
+        case BLTCMOD:
+            s_.bltmod[2] = val;
+            return;
+        case BLTBMOD:
+            s_.bltmod[1] = val;
+            return;
+        case BLTAMOD:
+            s_.bltmod[0] = val;
+            return;
+        case BLTDMOD:
+            s_.bltmod[3] = val;
+            return;
+        case BLTCDAT:
+            s_.bltdat[2] = val;
+            return;
+        case BLTBDAT:
+            s_.bltdat[1] = val;
+            return;
+        case BLTADAT:
+            s_.bltdat[0] = val;
+            return;
         case COPJMP1: // $088
             TODO_ASSERT(0);
             return;
         case COPJMP2: // $08A
+            s_.copper_inst_ofs = 0;
             s_.copper_pt = s_.coplc[1];
             TODO_ASSERT(s_.copper_pt);
-            return;
+            //pause_copper();
+            break;
         case DIWSTRT: // $08E
             s_.diwstrt = val;
             return;
@@ -692,16 +767,15 @@ public:
             setclr(s_.intreq, val);
             return;
         case BPLCON0: // $100
-            TODO_ASSERT(!(val & BPLCON0F_LACE)); // TODO: Handle LOF in vposr
+            if (val & BPLCON0F_LACE) // TODO: Handle LOF in vposr
+                std::cout << "Warning: Enabling interlace mode\n";
             s_.bplcon0 = val;
             return;
         case BPLCON1: // $102
-            TODO_ASSERT(val == 0);
             return;
-        case BPLCON2: // $104            
+        case BPLCON2: // $104
             break;
         case BPLCON3: // $106
-            TODO_ASSERT(val == 0);
             return;
         case BPLMOD1: // $108
             TODO_ASSERT(val == 0);
@@ -710,6 +784,8 @@ public:
         case BPLMOD2: // $10A
             TODO_ASSERT(val == 0);
             s_.bplmod2 = val;
+            return;
+        case 0x1fe: // NO-OP
             return;
         }
         std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")"
@@ -748,6 +824,7 @@ public:
 private:
     memory_handler& mem_;
     cia_handler& cia_;
+    serial_data_handler serial_data_handler_;
 
     uint32_t gfx_buf_[graphics_width * graphics_height];
     custom_state s_;
@@ -773,4 +850,9 @@ uint8_t custom_handler::current_ipl() const
 const uint32_t* custom_handler::new_frame()
 {
     return impl_->new_frame();
+}
+
+void custom_handler::set_serial_data_handler(const serial_data_handler& handler)
+{
+    impl_->set_serial_data_handler(handler);
 }

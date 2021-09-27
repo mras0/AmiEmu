@@ -6,15 +6,15 @@
 
 uint8_t default_handler::read_u8(uint32_t addr, uint32_t)
 {
-    std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
+    // Don't warn a bunch when scanning for ROM tags / I/O space
+    if (addr < 0xe00000) std::cerr << "[MEM] Unhandled byte read from $" << hexfmt(addr) << "\n";
     //return 0xff;
     return 0;
 }
 uint16_t default_handler::read_u16(uint32_t addr, uint32_t)
 {
-    // Don't warn a bunch when scanning for ROM tags
-    if (addr < 0xf00000)
-        std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
+    // Don't warn a bunch when scanning for ROM tags / I/O space
+    if (addr < 0xe00000) std::cerr << "[MEM] Unhandled word read from $" << hexfmt(addr) << "\n";
     //return 0xffff;
     return 0;
 }
@@ -43,24 +43,36 @@ uint16_t ram_handler::read_u16(uint32_t, uint32_t offset)
     assert(offset < ram_.size() - 1);
     return get_u16(&ram_[offset]);
 }
-void ram_handler::write_u8(uint32_t, uint32_t offset, uint8_t val)
+
+#ifdef WATCH
+const uint32_t watch_start = 0x00c01ea2;
+const uint32_t watch_end = watch_start + 2;
+#endif
+
+void ram_handler::write_u8([[maybe_unused]] uint32_t addr, uint32_t offset, uint8_t val)
 {
     assert(offset < ram_.size());
+
+#ifdef WATCH
+    if (addr >= watch_start && addr < watch_end) {
+        std::cout << "Write to $" << hexfmt(addr) << " = $" << hexfmt(val) << "\n";
+    }
+#endif
     ram_[offset] = val;
 }
 
-
-//const uint32_t watch_start = 0x00c04490 + 0x12;
-//const uint32_t watch_end = watch_start + 4;
-//
-void ram_handler::write_u16(uint32_t, uint32_t offset, uint16_t val)
+void ram_handler::write_u16([[maybe_unused]] uint32_t addr, uint32_t offset, uint16_t val)
 {
     assert(offset < ram_.size() - 1);
 
-  //  if (addr >= watch_start && addr < watch_end) {
-  //      std::cout << "Write to $" << hexfmt(addr) << " = $" << hexfmt(val) << "\n";
-  //  }
-  //
+#ifdef WATCH
+    if (addr >= watch_start && addr < watch_end) {
+        std::cout << "Write to $" << hexfmt(addr) << " = $" << hexfmt(val) << "\n";
+        if (val)
+            throw std::runtime_error("FIXME");
+    }
+#endif
+
     put_u16(&ram_[offset], val);
 }
 

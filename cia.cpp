@@ -199,11 +199,11 @@ public:
         : mem_handler_ { mem_handler }
         , rom_handler_ { rom_handler }
     {
-        assert(s_[0].port_value(0) == 0xff);
-        // Since all ports are set to input, OVL in CIA pra is high -> OVL set
         mem_handler_.register_handler(*this, 0xBF0000, 0x10000);
         rom_handler_.set_overlay(true);
         reset();
+        // Since all ports are set to input, OVL in CIA pra is high -> OVL set
+        assert(s_[0].port_value(0) & CIAF_OVERLAY);
     }
 
     void step()
@@ -273,7 +273,7 @@ public:
         assert(cia < 2);
         auto& s = s_[cia];
         ++s.counter;
-        if ((s.icrmask & CIAICRF_ALRM) && (s.counter & 0xffffff) == s.alarm) {
+        if (/*(s.icrmask & CIAICRF_ALRM) && */(s.counter & 0xffffff) == s.alarm) {
             std::cerr << "[CIA] Todo: trigger alarm intterupt? for alarm=$" << hexfmt(s.alarm) << "\n";
             //s.trigger_int(CIAICRB_ALRM);
             assert(0);
@@ -313,10 +313,12 @@ private:
         uint16_t timer_latch[2];
         uint16_t timer_val[2];
 
+        uint8_t port_input[2];
+
         uint8_t port_value(uint8_t port) const
         {
             assert(port < 2);
-            return (ports[port] & ddr[port]) | (0xff & ~ddr[port]);
+            return (ports[port] & ddr[port]) | (port_input[port] & ~ddr[port]);
         }
 
         void trigger_int(uint8_t icrbit)
@@ -339,6 +341,11 @@ private:
     void reset()
     {
         memset(s_, 0, sizeof(s_));
+        // Set output pin values to high (since they're connected to pull-ups)
+        s_[0].port_input[0] = 0xFF;
+        s_[1].port_input[1] = 0xFF;
+        s_[1].port_input[0] = 0xFF;
+        s_[1].port_input[1] = 0xFF;
         kbd_buffer_head_ =  kbd_buffer_tail_ = 0;
         kbd_ack_ = true;
     }

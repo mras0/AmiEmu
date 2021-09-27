@@ -102,11 +102,18 @@ public:
         ++instruction_count_;
 
         if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
+            stopped_ = false;
             do_interrupt(current_ipl);
         }
 
         if (trace_)
             print_cpu_state(*trace_, state_);
+
+        if (stopped_) {
+            if (trace_)
+                *trace_ << "Stopped\n";
+            return;
+        }
 
         start_pc_ = state_.pc;
         iwords_[0] = mem_.read_u16(state_.pc);
@@ -258,6 +265,7 @@ private:
     const instruction* inst_ = &instructions[illegal_instruction_num];
     uint32_t ea_data_[2]; // For An/Dn/Imm/etc. contains the value, for all others the address
     uint64_t instruction_count_ = 0;
+    bool stopped_ = false;
     std::ostream* trace_ = nullptr;
 
     uint32_t read_reg(uint32_t val)
@@ -1368,7 +1376,7 @@ private:
     {
         assert(inst_->nea == 1);
         state_.sr = static_cast<uint16_t>(read_ea(0));
-        state_.pc = start_pc_;
+        stopped_ = true;
     }
 
     void handle_SUB()

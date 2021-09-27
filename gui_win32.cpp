@@ -131,6 +131,140 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     return map;
 }();
 
+struct gdi_deleter {
+    //using pointer = HGDIOBJ;
+    void operator()(void* font)
+    {
+        if (font)
+            DeleteObject(font);
+    }
+};
+using font_ptr = std::unique_ptr<HFONT__, gdi_deleter>;
+
+class serial_data_window {
+public:
+    static serial_data_window* create()
+    {
+        std::unique_ptr<serial_data_window> wnd { new serial_data_window {} };
+        return wnd.release();
+    }
+
+    HWND hwnd()
+    {
+        return hwnd_;
+    }
+
+    void append_text(const std::string& strdat)
+    {
+        if (!visible_) {
+            ShowWindow(hwnd_, SW_NORMAL);
+            visible_ = true;
+        }
+
+        int index = GetWindowTextLength(edit_window_);
+        //SetFocus(edit_window_);
+        SendMessageA(edit_window_, EM_SETSEL, (WPARAM)index, (LPARAM)index);
+        SendMessageA(edit_window_, EM_REPLACESEL, 0, (LPARAM)strdat.c_str());
+        SendMessage(edit_window_, EM_LINESCROLL, 0, 0xFFFF); // Scroll to bottom (hackish)
+    }
+
+private:
+    static constexpr const wchar_t* const class_name_ = L"SerialDataWindow";
+    HWND hwnd_ = nullptr;
+    HWND edit_window_ = nullptr;
+    font_ptr edit_font_;
+    bool visible_ = false;
+
+    explicit serial_data_window() {
+        LOGFONTA lf {};
+        lf.lfHeight = -16;
+        lf.lfWidth = 0;
+        lf.lfEscapement = 0;
+        lf.lfOrientation = 0;
+        lf.lfWeight = FW_DONTCARE;
+        lf.lfItalic = FALSE;
+        lf.lfUnderline = FALSE;
+        lf.lfStrikeOut = FALSE;
+        lf.lfCharSet = ANSI_CHARSET;
+        lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
+        lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+        lf.lfQuality = DEFAULT_QUALITY;
+        lf.lfPitchAndFamily = FIXED_PITCH;
+        snprintf(lf.lfFaceName, sizeof(lf.lfFaceName), "Consolas");
+        edit_font_.reset(CreateFontIndirectA(&lf));
+        if (!edit_font_)
+            throw_system_error("CreateFontIndirect");
+
+        HINSTANCE const hInstance = GetModuleHandle(nullptr);
+        WNDCLASS wc;
+        ZeroMemory(&wc, sizeof(wc));
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = &s_wndproc;
+        wc.hInstance = hInstance;
+        wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.lpszClassName = class_name_;
+        if (!RegisterClass(&wc)) {
+            throw_system_error("RegisterClass");
+        }
+        const DWORD style = WS_OVERLAPPEDWINDOW;
+
+        const char* title = "Serial console";
+        if (!CreateWindow(class_name_, std::wstring(title, title + strlen(title)).c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT, 800, 480, nullptr, nullptr, hInstance, this)) {
+            throw_system_error("CreateWindow");
+        }
+        assert(hwnd_);
+    }
+
+    static LRESULT CALLBACK s_wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        serial_data_window* self = nullptr;
+        if (uMsg == WM_NCCREATE) {
+            self = reinterpret_cast<serial_data_window*>(reinterpret_cast<const CREATESTRUCT*>(lParam)->lpCreateParams);
+            self->hwnd_ = hwnd;
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        } else {
+            self = reinterpret_cast<serial_data_window*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+        }
+        const auto ret = self ? self->wndproc(hwnd, uMsg, wParam, lParam) : DefWindowProc(hwnd, uMsg, wParam, lParam);
+        if (uMsg == WM_NCDESTROY && self) {
+            self->hwnd_ = nullptr;
+            delete self;
+        }
+        return ret;
+    }
+
+    LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+    {
+        switch (uMsg) {
+        case WM_CREATE:
+            return on_create() ? 0 : -1;
+        case WM_DESTROY:
+            break;
+        case WM_SIZE:
+            on_size(LOWORD(lParam), HIWORD(lParam));
+            break;
+        }
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
+    }
+
+    bool on_create()
+    {
+        edit_window_ = CreateWindow(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY, 0, 0, 100, 100, hwnd_, nullptr, nullptr, nullptr);
+        if (!edit_window_)
+            return false;
+        SendMessage(edit_window_, WM_SETFONT, (WPARAM)edit_font_.get(), FALSE);
+        return true;
+    }
+
+    void on_size(UINT client_width, UINT client_height)
+    {
+        SetWindowPos(edit_window_, nullptr, 0, 0, client_width, client_height, SWP_NOZORDER);
+    }
+};
+
+
 constexpr int border_height = 8;
 constexpr int led_width = 64;
 constexpr int led_height = 8;
@@ -166,6 +300,13 @@ public:
             throw_system_error("CreateWindow");
         }
         assert(hwnd_);
+
+        ser_data_ = serial_data_window::create();
+
+        // Move serial data window to the right of the main window
+        GetWindowRect(hwnd_, &r);
+        SetWindowPos(ser_data_->hwnd(), nullptr, r.right + 10, r.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        SetFocus(hwnd_);
     }
 
     std::vector<event> update()
@@ -208,6 +349,12 @@ public:
         }
     }
 
+    void serial_data(const std::vector<uint8_t>& data)
+    {
+        ser_data_->append_text(std::string { data.begin(), data.end() });
+        SetFocus(hwnd_);
+    }
+
 private:
     static constexpr const wchar_t* const class_name_ = L"Display";
     int width_;
@@ -217,6 +364,7 @@ private:
     HBITMAP hbm_ = nullptr;
     std::vector<event> events_;
     uint8_t led_state_ = 0;
+    serial_data_window* ser_data_ = nullptr;
 
     void redraw()
     {
@@ -332,9 +480,7 @@ private:
 };
 
 gui::gui(unsigned width, unsigned height)
-    : impl_ {
-        std::make_unique<impl>(static_cast<int>(width), static_cast<int>(height))
-    }
+    : impl_ { std::make_unique<impl>(static_cast<int>(width), static_cast<int>(height)) }
 {
 }
 
@@ -353,4 +499,9 @@ void gui::update_image(const uint32_t* data)
 void gui::led_state(uint8_t s)
 {
     impl_->led_state(s);
+}
+
+void gui::serial_data(const std::vector<uint8_t>& data)
+{
+    impl_->serial_data(data);
 }
