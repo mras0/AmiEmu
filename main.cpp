@@ -68,25 +68,21 @@ class default_handler : public memory_area_handler {
 public:
     uint8_t read_u8(uint32_t addr, uint32_t) override
     {
-        std::cerr << "Unhandled read from $" << hexfmt(addr) << "\n";
-        assert(false);
+        std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
         return 0xff;
     }
     uint16_t read_u16(uint32_t addr, uint32_t) override
     {
-        std::cerr << "Unhandled read from $" << hexfmt(addr) << "\n";
-        assert(false);
+        std::cerr << "[MEM] Unhandled read from $" << hexfmt(addr) << "\n";
         return 0xffff;
     }
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override
     {
-        std::cerr << "Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
-        assert(false);
+        std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
     }
     void write_u16(uint32_t addr, uint32_t, uint16_t val) override
     {
-        std::cerr << "Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
-        assert(false);
+        std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
     }
 };
 
@@ -231,7 +227,7 @@ public:
     void set_overlay(bool ovl)
     {
         const auto size = static_cast<uint32_t>(rom_data_.size());
-        std::cout << "[ROM handler] Turning overlay " << (ovl ? "on" : "off") << "\n";
+        std::cerr << "[ROM handler] Turning overlay " << (ovl ? "on" : "off") << "\n";
         if (ovl)
             mem_handler_.register_handler(*this, 0, size);
         else
@@ -252,14 +248,14 @@ public:
 
     void write_u8(uint32_t addr, uint32_t offset, uint8_t val) override
     {
-        std::cerr << "byte write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
-        assert(0);
+        std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+        throw std::runtime_error { "FIXME" };
     }
 
     void write_u16(uint32_t addr, uint32_t offset, uint16_t val) override
     {
-        std::cerr << "word write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
-        assert(0);
+        std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+        throw std::runtime_error { "FIXME" };
     }
 
 private:
@@ -336,7 +332,7 @@ private:
         switch (reg) {
         case pra:
         case prb:
-            std::cout << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
+            std::cerr << "[CIA] TODO: Not handling input pins for CIA" << static_cast<char>('A' + idx) << " " << regnames[reg] << "\n";
             return regs_[idx][reg];
         case ddra:
         case ddrb:
@@ -372,7 +368,7 @@ private:
             if (port_a_diff & 1)
                 rom_handler_.set_overlay(!!(port_a_after & 1));
             if (port_a_diff & 2)
-                std::cout << "[CIA] Turn LED " << (port_a_after & 2 ? "off" : "on") << '\n';
+                std::cerr << "[CIA] Turn LED " << (port_a_after & 2 ? "off" : "on") << '\n';
 
         }
     }
@@ -479,16 +475,18 @@ public:
         case BPLCON3:
         case BPLMOD1:
         case BPLMOD2:
+        case BPL1DAT:
         ignore:
-            std::cout << "[CUSTOM] Ignoring write to " << regname(offset) << " val $" << hexfmt(val) << "\n";
+            std::cerr << "[CUSTOM] Ignoring write to " << regname(offset) << " val $" << hexfmt(val) << "\n";
             return;
         }
 
         if (offset >= COLOR00 && offset <= COLOR31)
             goto ignore;
 
-        std::cerr << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
-        assert(false);
+        std::ostringstream oss;
+        oss << "Unhandled write to custom register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val);
+        throw std::runtime_error { oss.str() };
     }
 
 private:
@@ -527,6 +525,12 @@ private:
     X(BPLCON3 , 0x106 , 1) /* Bitplane control register  (ECS only)                   */ \
     X(BPLMOD1 , 0x108 , 1) /* Bitplane modulo (odd planes)                            */ \
     X(BPLMOD2 , 0x10A , 1) /* Bitplane modulo (even planes)                           */ \
+    X(BPL1DAT , 0x110 , 1) /* Bitplane 1 data (parallel-to-serial convert)            */ \
+    X(BPL2DAT , 0x112 , 1) /* Bitplane 2 data (parallel-to-serial convert)            */ \
+    X(BPL3DAT , 0x114 , 1) /* Bitplane 3 data (parallel-to-serial convert)            */ \
+    X(BPL4DAT , 0x116 , 1) /* Bitplane 4 data (parallel-to-serial convert)            */ \
+    X(BPL5DAT , 0x118 , 1) /* Bitplane 5 data (parallel-to-serial convert)            */ \
+    X(BPL6DAT , 0x11A , 1) /* Bitplane 6 data (parallel-to-serial convert)            */ \
     X(COLOR00 , 0x180 , 1) /* Color table 00                                          */ \
     X(COLOR01 , 0x182 , 1) /* Color table 01                                          */ \
     X(COLOR02 , 0x184 , 1) /* Color table 02                                          */ \
@@ -740,11 +744,11 @@ void print_cpu_state(std::ostream& os, const cpu_state& s)
     
     for (unsigned i = 5; i--;) {
         if ((s.sr & (1 << i)))
-            std::cout << "CVZNX"[i];
+            os << "CVZNX"[i];
         else
-            std::cout << '-';
+            os << '-';
     }
-    std::cout << '\n';
+    os << '\n';
 }
 
 constexpr int32_t sext(uint32_t val, opsize size)
@@ -771,6 +775,11 @@ public:
 
         std::fill(std::begin(iwords_), std::end(iwords_), illegal_instruction_num);
         inst_ = &instructions[illegal_instruction_num];
+    }
+
+    const cpu_state& state() const
+    {
+        return state_;
     }
 
     uint64_t instruction_count() const
@@ -841,10 +850,12 @@ public:
             HANDLE_INST(Bcc);
             HANDLE_INST(BRA);
             HANDLE_INST(BSR);
+            HANDLE_INST(BTST);
             HANDLE_INST(CLR);
             HANDLE_INST(CMP);
             HANDLE_INST(CMPA);
             HANDLE_INST(DBcc);
+            HANDLE_INST(EOR);
             HANDLE_INST(EXT);
             HANDLE_INST(JMP);
             HANDLE_INST(LEA);
@@ -855,6 +866,7 @@ public:
             HANDLE_INST(MOVEM);
             HANDLE_INST(MOVEQ);
             HANDLE_INST(MULU);
+            HANDLE_INST(NOT);
             HANDLE_INST(PEA);
             HANDLE_INST(RTS);
             HANDLE_INST(SUB);
@@ -1007,6 +1019,10 @@ private:
                 res = state_.sr & srm_ccr;
                 return;
             } else if (ea == ea_reglist) {
+                assert(iword_idx_ < inst_->ilen);
+                res = iwords_[iword_idx_++];
+                return;
+            } else if (ea == ea_bitnum) {
                 assert(iword_idx_ < inst_->ilen);
                 res = iwords_[iword_idx_++];
                 return;
@@ -1239,6 +1255,21 @@ private:
         state_.pc = ea_data_[0];
     }
 
+    void handle_BTST()
+    {
+        assert(inst_->nea == 2);
+        const auto bitnum = read_ea(0);
+        const auto num = read_ea(1);
+        bool is_set;
+        if (inst_->size == opsize::b) {
+            is_set = !!((num >> (bitnum & 7)) & 1);
+        } else {
+            assert(inst_->size == opsize::l);
+            is_set = !!((num >> (bitnum & 31)) & 1);
+        }
+        state_.update_sr(srm_z, is_set ? srm_z : 0);
+    }
+
     void handle_CLR()
     {
         assert(inst_->nea == 1);
@@ -1280,6 +1311,16 @@ private:
         if (val != 0xffff) {
             state_.pc = ea_data_[1];
         }
+    }
+
+    void handle_EOR()
+    {
+        assert(inst_->nea == 2);
+        const uint32_t r = read_ea(0);
+        const uint32_t l = read_ea(1);
+        const uint32_t res = l ^ r;
+        write_ea(1, res);
+        update_flags(srm_ccr_no_x, res, 0);
     }
 
     void handle_EXT()
@@ -1370,9 +1411,9 @@ private:
 
     void handle_MOVEA()
     {
-        assert(inst_->nea == 2);
-        const uint32_t src = read_ea(0);
-        write_ea(1, src);
+        assert(inst_->nea == 2 && (inst_->ea[1] >> ea_m_shift) == ea_m_An);
+        const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
+        state_.A(inst_->ea[1] & ea_xn_mask) = s; // Always write full 32-bit result
         // No flags
     }
 
@@ -1381,17 +1422,17 @@ private:
         assert(inst_->nea == 2);
         assert(inst_->size == opsize::l); // TODO: Support word sized transfer
 
-        // Latch values
-        uint32_t values[16];
-        for (unsigned i = 0; i < 16; ++i) {
-            if (i < 8)
-                values[i] = state_.d[i];
-            else
-                values[i] = state_.A(i & 7);
-        }
-
         if (inst_->ea[0] == ea_reglist) {
             uint16_t rl = static_cast<uint16_t>(ea_data_[0]);
+
+            // Latch values
+            uint32_t values[16];
+            for (unsigned i = 0; i < 16; ++i) {
+                if (i < 8)
+                    values[i] = state_.d[i];
+                else
+                    values[i] = state_.A(i & 7);
+            }
 
             for (unsigned bit = 16; bit--;) {
                 if (!((rl >> bit) & 1))
@@ -1414,15 +1455,18 @@ private:
             for (unsigned bit = 0; bit < 16; ++bit) {
                 if (!((rl >> bit) & 1))
                     continue;
-                const auto val = values[bit];
+                uint32_t val;
                 if (inst_->ea[0] >> ea_m_shift == ea_m_A_ind_post) {
                     auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
-                    write_mem(a, val);
+                    val = read_mem(a);
                     a += opsize_bytes(inst_->size);
                 } else {
                     // Not checked...
-                    write_ea(0, val);
+                    val = read_ea(0);
                 }
+                auto& r = bit < 8 ? state_.d[bit] : state_.A(bit & 7);
+                assert(inst_->size == opsize::l);
+                r = val;
             }
         }
     }
@@ -1443,6 +1487,14 @@ private:
         const uint32_t res = static_cast<uint32_t>(a) * b;
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
+    }
+
+    void handle_NOT()
+    {
+        assert(inst_->nea == 1);
+        auto n = ~read_ea(0);
+        update_flags(srm_ccr_no_x, n, 0);
+        write_ea(0, n);
     }
 
     void handle_PEA()
@@ -1504,16 +1556,21 @@ private:
 int main()
 {
     try {
+        //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
+        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        const char* const rom_file = "../../rom.bin";
         memory_handler mem { 1U<<20 };
-        rom_area_handler rom { mem, read_file("../../rom.bin") };
+        rom_area_handler rom { mem, read_file(rom_file) };
         cia_handler cias { mem, rom };
         custom_handler custom { mem };
-        //rom_area_handler rom { mem, read_file("../../Misc/DiagROM/DiagROM") };
         m68000 cpu { mem };
 
+        cpu.trace(true);
         for (;;) {
             try {
                 cpu.step();
+                //if (cpu.state().pc == 0xFC00E2) // After delay loop
+                //    cpu.trace(true);
                 //if (cpu.instruction_count() == 7110-2)
                 //    cpu.trace(true);
                 //else if (cpu.instruction_count() == 7110+2)

@@ -226,6 +226,15 @@ void disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t num_iw
                 // Note: reversed for predecrement
                 os << reg_list_string(list, i == 0 && (inst.ea[1] >> 3) == ea_m_A_ind_pre);
                 break;
+            } else if (ea == ea_bitnum) {
+                assert(eaw < inst.ilen);
+                uint16_t b = iwords[eaw++];
+                if (inst.size == opsize::b)
+                    b &= 7;
+                else
+                    b &= 31;
+                os << "#" << b;
+                break;
             }
 
             if (inst.extra & extra_disp_flag) {

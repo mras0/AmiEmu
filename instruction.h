@@ -25,11 +25,9 @@ enum class inst_type {
     ABCD,
     ADD,
     ADDA,
-    ADDI,
     ADDQ,
     ADDX,
     AND,
-    ANDI,
     ASL,
     ASR,
     BCHG,
@@ -43,13 +41,11 @@ enum class inst_type {
     CLR,
     CMP,
     CMPA,
-    CMPI,
     CMPM,
     DBcc,
     DIVS,
     DIVU,
     EOR,
-    EORI,
     EXG,
     EXT,
     JMP,
@@ -84,7 +80,6 @@ enum class inst_type {
     STOP,
     SUB,
     SUBA,
-    SUBI,
     SUBQ,
     SUBX,
     SWAP,
@@ -138,6 +133,7 @@ constexpr uint8_t ea_disp    = 0b01'000'011;
 constexpr uint8_t ea_sr      = 0b01'000'100;
 constexpr uint8_t ea_ccr     = 0b01'000'101;
 constexpr uint8_t ea_reglist = 0b01'000'110;
+constexpr uint8_t ea_bitnum  = 0b01'000'111;
 
 constexpr unsigned max_instruction_words = 5; // 68020+ can be 11 words
 

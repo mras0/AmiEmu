@@ -20,6 +20,7 @@ constexpr uint8_t ea_disp    = 0b01'000'011;
 constexpr uint8_t ea_sr      = 0b01'000'100;
 constexpr uint8_t ea_ccr     = 0b01'000'101;
 constexpr uint8_t ea_reglist = 0b01'000'110;
+constexpr uint8_t ea_bitnum  = 0b01'000'111;
 
 constexpr uint8_t extra_cond_flag = 1 << 0; // Upper 4 bits are condition code
 constexpr uint8_t extra_disp_flag = 1 << 1; // Displacement word follows
@@ -52,16 +53,16 @@ constexpr const inst_desc insts[] = {
 //
     //{"ORI.B #I, CCR"     , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" },
     //{"ORI.W #I, SSR"     , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" },
-    {"ORI"               , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"OR"                , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     //{"ANDI.B #I, CCR"    , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
     //{"ANDI.W #I, SR"     , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" },
-    {"ANDI"              , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    {"SUBI"              , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    {"ADDI"              , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"AND"               , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"SUB"               , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"ADD"               , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     //{"EORI.B #I, CCR"    , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" },
     //{"EORI.W #I, SR"     , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" },
-    {"EORI"              , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
-    {"CMPI"              , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"EOR"               , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
+    {"CMP"               , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , block_An|block_Imm },
     {"BTST"              , "B L" , "0 0 0 0 1 0 0 0 0 0 M     Xn   " , "B N" },
     {"BCHG"              , "B L" , "0 0 0 0 1 0 0 0 0 1 M     Xn   " , "B N" },
     {"BCLR"              , "B L" , "0 0 0 0 1 0 0 0 1 0 M     Xn   " , "B N" },
@@ -497,7 +498,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                         }
                     break;
                 case 0b1000:
-                    if (ai.ea[i] == ea_reglist)
+                    if (ai.ea[i] == ea_reglist || ai.ea[i] == ea_bitnum)
                         ++ai.ea_words;
                     break;
             }
@@ -777,7 +778,7 @@ int main(int argc, char* argv[])
         }
         if (strchr(i.imm, 'N')) {
             if (i.imm[0] == 'B')
-                ea[nea++] = ea_imm;
+                ea[nea++] = ea_bitnum;
             isbitop = true;
         }
 
