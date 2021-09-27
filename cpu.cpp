@@ -349,8 +349,22 @@ private:
                 assert(iword_idx_ < inst_->ilen);
                 res = start_pc_ + 2 + sext(iwords_[iword_idx_++], opsize::w);
                 return;
-            case ea_other_pc_index:
-                break;
+            case ea_other_pc_index: {
+                assert(iword_idx_ < inst_->ilen);
+                const auto extw = iwords_[iword_idx_++];
+                assert(!(extw & (7 << 8)));
+                res = start_pc_ + 2 + sext(extw, opsize::b);
+                uint32_t r = (extw >> 12) & 7;
+                if ((extw >> 15) & 1) {
+                    r = state_.A(r);
+                } else {
+                    r = state_.d[r];
+                }
+                if (!((extw >> 11) & 1))
+                    r = sext(r, opsize::w);
+                res += r;
+                return;
+            }
             case ea_other_imm:
                 switch (inst_->size) {
                 case opsize::b:
@@ -1084,7 +1098,7 @@ private:
         const auto b = static_cast<uint16_t>(read_ea(1) & 0xffff);
         const uint32_t res = static_cast<uint32_t>(a) * b;
         update_flags(srm_ccr_no_x, res, 0);
-        write_ea(1, res);
+        state_.d[inst_->ea[1] & ea_xn_mask] = res;
     }
 
     void handle_NBCD()
@@ -1173,8 +1187,9 @@ private:
     {
         assert(inst_->nea == 0);
         assert(state_.sr & srm_s);
-        state_.sr = pop_u16();
+        const auto sr = pop_u16();
         state_.pc = pop_u32();
+        state_.sr = sr; // Only after popping PC (otherwise we switch stacks too early)
     }
 
     void handle_RTS()

@@ -17,11 +17,17 @@ int main(int argc, char* argv[])
     try {
         //const char* const rom_file = "../../Misc/DiagROM/DiagROM";
         //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.3 A500.rom";
+        //const char* const rom_file = "../../Misc/AmigaKickstart/Kickstart 1.2 (A500-A2000).rom";
         const char* const rom_file = "../../rom.bin";
-        memory_handler mem { 1U<<20 };
+        memory_handler mem { 1U << 20 };
         rom_area_handler rom { mem, read_file(rom_file) };
         cia_handler cias { mem, rom };
-        custom_handler custom { mem };
+        custom_handler custom { mem, cias };
+
+        const auto slow_base = 0xC00000, slow_size = 0xDC0000 - 0xC00000;
+        ram_handler slow_ram { slow_size }; // For KS1.2
+        mem.register_handler(slow_ram, slow_base, slow_size);
+
         m68000 cpu { mem };
 
         for (int i = 1; i < argc; ++i) {
@@ -36,22 +42,20 @@ int main(int argc, char* argv[])
         const unsigned steps_per_update = 10000;
         unsigned steps_to_update = 0;
 
-        for (;;) {
+        uint64_t stop_inst = ~0ULL;
+        while (cpu.instruction_count() != stop_inst) {
             try {
                 cpu.step(custom.current_ipl());
                 custom.step();
                 if (auto f = custom.new_frame())
                     g.update_image(f);
-                //if (cpu.state().pc == 0xFC00E2) // After delay loop
-                //    cpu.trace(true);
-                //if (cpu.state().pc == 0xFC046C)
-                //    cpu.trace(true);
-                //if (cpu.instruction_count() == 1524631 - 25)
-                //    cpu.trace(true);
-                //else if (cpu.instruction_count() == 7110+2)
-                //    break;
-
-
+                //if (cpu.instruction_count() == 2727715 - 10)
+                //    cpu.trace(&std::cout);
+                //if (cpu.state().pc == 0xFC0C00) {
+                //    cpu.trace(&std::cout);
+                //    stop_inst = cpu.instruction_count() + 5;
+                //}
+                //
                 if (!steps_to_update--) {
                     if (!g.update())
                         break;

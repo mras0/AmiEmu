@@ -1,9 +1,12 @@
 #include "custom.h"
 #include "ioutil.h"
+#include "cia.h"
 
 #include <iostream>
 #include <cassert>
 #include <utility>
+
+#define TODO_ASSERT(expr) do { if (!(expr)) throw std::runtime_error{("TODO: " #expr " in ") + std::string{__FILE__} + " line " + std::to_string(__LINE__) }; } while (0)
 
     // Name, Offset, R(=0)/W(=1)
 #define CUSTOM_REGS(X) \
@@ -13,6 +16,7 @@
     X(VHPOSR  , 0x006 , 0) /* Read vert and horiz. position of beam                   */ \
     X(POTGOR  , 0x016 , 0) /* Pot port data read(formerly POTINP)                     */ \
     X(SERDATR , 0x018 , 0) /* Serial port data and status read                        */ \
+    X(INTENAR , 0x01C , 0) /* Interrupt enable bits read                              */ \
     X(INTREQR , 0x01E , 0) /* Interrupt request bits read                             */ \
     X(SERDAT  , 0x030 , 1) /*                                                         */ \
     X(SERPER  , 0x032 , 1) /* Serial port period and control                          */ \
@@ -281,10 +285,11 @@ struct custom_state {
 
 class custom_handler::impl : public memory_area_handler {
 public:
-    explicit impl(memory_handler& mem_handler)
+    explicit impl(memory_handler& mem_handler, cia_handler& cia)
         : mem_ { mem_handler }
+        , cia_ { cia }
     {
-        mem_.register_handler(*this, 0xDFF000, 0x1000);
+        mem_.register_handler(*this, 0xDFF000, 0x1000);    
         reset();
     }
 
@@ -309,16 +314,26 @@ public:
         if (s_.copper_inst_ofs == 2) {
             if (s_.copper_inst[0] & 1) {
                 // Wait/skip
-                if (s_.copper_inst[0] != 0xffff || s_.copper_inst[1] != 0xfffe) {
-                    std::cout << "TODO: Copper wait $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << "\n";
-                    assert(0);
+                TODO_ASSERT(!(s_.copper_inst[1] & 1));
+                TODO_ASSERT((s_.copper_inst[1] & 0x8000)); // Blitter wait
+                const auto vp = (s_.copper_inst[0] >> 8) & 0xff;
+                const auto hp = s_.copper_inst[0] & 0xfe;
+                const auto ve = (s_.copper_inst[1] >> 8) & 0xff;
+                const auto he = s_.copper_inst[1] & 0xfe;
+
+                if ((s_.vpos & ve) >= (vp & ve) && ((s_.hpos >> 1) & he) >= (hp & he)) {
+                    std::cout << "Wait done $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
+                    s_.copper_inst_ofs = 0; // Fetch next instruction
                 }
+
+                //std::cout << "Wait $" << hexfmt(s_.copper_inst[0]) << ", $" << hexfmt(s_.copper_inst[1]) << ": vp=$" << hexfmt(vp) << ", hp=$" << hexfmt(hp) << ", ve=$" << hexfmt(ve) << ", he=$" << hexfmt(he) << "\n";
             } else if ((s_.hpos & 1)) {
                 // The copper is activate DMA on odd memory cycles
                 // TODO: Check which register is accessed ($20+ is ok, $10+ ok only with copper danger)
                 // TODO: Does this consume a DMA slot? (it steals it from the CPU at least)
                 const auto reg = s_.copper_inst[0] & 0x1ff;
-                write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
+                if (reg != 0 || s_.copper_inst[1] != 0) // Seems to be used as a kind of NOP in the kickstart copper list?
+                    write_u16(0xdff000 + reg, reg, s_.copper_inst[1]);
                 s_.copper_inst_ofs = 0; // Fetch next instruction
             }
         }
@@ -397,9 +412,10 @@ public:
                 }
 
                 // TODO: Sprite
-                // TODO: Copper
+                // Copper
                 if ((s_.dmacon & DMAF_COPPER) && s_.copper_inst_ofs < 2) {
                     s_.copper_inst[s_.copper_inst_ofs++] = do_dma(s_.copper_pt);
+                    //if (s_.copper_inst_ofs == 2) std::cout << "Read copper instruction $" << hexfmt(s_.copper_inst[0]) << ", " << hexfmt(s_.copper_inst[1]) << "\n";
                 }
                 
                 // TODO: Blitter
@@ -408,12 +424,19 @@ public:
 
         if (++s_.hpos == hpos_per_line) {
             s_.hpos = 0;
-            // TODO: bplmod if in disp area
+            cia_.increment_tod_counter(1);
+            if ((s_.dmacon & DMAF_RASTER) && vert_disp) {
+                for (int bpl = 0; bpl < ((s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0); ++bpl) {
+                    assert(!(bpl & 1 ? s_.bplmod2 : s_.bplmod1));
+                    s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;                    
+                }
+            }
             if (++s_.vpos == vpos_per_field) {
                 s_.copper_pt = s_.coplc[0];
                 s_.copper_inst_ofs = 0;
                 s_.vpos = 0;
                 s_.intreq |= INTF_VERTB;
+                cia_.increment_tod_counter(0);
             }
         }
     }
@@ -438,6 +461,8 @@ public:
         case SERDATR: // $018
             // Don't spam in DiagROM
             return 0xff;
+        case INTENAR: // $01C
+            return s_.intena;
         case INTREQR: // $01E
             return s_.intreq;
         }
@@ -485,12 +510,20 @@ public:
         };
 
         if (offset >= COP1LCH && offset <= COP2LCL) {
+            //std::cerr << "Update register $" << hexfmt(offset, 3) << " (" << regname(offset) << ")" << " val $" << hexfmt(val) << "\n";
+            if (offset == COP2LCL && !val) {
+                std::cerr << "HACK: Ignoring write of 0 to COP2LCL\n";
+                return;
+            }
             write_partial(s_.coplc[(offset - COP1LCH) / 4]);
-            assert(offset == COP1LCH || offset == COP1LCL);
             return;
         }
         if (offset >= BPL1PTH && offset <= BPL6PTL) {
             write_partial(s_.bplpt[(offset - BPL1PTH) / 4]);
+            return;
+        }
+        if (offset >= BPL1DAT && offset <= BPL6DAT) {
+            s_.bpldat[(offset - BPL1DAT) / 2] = val;
             return;
         }
         if (offset >= COLOR00 && offset <= COLOR31) {
@@ -501,6 +534,13 @@ public:
         switch (offset) {
         case SERDAT: // $018
             std::cerr << "[CUSTOM] Serial output ($" << hexfmt(val) << ") '" << (isprint(val & 0xff) ? static_cast<char>(val & 0xff) : ' ') << "'\n";
+            return;
+        case COPJMP1:
+            TODO_ASSERT(0);
+            return;
+        case COPJMP2:
+            s_.copper_pt = s_.coplc[1];
+            TODO_ASSERT(s_.copper_pt);
             return;
         case DIWSTRT: // $08E
             s_.diwstrt = val;
@@ -517,10 +557,13 @@ public:
         case DMACON:  // $096
             val &= ~(1 << 14 | 1 << 13 | 1 << 12 | 1 << 11); // Mask out read only/unused bits
             setclr(s_.dmacon, val);
-            assert(!(s_.dmacon & (DMAF_BLITTER | DMAF_SPRITE | DMAF_DISK | DMAF_AUD3 | DMAF_AUD2 | DMAF_AUD1 | DMAF_AUD0)));
+            if ((s_.dmacon & DMAF_COPPER) && s_.copper_pt == 0) {
+                std::cout << "HACK: Loading copper pointer early from $" << hexfmt(s_.coplc[0]) << "\n";
+                TODO_ASSERT(s_.coplc[0]);
+                s_.copper_pt = s_.coplc[0];
+            }
             return;
         case INTENA:  // $09A
-            assert(!(val & INTF_SETCLR) || ((val & 0x3fff) == INTF_VERTB));
             setclr(s_.intena, val);
             return;
         case INTREQ:  // $09C
@@ -528,25 +571,23 @@ public:
             setclr(s_.intreq, val);
             return;
         case BPLCON0: // $100
-            assert(!(val & ~(BPLCON0F_HIRES | BPLCON0F_BPU | BPLCON0F_COLOR)));
-            assert((val & BPLCON0F_BPU) >> BPLCON0B_BPU0 < 2);
+            TODO_ASSERT(!(val & BPLCON0F_LACE));
             s_.bplcon0 = val;
             return;
         case BPLCON1: // $102
-            assert(val == 0);
+            TODO_ASSERT(val == 0);
             return;
-        case BPLCON2: // $104
-            assert(val == 0);
-            return;
+        case BPLCON2: // $104            
+            break;
         case BPLCON3: // $106
-            assert(val == 0);
+            TODO_ASSERT(val == 0);
             return;
         case BPLMOD1: // $108
-            assert(val == 0);
+            TODO_ASSERT(val == 0);
             s_.bplmod1 = val;
             return;
         case BPLMOD2: // $10A
-            assert(val == 0);
+            TODO_ASSERT(val == 0);
             s_.bplmod2 = val;
             return;
         }
@@ -585,12 +626,14 @@ public:
 
 private:
     memory_handler& mem_;
+    cia_handler& cia_;
+
     uint32_t gfx_buf_[graphics_width * graphics_height];
     custom_state s_;
 };
 
-custom_handler::custom_handler(memory_handler& mem_handler)
-    : impl_ { std::make_unique<impl>(mem_handler) }
+custom_handler::custom_handler(memory_handler& mem_handler, cia_handler& cia)
+    : impl_ { std::make_unique<impl>(mem_handler, cia) }
 {
 }
 

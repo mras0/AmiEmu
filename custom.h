@@ -7,9 +7,11 @@
 constexpr unsigned graphics_width  = 768; // 24*16*2
 constexpr unsigned graphics_height = 568; // 284*2 (actually 285, but only for every other field)
 
+class cia_handler;
+
 class custom_handler {
 public:
-    explicit custom_handler(memory_handler& mem_handler);
+    explicit custom_handler(memory_handler& mem_handler, cia_handler& cia);
     ~custom_handler();
 
     void step();
