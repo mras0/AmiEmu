@@ -136,6 +136,8 @@ public:
     uint16_t read_u16(uint32_t addr);
     uint32_t read_u32(uint32_t addr);
 
+    uint16_t hack_peek_u16(uint32_t addr); // Avoid memory interceptor (!), read must not have side effect and must be properly aligned
+
     void write_u8(uint32_t addr, uint8_t val);
     void write_u16(uint32_t addr, uint16_t val);
     void write_u32(uint32_t addr, uint32_t val);

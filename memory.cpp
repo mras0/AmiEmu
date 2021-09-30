@@ -199,6 +199,13 @@ uint32_t memory_handler::read_u32(uint32_t addr)
     return a.handler->read_u32(addr, addr - a.base);
 }
 
+uint16_t memory_handler::hack_peek_u16(uint32_t addr)
+{
+    addr &= 0xfffffe;
+    auto& a = find_area(addr);
+    return a.handler->read_u16(addr, addr - a.base);
+}
+
 void memory_handler::write_u8(uint32_t addr, uint8_t val)
 {
     addr &= 0xffffff;

@@ -644,6 +644,13 @@ int main(int argc, char* argv[])
         int audio_next_to_fill = 0;
         bool reset = false;
 
+        struct mem_use {
+            bus_use use;
+            uint32_t addr;
+            uint16_t val;
+        };
+        std::vector<mem_use> dma_usage(vpos_per_field * hpos_per_line / 2);
+
         uint8_t cpu_ipl = 0;
         uint8_t cpu_ipl_delay = 0;
 
@@ -697,6 +704,8 @@ int main(int argc, char* argv[])
             cpu_active = false;
             custom_step = custom.step(cpu_waiting, cpu_step.current_pc);
             cpu_active = cpu_was_active;
+
+            dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2] = { custom_step.bus, custom_step.dma_addr, custom_step.dma_val };
 
             ++chip_cycles_count;
 
@@ -842,10 +851,13 @@ int main(int argc, char* argv[])
                     ++cpu_cycles_count;
                     cstep(true);
                 }
+                auto& du = dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2];
+                // XXX: This is can't be right
                 for (int i = 0; i < 4; ++i) {
                     ++cpu_cycles_count;
                     cstep(false);
                 }
+               du = { write ? bus_use::cpu_write : bus_use::cpu_read, addr, write ? static_cast<uint16_t>(data) : mem.hack_peek_u16(addr) };
             } else if (addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size) {
                 // Get up to date
                 do_all_custom_cylces();
@@ -1101,6 +1113,89 @@ int main(int argc, char* argv[])
                                 }
                             }
                             std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
+                        } else if (args[0] == "v") {
+                            uint32_t v = 0, h = 0;
+                            if (args.size() > 1) {
+                                auto vh = from_hex(args[1]);
+                                if (!vh.first || vh.second >= vpos_per_field)
+                                    goto vcmdinvalidargs;
+                                v = vh.second;
+                                if (args.size() > 2) {
+                                    auto hh = from_hex(args[2]);
+                                    if (!hh.first || hh.second >= hpos_per_line / 2)
+                                        goto vcmdinvalidargs;
+                                    h = hh.second;
+                                }
+                            }
+                            if (0) {
+                            vcmdinvalidargs:
+                                std::cerr << "Invalid args to v\n";
+                            } else {
+                                std::cout << "Line $" << hexfmt(v, 2) << "\n";
+                                const auto outer_end = std::min(static_cast<uint32_t>(hpos_per_line / 2), h + 80);
+                                for (uint32_t outer_hp = h; outer_hp < outer_end;) {
+                                    const auto end = std::min(outer_hp + 8, outer_end);
+                                    for (int infoline = 0; infoline < 4; ++infoline) {
+                                        for (uint32_t hp = outer_hp; hp < end; ++hp) {
+                                            std::cout << " ";
+                                            if (infoline == 0) {
+                                                std::cout << "[" << hexfmt(hp, 2) << " " << std::setw(3) << std::right << hp << "] ";
+                                                continue;
+                                            }
+                                            const auto& mi = dma_usage[v * (hpos_per_line / 2) + hp];
+                                            if (mi.use == bus_use::none || (infoline > 1 && mi.use == bus_use::refresh)) {
+                                                std::cout << "         ";
+                                                continue;
+                                            }
+                                            if (infoline == 1) {
+                                                std::cout << std::setw(8) << std::left;
+                                                switch (mi.use) {
+                                                case bus_use::none:
+                                                    assert(false);
+                                                    break;
+                                                case bus_use::refresh:
+                                                    std::cout << "REFRESH";
+                                                    break;
+                                                case bus_use::disk:
+                                                    std::cout << "DISK";
+                                                    break;
+                                                case bus_use::audio:
+                                                    std::cout << "AUDIO";
+                                                    break;
+                                                case bus_use::bitplane:
+                                                    std::cout << "BITPLANE";
+                                                    break;
+                                                case bus_use::sprite:
+                                                    std::cout << "SPRITE";
+                                                    break;
+                                                case bus_use::copper:
+                                                    std::cout << "COPPER";
+                                                    break;
+                                                case bus_use::blitter:
+                                                    std::cout << "BLITTER";
+                                                    break;
+                                                case bus_use::cpu_read:
+                                                    std::cout << "CPU R";
+                                                    break;
+                                                case bus_use::cpu_write:
+                                                    std::cout << "CPU W";
+                                                    break;
+                                                }
+                                            } else if (infoline == 2) {
+                                                std::cout << "    " << hexfmt(mi.val);
+                                            } else if (infoline == 3) {
+                                                std::cout << hexfmt(mi.addr);
+                                            } else {
+                                                assert(false);
+                                            }
+                                            std::cout << " ";
+                                        }
+                                        std::cout << "\n";
+                                    }
+                                    std::cout << "\n";
+                                    outer_hp = end;
+                                }
+                            }
                         } else if (args[0] == "w") {
                             if (args.size() > 1) {
                                 auto [nvalid, num] = get_simple_expr(args[1]);

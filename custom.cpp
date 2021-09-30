@@ -681,13 +681,6 @@ constexpr uint8_t blitcycles_fill[16][5] = {
 // DDFSTOP = $00d8
 // BPLCON2 = $0000
 
-// Color clocks per line
-// 0..$E2 (227.5 actually, on NTSC they alternate between 227 and 228)
-// 64us per line (52us visible), ~454 virtual lorespixels (~369 max visible)
-// Each color clock produces 2 lores or 4 hires pixels
-
-static constexpr uint16_t hpos_per_line    = 454; // 227.5 color clocks = 455 (lores pixels), but MUST be multiple of CCKs (227 for PAL) for correct timing
-
 static constexpr uint16_t lores_min_pixel  = 0x51; 
 static constexpr uint16_t lores_max_pixel  = 0x1d1;
 static constexpr uint16_t hires_min_pixel  = 2 * lores_min_pixel;
@@ -698,7 +691,6 @@ static constexpr uint16_t hires_max_pixel  = 2 * lores_max_pixel;
 static constexpr uint16_t disp_extra_hpos = 11;
 static_assert(hpos_per_line + disp_extra_hpos >= lores_max_pixel);
 
-static constexpr uint16_t vpos_per_field  = 313;
 //static constexpr uint16_t vpos_per_frame  = 625;
 static constexpr uint16_t vblank_end_vpos = 0x1a;
 static constexpr uint16_t sprite_dma_start_vpos = 25; // http://eab.abime.net/showpost.php?p=1048395&postcount=200
@@ -1987,6 +1979,7 @@ public:
         step_result res {
             .frame = gfx_buf_,
             .audio = audio_buf_,
+            .bus = bus_use::none,
         };
 
         current_pc_ = current_pc;
@@ -2097,7 +2090,6 @@ public:
                 ++s_.bltblockingcpu;
         }
 
-        bool copper_dma = false;
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
             auto do_dma = [this](uint32_t& pt) {
                 const auto val = chip_read(pt);
@@ -2105,30 +2097,41 @@ public:
                 return val;
             };
 
-            do {
-                // Only 226 slots are usable
-                if (colclock == 0xE3)
-                    break;
+            dma_addr_ = 0;
+            dma_val_ = 0;
 
+            do {
                 // Refresh
-                if (colclock == 0xE2 || colclock == 1 || colclock == 3 || colclock == 5)
+                if (colclock == 0xE2 || colclock == 1 || colclock == 3 || colclock == 5) {
+                    res.bus = bus_use::refresh;
                     break;
+                }
 
                 // Disk
                 if ((colclock == 7 || colclock == 9 || colclock == 11) && (s_.dmacon & DMAF_DISK) && (s_.dsklen & 0x8000) && s_.dsklen_act) {
-                    if (do_disk_dma())
+                    if (do_disk_dma()) {
+                        res.bus = bus_use::disk;
                         break;
+                    }
                 }
 
                 // Audio
-                if (colclock == 13 && audio_dma(0))
+                if (colclock == 13 && audio_dma(0)) {
+                    res.bus = bus_use::audio;
                     break;
-                if (colclock == 15 && audio_dma(1))
+                }
+                if (colclock == 15 && audio_dma(1)) {
+                    res.bus = bus_use::audio;
                     break;
-                if (colclock == 17 && audio_dma(2))
+                }
+                if (colclock == 17 && audio_dma(2)) {
+                    res.bus = bus_use::audio;
                     break;
-                if (colclock == 19 && audio_dma(3))
+                }
+                if (colclock == 19 && audio_dma(3)) {
+                    res.bus = bus_use::audio;
                     break;
+                }
 
                 // Display
                 const uint16_t act_ddfstop = std::min<uint16_t>(0xD8, s_.ddfstop);
@@ -2194,6 +2197,7 @@ public:
                             s_.bplpt[bpl] += bpl & 1 ? s_.bplmod2 : s_.bplmod1;
                         }
 
+                        res.bus = bus_use::bitplane;
                         break;
                     }
                 }
@@ -2210,6 +2214,7 @@ public:
                         if (DEBUG_SPRITE)
                             DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << custom_regname(reg) << "\n";
                         write_u16(0xdff000 | reg, reg, val);
+                        res.bus = bus_use::sprite;
                         break;
                     }
                 }
@@ -2221,19 +2226,26 @@ public:
                     // But seems like it gets allocated anyway?
                     if ((!(colclock & 1) && colclock != 0xe0) || colclock == 0xe1) {
                         if (do_copper()) {
-                            copper_dma = true;
+                            res.bus = bus_use::copper;
                             break;
                         }
                     }
                 }
                 
                 // Blitter
-                if (do_blitter())
+                if (do_blitter()) {
+                    res.bus = bus_use::blitter;
                     break;
+                }
 
                 res.free_chip_cycle = true;
                 s_.bltblockingcpu = 0;
             } while (0);
+
+            assert(res.free_chip_cycle == (res.bus == bus_use::none));
+            res.dma_addr = dma_addr_;
+            res.dma_val = dma_val_;
+
         } else if (!(s_.hpos & 1)) {
             res.free_chip_cycle = true;
             s_.bltblockingcpu = 0;
@@ -2256,7 +2268,7 @@ public:
             }
         }
 
-        if (s_.copstate == copper_state::jmp_delay1 && !copper_dma && !(s_.hpos & 3)) {
+        if (s_.copstate == copper_state::jmp_delay1 && res.bus != bus_use::copper && !(s_.hpos & 3)) {
             // vAmigaTS jump1b test
             // http://eab.abime.net/showpost.php?p=832397&postcount=118
             if (DEBUG_COPPER)
@@ -2808,15 +2820,24 @@ private:
     // bitplane debugging (don't need to be saved)
     int rem_pixels_odd_;
     int rem_pixels_even_;
+    // dma usage tracking (don't need to be saved)
+    uint32_t dma_addr_ = 0;
+    uint16_t dma_val_ = 0;
 
     uint16_t chip_read(uint32_t addr)
     {
-        return mem_.read_u16(addr & chip_ram_mask_);
+        addr &= chip_ram_mask_;
+        dma_addr_ = addr;
+        dma_val_ = mem_.read_u16(addr);
+        return dma_val_;
     }
 
     void chip_write(uint32_t addr, uint16_t val)
     {
-        mem_.write_u16(addr & chip_ram_mask_, val);
+        addr &= chip_ram_mask_;
+        dma_addr_ = addr;
+        dma_val_ = val;
+        mem_.write_u16(addr, val);
     }
 
     uint16_t internal_read(uint16_t reg);

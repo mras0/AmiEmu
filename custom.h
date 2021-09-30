@@ -19,6 +19,27 @@ constexpr uint32_t custom_mem_size  = 0xE00000 - 0xDE0000;
 
 class cia_handler;
 
+enum class bus_use {
+    none,
+    refresh,
+    disk,
+    audio,
+    bitplane,
+    sprite,
+    copper,
+    blitter,
+    cpu_read,
+    cpu_write,
+};
+
+// Color clocks per line
+// 0..$E2 (227.5 actually, on NTSC they alternate between 227 and 228)
+// 64us per line (52us visible), ~454 virtual lorespixels (~369 max visible)
+// Each color clock produces 2 lores or 4 hires pixels
+
+static constexpr uint16_t hpos_per_line = 454; // 227.5 color clocks = 455 (lores pixels), but MUST be multiple of CCKs (227 for PAL) for correct timing
+static constexpr uint16_t vpos_per_field = 313;
+
 class custom_handler {
 public:
     explicit custom_handler(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end, uint32_t floppy_speed);
@@ -31,6 +52,9 @@ public:
         uint16_t vpos;
         uint16_t hpos;
         uint8_t ipl;
+        bus_use bus;
+        uint32_t dma_addr;
+        uint16_t dma_val;
         bool free_chip_cycle;
         uint8_t eclock_cycle;
     };
