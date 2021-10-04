@@ -1492,6 +1492,8 @@ bool run_timing_tests()
         { "CHK D0, D0"                      , 10, 1 },
         { "CHK #42, D0"                     , 14, 2 },
         { "CHK D0, D4"                      , 40, 7 },
+
+        //{ "BTST D0, #12"                    , 10, 2 }, // http://gendev.spritesmind.net/forum/viewtopic.php?p=33999#p33999
     };
 
     const uint32_t code_pos = 0x1000;

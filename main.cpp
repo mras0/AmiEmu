@@ -846,18 +846,15 @@ int main(int argc, char* argv[])
             assert(size == 1 || size == 2); (void)size;
             if (addr < max_chip_size || (addr >= slow_base && addr < custom_base_addr + custom_mem_size)) {
                 // Sync with Agnus
+                cycles_todo += 2;
                 do_all_custom_cylces();
                 while (!custom_step.free_chip_cycle) {
                     ++cpu_cycles_count;
                     cstep(true);
                 }
                 auto& du = dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2];
-                // XXX: This is can't be right
-                for (int i = 0; i < 4; ++i) {
-                    ++cpu_cycles_count;
-                    cstep(false);
-                }
-               du = { write ? bus_use::cpu_write : bus_use::cpu_read, addr, write ? static_cast<uint16_t>(data) : mem.hack_peek_u16(addr) };
+                du = { write ? bus_use::cpu_write : bus_use::cpu_read, addr, write ? static_cast<uint16_t>(data) : mem.hack_peek_u16(addr) };
+                cycles_todo += 2;
             } else if (addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size) {
                 // Get up to date
                 do_all_custom_cylces();
