@@ -129,25 +129,32 @@ public:
         cycle_handler_ = handler;
     }
 
-    step_result step(uint8_t current_ipl)
+    void set_read_ipl(const read_ipl_func& func)
+    {
+        assert(!read_ipl_);
+        read_ipl_ = func;
+    }
+
+    step_result step()
     {
         bool trace_active = !!(state_.sr & srm_trace);
 
         if (state_.stopped) {
-            if (!trace_active && !current_ipl)
+            if (!trace_active && !state_.ipl) {
+                poll_ipl();
                 return { state_.pc, state_.pc, iwords_[0], true };
+            }
             state_.stopped = false;
         }
-        assert(current_ipl < 8);
 
         ++state_.instruction_count;
         start_pc_ = state_.pc;
         step_result step_res { state_.pc, 0, 0, false };
 
-        if (current_ipl > (state_.sr & srm_ipl) >> sri_ipl) {
-            do_interrupt(current_ipl);
+        if (state_.ipl > (state_.sr & srm_ipl) >> sri_ipl) {
+            do_interrupt(state_.ipl);
             if (trace_) {
-                *trace_ << "Interrupt switching to IPL " << static_cast<int>(current_ipl) << "\n";
+                *trace_ << "Interrupt switching to IPL " << static_cast<int>(state_.ipl) << "\n";
                 print_cpu_state(*trace_, state_);
             }
             goto out;
@@ -383,6 +390,8 @@ found:
 
         step_res.instruction = iwords_[0];
 
+        assert(read_ipled_);
+
         return step_res;
     }
 
@@ -391,6 +400,7 @@ private:
     };
 
     memory_handler& mem_;
+    read_ipl_func read_ipl_;
     cpu_state state_;
     cycle_handler cycle_handler_;
 
@@ -404,6 +414,18 @@ private:
     std::ostream* trace_ = nullptr;
     uint32_t invalid_access_address_ = 0;
     uint16_t invalid_access_info_ = 0;
+#ifndef NDEBUG
+    bool read_ipled_ = false;
+#endif
+
+    void poll_ipl()
+    {
+#ifndef NDEBUG
+        read_ipled_ = true;
+#endif
+        state_.ipl = read_ipl_ ? read_ipl_() : 0;
+        assert(state_.ipl < 8);
+    }
 
     void add_cycles(uint8_t cnt)
     {
@@ -896,6 +918,7 @@ private:
         }
 
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
         if (arit && cnt) {
@@ -1035,6 +1058,7 @@ private:
             push_u32(invalid_access_address_);
             push_u16(invalid_access_info_ | (iwords_[0] & ~0x1f)); // Opcode in undefined bits?
         }
+        poll_ipl(); // TODO: Verify placement (IPL)
         useless_prefetch();
     }
 
@@ -1088,6 +1112,7 @@ private:
         if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(1, res2);
         state_.update_sr(srm_ccr, ccr);
     }
@@ -1116,6 +1141,7 @@ private:
 
         add_rmw_cycles();
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
 
         write_ea(1, res);
         // All flags updated
@@ -1129,6 +1155,7 @@ private:
         (void)calc_ea(1);
         add_cycles(inst_->size == opsize::w || inst_->ea[0] >> ea_m_shift <= ea_m_An || inst_->ea[0] == ea_immediate ? 4 : 2);
         state_.A(inst_->ea[1] & ea_xn_mask) += s; // And the operation performed on the full 32-bit value
+        poll_ipl(); // TODO: Verify placement (IPL)
         // No flags
     }
 
@@ -1145,6 +1172,7 @@ private:
             if (inst_->ea[1] >> ea_m_shift == ea_m_Dn && inst_->size == opsize::l)
                 add_cycles(2);
         }
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_ADDX()
@@ -1160,6 +1188,7 @@ private:
         // Z is only cleared if the result is non-zero
         if (res & opsize_all_mask(inst_->size))
             state_.update_sr(srm_z, 0);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_AND()
@@ -1172,6 +1201,7 @@ private:
         prefetch();
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_ASL()
@@ -1207,6 +1237,7 @@ private:
         }
 
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
     }
@@ -1218,6 +1249,7 @@ private:
         // Not taken:   8/1,       12/2
         assert(inst_->nea == 1 && inst_->ea[0] == ea_disp && (inst_->extra & extra_cond_flag));
         const auto addr = calc_ea(0);
+        poll_ipl(); // TODO: Verify placement (IPL)
         if (!state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
             add_cycles(4);
             return;
@@ -1235,6 +1267,7 @@ private:
             useless_prefetch();
         state_.pc = calc_ea(0);
         add_cycles(2);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_BSR()
@@ -1245,6 +1278,7 @@ private:
         if (inst_->size != opsize::w)
             useless_prefetch();
         add_cycles(2);
+        poll_ipl(); // TODO: Verify placement (IPL)
         state_.pc = addr;
     }
 
@@ -1271,6 +1305,7 @@ private:
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(1, num ^ (1 << bitnum));
     }
 
@@ -1280,6 +1315,7 @@ private:
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(4);
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(1, num & ~(1 << bitnum));
     }
 
@@ -1289,12 +1325,14 @@ private:
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(1, num | (1 << bitnum));
     }
 
     void handle_BTST()
     {
         bit_op_helper(); // discard return value on purpose
+        poll_ipl(); // TODO: Verify placement (IPL)
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn) {
             if (inst_->ea[0] >> ea_m_shift == ea_m_Dn)
                 add_cycles(2);
@@ -1309,6 +1347,7 @@ private:
         const auto val   = static_cast<int16_t>(read_ea(1));
         state_.update_sr(srm_ccr_no_x, (val == 0 ? srm_z : 0) | (val < 0 ? srm_n : 0));
         add_cycles(6);
+        poll_ipl(); // TODO: Verify placement (IPL)
         if (val < 0 || val > bound)
             do_trap(interrupt_vector::chk_exception);
     }
@@ -1320,6 +1359,7 @@ private:
         if (inst_->size == opsize::l && inst_->ea[0] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
         prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(0, 0);
         state_.update_sr(srm_ccr_no_x, srm_z);
     }
@@ -1332,6 +1372,7 @@ private:
         const uint32_t res = l - r;
         if (inst_->size == opsize::l && inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(2);
+        poll_ipl(); // TODO: Verify placement (IPL)
         update_flags(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res));
     }
 
@@ -1345,6 +1386,7 @@ private:
         // And the performed on the full 32-bit value
         const auto res = l - r;
         update_flags_size(srm_ccr_no_x, res, (~l & r) | (~(l ^ r) & res), opsize::l);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_CMPM()
@@ -1364,6 +1406,7 @@ private:
 
         uint16_t val = static_cast<uint16_t>(read_ea(0));
         (void)calc_ea(1);
+        poll_ipl(); // TODO: Verify placement (IPL)
 
         if (state_.eval_cond(static_cast<conditional>(inst_->extra >> 4))) {
             add_cycles(4);
@@ -1440,6 +1483,7 @@ private:
                 ccr |= srm_z;
         }
         add_cycles(cycles);
+        poll_ipl(); // TODO: Verify placement (IPL)
         state_.update_sr(srm_ccr_no_x, ccr);
     }
 
@@ -1497,6 +1541,7 @@ private:
         }
 
         add_cycles(cycles);
+        poll_ipl(); // TODO: Verify placement (IPL)
         state_.update_sr(srm_ccr_no_x, ccr);
     }
 
@@ -1509,6 +1554,7 @@ private:
         add_rmw_cycles();
         prefetch();
         prefetch(); // Prefetch happens before write (needed for Razor1911-Voyage, which uses EOR.W D5,(A2) to modify the following instruction!)
+        poll_ipl(); // TODO: Verify placement (IPL)
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
     }
@@ -1521,6 +1567,7 @@ private:
         add_cycles(2);
         write_ea(0, b);
         write_ea(1, a);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_EXT()
@@ -1536,6 +1583,7 @@ private:
         }
         write_ea(0, res);
         update_flags(srm_ccr_no_x, res, 0);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void add_jmp_jsr_cycles()
@@ -1575,6 +1623,7 @@ private:
         assert(inst_->nea == 1);
         add_jmp_jsr_cycles();
         state_.pc = calc_ea(0);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_JSR()
@@ -1584,6 +1633,7 @@ private:
         add_jmp_jsr_cycles();
         push_u32(state_.pc);
         state_.pc = addr;
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_LEA()
@@ -1593,6 +1643,7 @@ private:
         if ((inst_->ea[0] >> ea_m_shift == ea_m_A_ind_index) || inst_->ea[0] == ea_pc_index)
             add_cycles(2);
         write_ea(1, addr);
+        poll_ipl(); // TODO: Verify placement (IPL)
         // No flags affected
     }
 
@@ -1605,6 +1656,7 @@ private:
         auto& sp = state_.A(7);
         a = sp;
         sp += sext(calc_ea(1), inst_->size);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_LSL()
@@ -1638,6 +1690,7 @@ private:
         prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_MOVE()
@@ -1648,6 +1701,7 @@ private:
         // Reading/writing SR/CCR/USP should not update flags
         if (inst_->ea[0] != ea_sr && inst_->ea[0] != ea_ccr && inst_->ea[0] != ea_usp && inst_->ea[1] != ea_sr && inst_->ea[1] != ea_ccr && inst_->ea[1] != ea_usp)
             update_flags(srm_ccr_no_x, src, 0);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_MOVEA()
@@ -1656,6 +1710,7 @@ private:
         const auto s = sext(read_ea(0), inst_->size); // The source is sign-extended (if word sized)
         (void)calc_ea(1);
         state_.A(inst_->ea[1] & ea_xn_mask) = s; // Always write full 32-bit result
+        poll_ipl(); // TODO: Verify placement (IPL)
         // No flags
     }
 
@@ -1714,6 +1769,7 @@ private:
             // Mem to reg mode apparently does an extra read access
             (void)mem_read16(addr);
         }
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_MOVEP()
@@ -1740,6 +1796,7 @@ private:
             } while (shift);
             write_ea(1, val);
         }
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_MOVEQ()
@@ -1748,6 +1805,7 @@ private:
         const uint32_t src = static_cast<int32_t>(static_cast<int8_t>(read_ea(0)));
         write_ea(1, src);
         update_flags(srm_ccr_no_x, src, 0);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_MULS()
@@ -1765,6 +1823,7 @@ private:
         if (res & 0x80000000)
             ccr |= srm_n;
         state_.update_sr(srm_ccr_no_x, ccr);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_MULU()
@@ -1782,6 +1841,7 @@ private:
         if (res & 0x80000000)
             ccr |= srm_n;
         state_.update_sr(srm_ccr_no_x, ccr);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_NBCD()
@@ -1802,6 +1862,7 @@ private:
         prefetch();
         write_ea(0, res2);
         state_.update_sr(srm_ccr, ccr);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_NEG()
@@ -1827,6 +1888,7 @@ private:
         prefetch();
         write_ea(0, n);
         state_.update_sr(srm_ccr, ccr);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_NEGX()
@@ -1844,7 +1906,7 @@ private:
         // Z is only cleared if the result is non-zero
         if (res & opsize_all_mask(inst_->size))
             state_.update_sr(srm_z, 0);
-
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_NOT()
@@ -1856,10 +1918,12 @@ private:
         prefetch();
         update_flags(srm_ccr_no_x, n, 0);
         write_ea(0, n);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_NOP()
     {
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_OR()
@@ -1872,6 +1936,7 @@ private:
         prefetch();
         update_flags(srm_ccr_no_x, res, 0);
         write_ea(1, res);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_PEA()
@@ -1881,12 +1946,14 @@ private:
         if ((inst_->ea[0] >> ea_m_shift == ea_m_A_ind_index) || inst_->ea[0] == ea_pc_index)
             add_cycles(2);
         push_u32(addr);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_RESET()
     {
         // Handle externally
         state_.pc = start_pc_;
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_ROL()
@@ -1916,6 +1983,7 @@ private:
         const uint16_t old_x = state_.sr & srm_x; // X is not affected
         update_flags_rot(val, cnt, carry);
         state_.update_sr(srm_x, old_x);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_ROR()
@@ -1944,6 +2012,7 @@ private:
         const uint16_t old_x = state_.sr & srm_x; // X is not affected
         update_flags_rot(val, cnt, carry);
         state_.update_sr(srm_x, old_x);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_ROXL()
@@ -1969,6 +2038,7 @@ private:
         prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, !!x);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_ROXR()
@@ -1994,6 +2064,7 @@ private:
         prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, !!x);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_RTE()
@@ -2004,6 +2075,7 @@ private:
         state_.pc = pop_u32();
         state_.sr = sr; // Only after popping PC (otherwise we switch stacks too early)
         useless_prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_RTR()
@@ -2012,6 +2084,7 @@ private:
         state_.pc = pop_u32();
         state_.sr = (state_.sr & ~srm_ccr) | (ccr & srm_ccr);
         useless_prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_RTS()
@@ -2019,6 +2092,7 @@ private:
         assert(inst_->nea == 0);
         state_.pc = pop_u32();
         useless_prefetch();
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_SBCD()
@@ -2036,6 +2110,7 @@ private:
         prefetch();
         write_ea(1, res2);
         state_.update_sr(srm_ccr, ccr);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_Scc()
@@ -2048,6 +2123,7 @@ private:
             (void)read_ea(0);
         prefetch();
         write_ea(0, cond ? 0xff : 0x00);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_STOP()
@@ -2056,6 +2132,7 @@ private:
         const auto orig_sr = state_.sr;
         state_.sr = static_cast<uint16_t>(read_ea(0) & ~srm_illegal);
         state_.stopped = !(orig_sr & srm_trace); // If tracing is enabled, drop through immediately
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_SUB()
@@ -2069,6 +2146,7 @@ private:
         write_ea(1, res);
         // All flags updated
         update_flags(srm_ccr, res, (~l & r) | (~(l ^ r) & res));
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_SUBA()
@@ -2079,6 +2157,7 @@ private:
         add_cycles(inst_->size == opsize::w || inst_->ea[0] >> ea_m_shift <= ea_m_An || inst_->ea[0] == ea_immediate ? 4 : 2);
         state_.A(inst_->ea[1] & ea_xn_mask) -= s; // And the operation performed on the full 32-bit value
         // No flags
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_SUBQ()
@@ -2094,6 +2173,7 @@ private:
             if (inst_->ea[1] >> ea_m_shift == ea_m_Dn && inst_->size == opsize::l)
                 add_cycles(2);
         }
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_SUBX()
@@ -2109,6 +2189,7 @@ private:
         // Z is only cleared if the result is non-zero
         if (res & opsize_all_mask(inst_->size))
             state_.update_sr(srm_z, 0);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_SWAP()
@@ -2124,6 +2205,7 @@ private:
             ccr |= srm_z;
 
         state_.update_sr(srm_ccr_no_x, ccr);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_TAS()
@@ -2138,6 +2220,7 @@ private:
         if (inst_->ea[0] >> ea_m_shift != ea_m_Dn)
             add_cycles(2); // TAS uses a special (10 cycle) RMW cycle
         write_ea(0, v | 0x80);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_TRAP()
@@ -2153,12 +2236,14 @@ private:
             do_trap(interrupt_vector::trapv_instruction);
             useless_prefetch();
         }
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_TST()
     {
         assert(inst_->nea == 1);
         update_flags(srm_ccr_no_x, read_ea(0), 0);
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 
     void handle_UNLK()
@@ -2168,6 +2253,7 @@ private:
         auto& a = state_.A(inst_->ea[0] & ea_xn_mask);
         state_.A(7) = a;
         a = pop_u32();
+        poll_ipl(); // TODO: Verify placement (IPL)
     }
 };
 
@@ -2205,9 +2291,14 @@ void m68000::set_cycle_handler(const cycle_handler& handler)
     impl_->set_cycle_handler(handler);
 }
 
-m68000::step_result m68000::step(uint8_t current_ipl)
+void m68000::set_read_ipl(const read_ipl_func& func)
 {
-    return impl_->step(current_ipl);
+    impl_->set_read_ipl(func);
+}
+
+m68000::step_result m68000::step()
+{
+    return impl_->step();
 }
 
 void m68000::reset()

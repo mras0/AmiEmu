@@ -91,6 +91,7 @@ struct cpu_state {
     uint32_t prefetch_address;
     uint16_t prefecth_val;
     bool stopped;
+    uint8_t  ipl;
     uint64_t instruction_count;
 
     uint32_t& A(unsigned idx)
@@ -177,13 +178,15 @@ public:
         bool stopped;
     };
     using cycle_handler = std::function<void (uint8_t)>;
+    using read_ipl_func = std::function<uint8_t(void)>;
 
     const cpu_state& state() const;
     void trace(std::ostream* os);
     void show_state(std::ostream& os);
     void set_cycle_handler(const cycle_handler& handler);
+    void set_read_ipl(const read_ipl_func& func);
 
-    step_result step(uint8_t current_ipl = 0);
+    step_result step();
 
     void reset();
     void handle_state(state_file& sf);

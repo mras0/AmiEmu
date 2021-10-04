@@ -875,6 +875,11 @@ int main(int argc, char* argv[])
             }
         });
 
+        cpu.set_read_ipl([&]() {
+            do_all_custom_cylces(); // Sync
+            return cpu_ipl;
+        });
+
         //cpu.trace(&std::cout);
 
         if (cmdline_args.debug)
@@ -1374,7 +1379,7 @@ unknown_command:
                 }
 
                 cpu_active = true;
-                cpu_step = cpu.step(cpu_ipl);
+                cpu_step = cpu.step();
                 cpu_active = false;
                    
                 if (cpu_step.stopped) {
