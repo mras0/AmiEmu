@@ -51,7 +51,6 @@ public:
         const int16_t* audio;
         uint16_t vpos;
         uint16_t hpos;
-        uint8_t ipl;
         bus_use bus;
         uint32_t dma_addr;
         uint16_t dma_val;
@@ -60,6 +59,7 @@ public:
     };
 
     step_result step(bool cpu_wants_access, uint32_t current_pc);
+    uint8_t current_ipl();
 
     void set_serial_data_handler(const serial_data_handler& handler);
     void set_rbutton_state(bool pressed);

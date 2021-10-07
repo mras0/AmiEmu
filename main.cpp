@@ -651,9 +651,6 @@ int main(int argc, char* argv[])
         };
         std::vector<mem_use> dma_usage(vpos_per_field * hpos_per_line / 2);
 
-        uint8_t cpu_ipl = 0;
-        uint8_t cpu_ipl_delay = 0;
-
         cpu.set_cycle_handler([&](uint8_t cycles) {
             assert(cpu_active);
             cycles_todo += cycles;
@@ -686,8 +683,6 @@ int main(int argc, char* argv[])
             rtc.handle_state(sf);
             autoconf.handle_state(sf);
             cpu.handle_state(sf);
-            sf.handle(cpu_ipl);
-            sf.handle(cpu_ipl_delay);
             sf.handle(cycles_todo);
             if (sf.loading()) {
                 // Fake up something for the debugger
@@ -705,20 +700,10 @@ int main(int argc, char* argv[])
             custom_step = custom.step(cpu_waiting, cpu_step.current_pc);
             cpu_active = cpu_was_active;
 
-            dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2] = { custom_step.bus, custom_step.dma_addr, custom_step.dma_val };
+            if (!(custom_step.hpos & 1))
+                dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2] = { custom_step.bus, custom_step.dma_addr, custom_step.dma_val };
 
             ++chip_cycles_count;
-
-            // HACK: Delay IPL change from Paula by 3 CCKs.
-            // Reality is more complicated: https://github.com/dirkwhoffmann/vAmiga/issues/274
-            // And below isn't correct if Paula IPL changes between delay start and end, but let's see...
-            if (cpu_ipl_delay) {
-                if (--cpu_ipl_delay == 0)
-                    cpu_ipl = custom_step.ipl;
-            } else if (cpu_ipl != custom_step.ipl) {
-                // Add longer delay for INT2/INT6 (CIA timer interrupts) to match timing of Razor1911-Voyage...
-                cpu_ipl_delay = (custom_step.ipl == 2 || custom_step.ipl == 6) ? 16 : 12;
-            } 
 
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
                 active_debugger();
@@ -820,7 +805,7 @@ int main(int argc, char* argv[])
         std::vector<memwatch> memwatches;
 
         mem.set_memory_interceptor([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
-            for (const auto& mw: memwatches) {
+            for (const auto& mw : memwatches) {
                 if (!mw.enabled)
                     continue;
                 if (mw.size && mw.size != size)
@@ -843,7 +828,8 @@ int main(int argc, char* argv[])
 
             if (!cpu_active)
                 return;
-            assert(size == 1 || size == 2); (void)size;
+            assert(size == 1 || size == 2);
+            (void)size;
             if (addr < max_chip_size || (addr >= slow_base && addr < custom_base_addr + custom_mem_size)) {
                 // Sync with Agnus
                 cycles_todo += 2;
@@ -852,6 +838,7 @@ int main(int argc, char* argv[])
                     ++cpu_cycles_count;
                     cstep(true);
                 }
+                assert(!(custom_step.hpos & 1));
                 auto& du = dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2];
                 du = { write ? bus_use::cpu_write : bus_use::cpu_read, addr, write ? static_cast<uint16_t>(data) : mem.hack_peek_u16(addr) };
                 cycles_todo += 2;
@@ -876,8 +863,20 @@ int main(int argc, char* argv[])
         });
 
         cpu.set_read_ipl([&]() {
+            ///// HACK: Delay IPL change from Paula by 3 CCKs.
+            ///// Reality is more complicated: https://github.com/dirkwhoffmann/vAmiga/issues/274
+            ///// And below isn't correct if Paula IPL changes between delay start and end, but let's see...
+            ///if (cpu_ipl_delay) {
+            ///    if (--cpu_ipl_delay == 0)
+            ///        cpu_ipl = custom_step.ipl;
+            ///} else if (cpu_ipl != custom_step.ipl) {
+            ///    // Add longer delay for INT2/INT6 (CIA timer interrupts) to match timing of Razor1911-Voyage...
+            ///    cpu_ipl_delay = (custom_step.ipl == 2 || custom_step.ipl == 6) ? 16 : 12;
+            ///} 
+
+
             do_all_custom_cylces(); // Sync
-            return cpu_ipl;
+            return custom.current_ipl();
         });
 
         //cpu.trace(&std::cout);
@@ -1109,6 +1108,8 @@ int main(int argc, char* argv[])
                                             debug_flags |= debug_flag_audio;
                                         else if (args[i] == "cia")
                                             debug_flags |= debug_flag_cia;
+                                        else if (args[i] == "ints")
+                                            debug_flags |= debug_flag_ints;
                                         else
                                             std::cerr << "Unknown trace flag \"" << args[i] << "\"\n";
                                     }
@@ -1385,7 +1386,7 @@ unknown_command:
                 if (cpu_step.stopped) {
                     do {
                         cstep(false);
-                    } while (custom_step.ipl == 0 && !new_frame && !debug_mode);
+                    } while (!custom.current_ipl() && !new_frame && !debug_mode);
                 } else {
                     switch (wait_mode) {
                     case wait_none:

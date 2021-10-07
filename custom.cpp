@@ -841,6 +841,10 @@ struct custom_state {
     uint16_t intena;
     uint16_t intreq;
     uint16_t adkcon;
+    uint8_t int_delay[INTB_EXTER+1];
+    uint8_t ipl_current;
+    uint8_t ipl_pending;
+    uint8_t ipl_delay;
 
     uint32_t bplpt[6];
     uint16_t bplcon0;
@@ -1476,6 +1480,7 @@ public:
         assert(s_.blth == 0);
         if (DEBUG_BLITTER)
             DBGOUT << "Blitter done INTREQ=$" << hexfmt(s_.intreq) << " DMACON=$" << hexfmt(s_.dmacon) << " state=" << (int)s_.blitstate << "\n";
+        // XXX: FIXME: Shouldn't be done here
         s_.intreq |= INTF_BLIT;
         s_.dmacon &= ~DMAF_BLTBUSY;
         s_.bltw = s_.blth = 0;
@@ -1639,6 +1644,7 @@ public:
                     if (DEBUG_DISK)
                         DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(s_.mfm_pos) << "\n";
                     ++s_.mfm_pos;
+                    // XXX: FIXME: Shouldn't be done here
                     s_.intreq |= INTF_DSKSYNC;
                     s_.dsksync_passed = true;
                     s_.dskwait = 10; // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
@@ -1662,6 +1668,7 @@ public:
         if (s_.dskpos == nwords) {
             if (DEBUG_DISK)
                 DBGOUT << "Disk read done $" << hexfmt(nwords) << " words read\n";
+            // XXX: FIXME: Shouldn't be done here
             s_.intreq |= INTF_DSKBLK;
             s_.dsklen_act = 0;
         }
@@ -1767,6 +1774,7 @@ public:
                 DBGOUT << "Audio channel " << (int)idx << " DMA started actlen=$" << hexfmt(ch.actlen) << "\n";
             if (ch.actlen != 1)
                 ch.actlen--;
+            // XXX: FIXME: Shouldn't be done here
             s_.intreq |= 1 << (idx + INTB_AUD0);
             ch.state = custom_state::audio_channel_state::dma_samp1;
             break;
@@ -1778,6 +1786,7 @@ public:
                     DBGOUT << "Audio channel " << (int)idx << " finished playing (restarting)\n";
                 ch.ptr = ch.lc;
                 ch.actlen = ch.len;
+                // XXX: FIXME: Shouldn't be done here
                 s_.intreq |= 1 << (idx + INTB_AUD0);
             } else {
                 if (DEBUG_AUDIO)
@@ -2276,14 +2285,40 @@ public:
             s_.copstate = copper_state::jmp_delay2;
         }
 
+        // Delayed interrupts
+        for (int i = 0; i < sizeof(s_.int_delay) / sizeof(*s_.int_delay); ++i) {
+            if (s_.int_delay[i] && --s_.int_delay[i] == 0) {
+                if (debug_flags)
+                    DBGOUT << "Triggering interrupt " << i << "\n";
+                s_.intreq |= 1 << i;
+            }
+        }
+
+        // Hack: IPL change delay
+        // TODO: Debug info...
+        const auto ipl = calc_ipl();
+        if (s_.ipl_delay) {
+            if (--s_.ipl_delay == 0)
+                s_.ipl_current = s_.ipl_pending;
+        } else if (ipl != s_.ipl_current) {
+            s_.ipl_pending = ipl;
+            s_.ipl_delay = 2;
+        }
+
+        // Capture before incrementing
+        res.vpos = s_.vpos;
+        res.hpos = s_.hpos;
+        res.eclock_cycle = s_.eclock_cycle;
+
         // CIA tick rate (EClock) is 1/10th of (base) CPU speed = 1/5th of CCK (to keep in sync with DMA)
         if (++s_.eclock_cycle == 10) {
             cia_.step();
             const auto irq_mask = cia_.active_irq_mask();
+            constexpr uint8_t cia_int_delay = 16; // XXX: FIXME: Need correct number
             if (irq_mask & 1)
-                s_.intreq |= INTF_PORTS;
+                interrupt_with_delay(INTB_PORTS, cia_int_delay);
             if (irq_mask & 2)
-                s_.intreq |= INTF_EXTER;
+                interrupt_with_delay(INTB_EXTER, cia_int_delay);
             s_.eclock_cycle = 0;
         }
 
@@ -2302,6 +2337,7 @@ public:
                 else if (s_.last_long_frame == s_.long_frame)
                     scandouble();
                 s_.last_long_frame = s_.long_frame;
+                // XXX: FIXME: Shouldn't be done here
                 s_.intreq |= INTF_VERTB;
                 cia_.increment_tod_counter(0);
             }
@@ -2318,11 +2354,17 @@ public:
             //memset(s_.spr_hold_cnt, 0, sizeof(s_.spr_hold_cnt));
         }
 
-        res.vpos = s_.vpos;
-        res.hpos = s_.hpos;
-        res.ipl = current_ipl();
-        res.eclock_cycle = s_.eclock_cycle;
         return res;
+    }
+
+    void interrupt_with_delay(uint8_t index, uint8_t delay)
+    {
+        assert(index < sizeof(s_.int_delay)/sizeof(*s_.int_delay));
+        if (s_.int_delay[index])
+            return;
+        if (debug_flags)
+            DBGOUT << "Interrupt with delay " << static_cast<int>(index) << " delay " << static_cast<int>(delay) << "\n";
+        s_.int_delay[index] = delay;
     }
 
     uint8_t read_u8(uint32_t addr, uint32_t offset) override
@@ -2778,6 +2820,11 @@ public:
 
     uint8_t current_ipl() const
     {
+        return s_.ipl_current;
+    }
+
+    uint8_t calc_ipl() const
+    {
         if (!(s_.intena & INTF_INTEN))
             return 0;
         const auto active = s_.intena & s_.intreq;
@@ -3133,6 +3180,11 @@ custom_handler::~custom_handler() = default;
 custom_handler::step_result custom_handler::step(bool cpu_wants_access, uint32_t current_pc)
 {
     return impl_->step(cpu_wants_access, current_pc);
+}
+
+uint8_t custom_handler::current_ipl()
+{
+    return impl_->current_ipl();
 }
 
 void custom_handler::set_serial_data_handler(const serial_data_handler& handler)

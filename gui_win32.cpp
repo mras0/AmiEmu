@@ -126,7 +126,7 @@ constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
     // numpad / 0x5C
     // numpad * 0x5D
     // numpad + 0x5E
-    // help 0x5F
+    map[VK_NEXT] = 0x5F; // help 0x5F
     map[VK_LSHIFT] = 0x60;
     map[VK_RSHIFT] = 0x61;
     // capslock 0x62
