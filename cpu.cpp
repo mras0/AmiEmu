@@ -1314,8 +1314,8 @@ private:
         const auto [bitnum, num] = bit_op_helper();
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(4);
+        poll_ipl();
         prefetch();
-        poll_ipl(); // TODO: Verify placement (IPL)
         write_ea(1, num & ~(1 << bitnum));
     }
 

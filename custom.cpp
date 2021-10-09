@@ -830,6 +830,7 @@ struct custom_state {
     bool blitline_dot_this_line;
     bool blitfirst;
     uint8_t bltblockingcpu;
+    uint8_t blitstartdelay;
     enum { blit_stopped, blit_running, blit_final } blitstate;
 
     uint32_t coplc[2];
@@ -1200,6 +1201,7 @@ public:
             s_.dmacon |= DMAF_BLTNZERO;
         s_.bltw = s_.blth = 0;
         s_.blitstate = custom_state::blit_final;
+        blitfinished();
         blitdone();
         return false;
     }
@@ -1247,6 +1249,9 @@ public:
             break;
         }
 
+        if (s_.blitstate == custom_state::blit_final && s_.bltcycle == 0) {
+            blitfinished();
+        }
         if (++s_.bltcycle == period) {
             s_.bltcycle = 0;
 
@@ -1272,6 +1277,11 @@ public:
             return false;
 
         assert(s_.dmacon & DMAF_BLTBUSY);
+
+        if (s_.blitstartdelay) {
+            --s_.blitstartdelay;
+            return false;
+        }
 
         if (s_.bltcon1 & BC1F_LINEMODE) {
             return do_blitter_line();
@@ -1346,6 +1356,10 @@ public:
             break;
         default:
             assert(0);
+        }
+
+        if (s_.blitstate == custom_state::blit_final && s_.bltcycle == 0) {
+            blitfinished();
         }
 
         if (++s_.bltcycle == period) {
@@ -1430,6 +1444,10 @@ public:
         s_.bltinpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);      
         s_.bltdpt = 0;
         s_.blitstate = custom_state::blit_running;
+        // https://github.com/dirkwhoffmann/vAmiga/issues/466#issuecomment-928186357
+        // 1 cycle for write to BLTSIZE to take effect and 2 blitter idle cycles before starting
+        // delay of 4 isn't quite right...
+        s_.blitstartdelay = 4;
         s_.bltblockingcpu = 0;
         s_.blitfirst = true;
 
@@ -1474,15 +1492,20 @@ public:
         }
     }
 
+    void blitfinished()
+    {
+        if (DEBUG_BLITTER)
+            DBGOUT << "Blitter finished INTREQ=$" << hexfmt(s_.intreq) << " DMACON=$" << hexfmt(s_.dmacon) << " state=" << (int)s_.blitstate << "\n";
+        interrupt_with_delay(INTB_BLIT, 8); // 4 CCK delay
+        s_.dmacon &= ~DMAF_BLTBUSY;
+    }
+
     void blitdone()
     {
         assert(s_.blitstate == custom_state::blit_final);
         assert(s_.blth == 0);
         if (DEBUG_BLITTER)
             DBGOUT << "Blitter done INTREQ=$" << hexfmt(s_.intreq) << " DMACON=$" << hexfmt(s_.dmacon) << " state=" << (int)s_.blitstate << "\n";
-        // XXX: FIXME: Shouldn't be done here
-        s_.intreq |= INTF_BLIT;
-        s_.dmacon &= ~DMAF_BLTBUSY;
         s_.bltw = s_.blth = 0;
         s_.blitstate = custom_state::blit_stopped;
         if (s_.bltcon1 & BC1F_LINEMODE)
@@ -2315,9 +2338,9 @@ public:
             cia_.step();
             const auto irq_mask = cia_.active_irq_mask();
             constexpr uint8_t cia_int_delay = 16; // XXX: FIXME: Need correct number
-            if (irq_mask & 1)
+            if ((irq_mask & 1) && !(s_.intreq & INTF_PORTS))
                 interrupt_with_delay(INTB_PORTS, cia_int_delay);
-            if (irq_mask & 2)
+            if ((irq_mask & 2) && !(s_.intreq & INTF_EXTER))
                 interrupt_with_delay(INTB_EXTER, cia_int_delay);
             s_.eclock_cycle = 0;
         }

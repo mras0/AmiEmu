@@ -311,6 +311,7 @@ struct command_line_arguments {
     std::string df1;
     std::string hd;
     std::string exe;
+    std::string debug_script;
     uint32_t chip_size;
     uint32_t slow_size;
     uint32_t fast_size;
@@ -337,7 +338,21 @@ struct command_line_arguments {
 
 void usage(const std::string& msg)
 {
-    std::cerr << "Command line arguments: [-rom rom-file] [-df0/-df1 adf-file] [-hd file] [-chip size] [-slow size] [-fast size] [-testmode] [-nosound] [-cpuscale X] [-state statefile] [-debug] [-floppyspeed X] [-help]\n";
+    std::cerr << "Command line arguments:\n"
+        "[-rom rom-file]\n"
+        "[-df0/-df1 adf-file]"
+        "[-hd file]\n"
+        "[-chip size]\n"
+        "[-slow size]\n"
+        "[-fast size]\n"
+        "[-nosound]\n"
+        "[-floppyspeed X]\n"
+        "[-cpuscale X]\n"
+        "[-state statefile]\n"
+        "[-debug]\n"
+        "[-debugscript file]\n"
+        "[-testmode]\n"
+        "[-help]\n";
     throw std::runtime_error { msg };
 }
 
@@ -360,7 +375,7 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 std::string s = arg ? " " : "";// Non-empty if already specified so get_string_arg will warn
                 if (!get_string_arg(name, s))
                     return false;
-                
+
                 char* ep = nullptr;
                 uint32_t mult = 1;
                 const auto num = strtoul(s.c_str(), &ep, 10);
@@ -424,6 +439,9 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             } else if (!strcmp(&argv[i][1], "debug")) {
                 args.debug = true;
+                continue;
+            } else if (get_string_arg("debugscript", args.debug_script)) {
+                args.debug = true; // debugscript implies -debug
                 continue;
             }
         }
@@ -629,6 +647,7 @@ int main(int argc, char* argv[])
         uint32_t last_vhpos = 0;
         std::vector<uint32_t> breakpoints;
         bool debug_mode = false;
+        std::unique_ptr<std::ifstream> debug_script;
         custom_handler::step_result custom_step {};
         m68000::step_result cpu_step {};
         std::unique_ptr<std::ofstream> trace_file;
@@ -643,6 +662,10 @@ int main(int argc, char* argv[])
         int audio_next_to_play = 0;
         int audio_next_to_fill = 0;
         bool reset = false;
+
+        if (!cmdline_args.debug_script.empty()) {
+            debug_script = std::make_unique<std::ifstream>(cmdline_args.debug_script);
+        }
 
         struct mem_use {
             bus_use use;
@@ -967,7 +990,19 @@ int main(int argc, char* argv[])
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
                         std::string line;
-                        if (!g.debug_prompt(line)) {
+                        if (debug_script) {
+                            for (;;) {
+                                if (!std::getline(*debug_script, line)) {
+                                    debug_script.reset();
+                                    line.clear();
+                                    break;
+                                }
+                                line = trim(line);
+                                if (!line.empty() && line[0] != '#')
+                                    break;
+                            }
+                        }
+                        if (line.empty() && !g.debug_prompt(line)) {
                             debug_mode = false;
                             quit = true;
                             break;
