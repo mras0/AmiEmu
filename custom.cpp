@@ -830,8 +830,8 @@ struct custom_state {
     bool blitline_dot_this_line;
     bool blitfirst;
     uint8_t bltblockingcpu;
-    uint8_t blitstartdelay;
-    enum { blit_stopped, blit_running, blit_final } blitstate;
+    uint8_t blitdelay;
+    enum { blit_stopped, blit_starting, blit_running, blit_final } blitstate;
 
     uint32_t coplc[2];
     uint16_t diwstrt;
@@ -1249,14 +1249,12 @@ public:
             break;
         }
 
-        if (s_.blitstate == custom_state::blit_final && s_.bltcycle == 0) {
-            blitfinished();
-        }
         if (++s_.bltcycle == period) {
             s_.bltcycle = 0;
 
             if (s_.blitstate == custom_state::blit_final) {
                 blitdone();
+                blitfinished();
             } else if (--s_.blth == 0) {
                 assert(s_.blitstate == custom_state::blit_running);
                 s_.blitstate = custom_state::blit_final;
@@ -1264,6 +1262,43 @@ public:
         }
 
         return dma;
+    }
+
+    // 1 cycle for write to BLTSIZE to take effect and 2 blitter idle cycles before starting
+    // https://github.com/dirkwhoffmann/vAmiga/issues/466#issuecomment-928186357
+    void check_blit_start_delay()
+    {
+        if (s_.blitstate != custom_state::blit_starting)
+            return;
+        assert(s_.blitdelay);
+        if (--s_.blitdelay == 0) {
+            if (DEBUG_BLITTER)
+                DBGOUT << "BLTSIZE write taking effect\n";
+            s_.blitstate = custom_state::blit_running;
+            s_.blitdelay = 2;
+        }
+    }
+
+    void check_blit_idle_any_cycle()
+    {
+        if (!(s_.dmacon & (DMAF_MASTER|DMAF_BLITTER)) || s_.blitstate == custom_state::blit_stopped)
+            return;
+        if (s_.blitstate == custom_state::blit_starting) {
+            check_blit_start_delay();
+        } else if (s_.blitstate == custom_state::blit_final && !(s_.bltcon1 & BC1F_LINEMODE)) {
+            // Idle cycles at end don't need free bus
+            // (Don't handle line mode here)
+            const auto cd = (s_.bltcon1 & (BC1F_FILL_OR | BC1F_FILL_XOR) ? blitcycles_fill : blitcycles)[(s_.bltcon0 >> 8) & 0xf];
+            const uint8_t period = cd[0];
+            assert(s_.bltcycle < period);
+            if (cd[1 + s_.bltcycle] != 3) { // Not a D-cycle?
+                if (s_.bltcycle + 1 < period)
+                    ++s_.bltcycle;
+                else
+                    blitdone();
+            }
+
+        }
     }
 
     bool do_blitter()
@@ -1276,10 +1311,18 @@ public:
         if (s_.blitstate == custom_state::blit_stopped)
             return false;
 
-        assert(s_.dmacon & DMAF_BLTBUSY);
+        assert((s_.dmacon & DMAF_BLTBUSY) || s_.blitstate == custom_state::blit_final);
 
-        if (s_.blitstartdelay) {
-            --s_.blitstartdelay;
+        if (s_.blitstate == custom_state::blit_starting) {
+            check_blit_start_delay();
+            return false;
+        }
+
+        // Blitter idle cycles before starting
+        if (s_.blitdelay) {            
+            --s_.blitdelay;
+            if (DEBUG_BLITTER && !s_.blitdelay)
+                DBGOUT << "Blitter starting idle cycles done\n";
             return false;
         }
 
@@ -1358,10 +1401,6 @@ public:
             assert(0);
         }
 
-        if (s_.blitstate == custom_state::blit_final && s_.bltcycle == 0) {
-            blitfinished();
-        }
-
         if (++s_.bltcycle == period) {
             s_.bltcycle = 0;
 
@@ -1414,6 +1453,7 @@ public:
                     if (--s_.blth == 0) {
                         assert(s_.blitstate == custom_state::blit_running);
                         s_.blitstate = custom_state::blit_final;
+                        blitfinished();
                     }
                     if (s_.bltcon0 & BC0F_SRCA)
                         incr_ptr(s_.bltpt[0], s_.bltmod[0]);
@@ -1443,11 +1483,8 @@ public:
         s_.bltdwrite = false;
         s_.bltinpoly = !!(s_.bltcon1 & BC1F_FILL_CARRYIN);      
         s_.bltdpt = 0;
-        s_.blitstate = custom_state::blit_running;
-        // https://github.com/dirkwhoffmann/vAmiga/issues/466#issuecomment-928186357
-        // 1 cycle for write to BLTSIZE to take effect and 2 blitter idle cycles before starting
-        // delay of 4 isn't quite right...
-        s_.blitstartdelay = 4;
+        s_.blitstate = custom_state::blit_starting;
+        s_.blitdelay = 2; // One CCK?
         s_.bltblockingcpu = 0;
         s_.blitfirst = true;
 
@@ -1496,7 +1533,7 @@ public:
     {
         if (DEBUG_BLITTER)
             DBGOUT << "Blitter finished INTREQ=$" << hexfmt(s_.intreq) << " DMACON=$" << hexfmt(s_.dmacon) << " state=" << (int)s_.blitstate << "\n";
-        interrupt_with_delay(INTB_BLIT, 8); // 4 CCK delay
+        interrupt_with_delay(INTB_BLIT, 8+2); // 4 CCK delay +2 not correct (should probably just be +1 since ipl_delay is decremented in main loop)
         s_.dmacon &= ~DMAF_BLTBUSY;
     }
 
@@ -2122,6 +2159,7 @@ public:
                 ++s_.bltblockingcpu;
         }
 
+        bool blitter_had_chance_to_run = false;
         if (!(s_.hpos & 1) && (s_.dmacon & DMAF_MASTER)) {
             auto do_dma = [this](uint32_t& pt) {
                 const auto val = chip_read(pt);
@@ -2265,6 +2303,7 @@ public:
                 }
                 
                 // Blitter
+                blitter_had_chance_to_run = true;
                 if (do_blitter()) {
                     res.bus = bus_use::blitter;
                     break;
@@ -2306,6 +2345,11 @@ public:
             if (DEBUG_COPPER)
                 DBGOUT << "jmp_delay1 done: Advancing even though cycles isn't available\n";
             s_.copstate = copper_state::jmp_delay2;
+        }
+
+        // Check for blitter delays/idle cycles that don't need the bus
+        if (!blitter_had_chance_to_run) {
+            check_blit_idle_any_cycle();
         }
 
         // Delayed interrupts

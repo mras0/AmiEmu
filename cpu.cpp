@@ -1314,7 +1314,7 @@ private:
         const auto [bitnum, num] = bit_op_helper();
         if (inst_->ea[1] >> ea_m_shift == ea_m_Dn)
             add_cycles(4);
-        poll_ipl();
+        poll_ipl(); // TODO: Verify placement (IPL)
         prefetch();
         write_ea(1, num & ~(1 << bitnum));
     }
@@ -1697,6 +1697,8 @@ private:
     {
         assert(inst_->nea == 2);
         const uint32_t src = read_ea(0);
+        calc_ea(1);
+        prefetch();
         write_ea(1, src);
         // Reading/writing SR/CCR/USP should not update flags
         if (inst_->ea[0] != ea_sr && inst_->ea[0] != ea_ccr && inst_->ea[0] != ea_usp && inst_->ea[1] != ea_sr && inst_->ea[1] != ea_ccr && inst_->ea[1] != ea_usp)

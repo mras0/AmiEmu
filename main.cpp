@@ -665,6 +665,8 @@ int main(int argc, char* argv[])
 
         if (!cmdline_args.debug_script.empty()) {
             debug_script = std::make_unique<std::ifstream>(cmdline_args.debug_script);
+            if (!*debug_script || !debug_script->is_open())
+                throw std::runtime_error { "Debug script not found: " + cmdline_args.debug_script };
         }
 
         struct mem_use {
@@ -899,6 +901,8 @@ int main(int argc, char* argv[])
 
 
             do_all_custom_cylces(); // Sync
+            if (DEBUG_INTS)
+                std::cout << "PC=$" << hexfmt(cpu.state().pc) << " vpos=$" << hexfmt(custom_step.vpos) << " hpos=$" << hexfmt(custom_step.hpos) << " (clock $" << hexfmt(custom_step.hpos >> 1, 2) << ") IPL Poll\n";
             return custom.current_ipl();
         });
 
@@ -998,8 +1002,10 @@ int main(int argc, char* argv[])
                                     break;
                                 }
                                 line = trim(line);
-                                if (!line.empty() && line[0] != '#')
+                                if (!line.empty() && line[0] != '#') {
+                                    std::cout << "> " << line << "\n";
                                     break;
+                                }
                             }
                         }
                         if (line.empty() && !g.debug_prompt(line)) {
