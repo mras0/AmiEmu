@@ -6,12 +6,7 @@
 #include <chrono>
 #include <mutex>
 #include <condition_variable>
-
-//#define TRACE_LOG
-
-#ifdef TRACE_LOG
-#include <sstream>
-#endif
+#include <signal.h>
 
 #include "ioutil.h"
 #include "instruction.h"
@@ -32,6 +27,13 @@
 #include "adf.h"
 
 namespace {
+
+volatile bool ctrl_c;
+
+void ctrl_c_handler(int)
+{
+    ctrl_c = true;
+}
 
 std::vector<std::string> split_line(const std::string& line)
 {
@@ -240,6 +242,58 @@ uint32_t copper_disasm(memory_handler& mem, uint32_t start, uint32_t count)
 
     }
     return addr - start;
+}
+
+void write_bmp(const std::string& filename, const uint32_t* data, uint32_t w, uint32_t h, uint32_t stride)
+{
+    std::ofstream bmp { filename, std::ofstream::binary };
+    if (!bmp || !bmp.is_open())
+        throw std::runtime_error { "Error creating " + filename };
+
+    constexpr uint32_t bmp_file_header_size = 0x0E;
+    constexpr uint32_t bmp_info_header_size = 0x28;
+
+    const uint32_t image_bytes = w * h * 3;
+
+    auto u16 = [&bmp](uint16_t w) {
+        bmp.put(static_cast<char>(w & 0xff));
+        bmp.put(static_cast<char>((w >> 8) & 0xff));
+    };
+    auto u32 = [&bmp](uint32_t l) {
+        bmp.put(static_cast<char>(l & 0xff));
+        bmp.put(static_cast<char>((l >> 8) & 0xff));
+        bmp.put(static_cast<char>((l >> 16) & 0xff));
+        bmp.put(static_cast<char>((l >> 24) & 0xff));
+    };
+
+    // File header
+    u16('M' << 8 | 'B'); // bfType
+    u32(bmp_file_header_size + bmp_info_header_size + image_bytes); // bfSize
+    u32(0); // bfReserved1+bfReserved2
+    u32(bmp_file_header_size + bmp_info_header_size); // bfOffBits
+    assert(bmp.tellp() == bmp_file_header_size);
+    u32(bmp_info_header_size); // biSize
+    u32(w); // biWidth
+    u32(h); // biHeight
+    u16(1); // biPlanes
+    u16(24); // biBitCount
+    u32(0); // biCompression
+    u32(image_bytes); // biSizeImage
+    u32(0); // biXPelsPerMeter
+    u32(0); // biYPelsPerMeter
+    u32(0); // biClrUsed
+    u32(0); // biClrImportant
+
+    for (uint32_t y = 0; y < h; ++y) {
+        for (uint32_t x = 0; x < w; ++x) {
+            const uint32_t pixel = data[x + (h - 1 - y) * stride];
+            bmp.put(static_cast<char>(pixel & 0xff));
+            bmp.put(static_cast<char>((pixel >> 8) & 0xff));
+            bmp.put(static_cast<char>((pixel >> 16) & 0xff));
+        }
+    }
+    if (!bmp)
+        throw std::runtime_error { "Error writing to " + filename };
 }
 
 } // unnamed namespace
@@ -471,9 +525,6 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
 
 int main(int argc, char* argv[])
 {
-    constexpr uint32_t testmode_stable_frames = 5*50;
-    constexpr uint32_t testmode_min_instructions = 5'000'000;
-
     try {
         auto cmdline_args = parse_command_line_arguments(argc, argv);
         std::unique_ptr<state_file> state;
@@ -490,8 +541,6 @@ int main(int argc, char* argv[])
         cia_handler cias { mem, rom, drives };
         custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size, cmdline_args.floppy_speed };
         autoconf_handler autoconf { mem };
-        std::vector<uint32_t> testmode_data;
-        uint32_t testmode_cnt = 0;
 
         if (cmdline_args.slow_size) {
             slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
@@ -535,11 +584,6 @@ int main(int argc, char* argv[])
             df1.insert_disk(read_file(cmdline_args.df1));
 
         std::cout << "Memory configuration: Chip: " << (cmdline_args.chip_size >> 10) << " KB, Slow: " << (cmdline_args.slow_size >> 10) << " KB, Fast: " << (cmdline_args.fast_size >> 10) << " KB\n";
-
-        if (cmdline_args.test_mode) {
-            std::cout << "Testmode! Min. instructions=" << testmode_min_instructions << " frames=" << testmode_stable_frames << "\n";
-            testmode_data.resize(graphics_width * graphics_height);
-        }
 
         //rom_tag_scan(rom.rom());
 
@@ -610,29 +654,29 @@ int main(int argc, char* argv[])
             serdata.push_back(data ? data : ' ');
             });
 
-
-        gui g { graphics_width, graphics_height, std::array<std::string, 4>{ cmdline_args.df0, cmdline_args.df1, "", "" } };
+        std::unique_ptr<gui> g;
+        if (!cmdline_args.test_mode)
+            g = std::make_unique<gui>(graphics_width, graphics_height, std::array<std::string, 4>{ cmdline_args.df0, cmdline_args.df1, "", "" });
+        else
+            signal(SIGINT, &ctrl_c_handler);
         auto serdata_flush = [&g, &serdata]() {
             if (!serdata.empty()) {
-                g.serial_data(serdata);
+                if (g)
+                    g->serial_data(serdata);
+                else
+                    std::cout << "[SERIAL] " << std::string(serdata.begin(), serdata.end()) << "\n";
                 serdata.clear();
             }
         };
 
-        df0.set_disk_activity_handler([&](uint8_t track, bool write) {
-            g.disk_activty(0, track, write);
-        });
-        df1.set_disk_activity_handler([&](uint8_t track, bool write) {
-            g.disk_activty(1, track, write);
-        });
-
-#ifdef TRACE_LOG
-        std::ostringstream oss;
-        constexpr size_t pc_log_size = 0x1000;
-        std::string pc_log[pc_log_size];
-        size_t pc_log_pos = 0;
-        constexpr size_t trace_start_inst = 200'000'000;
-#endif
+        if (g) {
+            df0.set_disk_activity_handler([&](uint8_t track, bool write) {
+                g->disk_activty(0, track, write);
+            });
+            df1.set_disk_activity_handler([&](uint8_t track, bool write) {
+                g->disk_activty(1, track, write);
+            });
+        }
 
         const unsigned steps_per_update = 1000000;
         unsigned steps_to_update = 0;
@@ -682,7 +726,8 @@ int main(int argc, char* argv[])
         });
 
         auto active_debugger = [&]() {
-            g.set_active(false);
+            if (g)
+                g->set_active(false);
             debug_mode = true;
         };
 
@@ -820,10 +865,12 @@ int main(int argc, char* argv[])
 
 
 
-        g.set_on_pause_callback([&](bool pause) {
-            if (audio)
-                audio->set_paused(pause);
-        });
+        if (g) {
+            g->set_on_pause_callback([&](bool pause) {
+                if (audio)
+                    audio->set_paused(pause);
+            });
+        }
 
         constexpr uint32_t min_rom_addr = 0x00e0'0000;
 
@@ -977,9 +1024,11 @@ int main(int argc, char* argv[])
 
                 if (debug_mode) {
                     const auto& s = cpu.state();
-                    g.set_debug_memory(mem.ram(), custom.get_regs());
-                    g.set_debug_windows_visible(true);
-                    g.update_image(custom_step.frame);
+                    if (g) {
+                        g->set_debug_memory(mem.ram(), custom.get_regs());
+                        g->set_debug_windows_visible(true);
+                        g->update_image(custom_step.frame);
+                    }
 
                     // Match Winuae output
                     // Cycles: 8 Chip, 16 CPU. (V=0 H=31 -> V=0 H=39)
@@ -1008,10 +1057,21 @@ int main(int argc, char* argv[])
                                 }
                             }
                         }
-                        if (line.empty() && !g.debug_prompt(line)) {
-                            debug_mode = false;
-                            quit = true;
-                            break;
+                        if (line.empty()) {
+                            if (g) {
+                                if (!g->debug_prompt(line)) {
+                                    debug_mode = false;
+                                    quit = true;
+                                    break;
+                                }
+                            } else {
+                                std::cout << "> " << std::flush;
+                                if (!std::getline(std::cin, line)) {
+                                    debug_mode = false;
+                                    quit = true;
+                                    break;
+                                }
+                            }
                         }
                         const auto args = split_line(line);
                         if (args.empty())
@@ -1343,10 +1403,20 @@ int main(int argc, char* argv[])
                                     std::cout << "Warning: Only writing chipmem\n";
                                     f.write(reinterpret_cast<const char*>(mem.ram().data()), mem.ram().size());
                                 } else {
-                                    std::cout << "Error creating \"" << args[1] << "\"\n";
+                                    std::cerr << "Error creating \"" << args[1] << "\"\n";
                                 }
                             } else {
-                                std::cout << "Missing argument (file)\n";
+                                std::cerr << "Missing argument (file)\n";
+                            }
+                        } else if (args[0] == "write_screenshot") {
+                            if (args.size() > 1) {
+                                try {
+                                    write_bmp(args[1], custom_step.frame, graphics_width, graphics_height, graphics_width);
+                                } catch (const std::exception& e) {
+                                    std::cerr << e.what() << '\n';
+                                }
+                            } else {
+                                std::cerr << "Missing argument (file)\n";
                             }
                         } else if (args[0] == "write_state") {
                             if (args.size() > 1) {
@@ -1416,8 +1486,10 @@ unknown_command:
                         }
                     }
                     debug_mode = false;
-                    g.set_debug_windows_visible(false);
-                    g.set_active(true);
+                    if (g) {
+                        g->set_debug_windows_visible(false);
+                        g->set_active(true);
+                    }
                 }
 
                 cpu_active = true;
@@ -1477,17 +1549,6 @@ check_breakpoint:
                     do_all_custom_cylces();
                 }
 
-#ifdef TRACE_LOG
-                if (cpu.instruction_count() == trace_start_inst) {
-                    std::cout << "Starting trace\n";
-                    cpu.trace(&oss);
-                } else if (cpu.instruction_count() > trace_start_inst) {
-                    pc_log[pc_log_pos] = oss.str();
-                    oss.str("");
-                    oss.clear();
-                    pc_log_pos = (pc_log_pos + 1) % pc_log_size;
-                }
-#endif
                 if (reset) {
                     std::cout << "RESET\n";
                     if (!debug_mode) {
@@ -1505,66 +1566,31 @@ check_breakpoint:
                             pending_disk_drive = 0xff;
                         }
                     }
-                    if (cmdline_args.test_mode) {
-                        if (!memcmp(custom_step.frame, testmode_data.data(), testmode_data.size() * 4) || cpu.state().instruction_count >= 50'000'000) {
-                            if (cpu.state().instruction_count >= testmode_min_instructions && ++testmode_cnt >= testmode_stable_frames) {
-                                auto ts = cmdline_args.df0;
-                                ts.erase(0, ts.find_last_of("/\\")+1);
-                                ts.erase(ts.find(".adf"));
-                                ts += "_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-
-                                std::string filename = "c:/temp/" + ts + ".ppm";
-                                {
-                                    std::ofstream out { filename, std::ofstream::binary };
-                                    out << "P6\n" << graphics_width << " " << graphics_height << "\n255\n";
-                                    for (unsigned i = 0; i < graphics_width * graphics_height; ++i) {
-                                        const auto c = custom_step.frame[i];
-                                        char rgb[3] = { static_cast<char>((c >> 16) & 0xff), static_cast<char>((c >> 8) & 0xff), static_cast<char>((c & 0xff)) };
-                                        out.write(rgb, 3);
-                                    }
-                                }
-
-                                auto pngname = "c:/temp/" + ts + ".png";
-                                auto cmd = "c:/Tools/ImageMagick/convert " + filename + " " + pngname;
-                                system(cmd.c_str());
-                                _unlink(filename.c_str());
-
-                                std::cout << "Testmode done. Wrote " << pngname << " (DF0: " << cmdline_args.df0 << ")\n";
-                                return 0;
-                            }
-                        } else {
-                            memcpy(&testmode_data[0], custom_step.frame, testmode_data.size() * 4);
-                        }
-                    }
                     new_frame = false;
                     goto update;
                 }
                 if (!steps_to_update--) {
                 update:
-                    g.update_image(custom_step.frame);
-                    g.led_state(cias.power_led_on());
                     serdata_flush();
-                    auto new_events = g.update();
-                    events.insert(events.end(), new_events.begin(), new_events.end());
                     steps_to_update = steps_per_update;
+                    if (g) {
+                        g->update_image(custom_step.frame);
+                        g->led_state(cias.power_led_on());
+                        auto new_events = g->update();
+                        events.insert(events.end(), new_events.begin(), new_events.end());
+                    } else if (ctrl_c) {
+                        ctrl_c = false;
+                        signal(SIGINT, &ctrl_c_handler);
+                        active_debugger();
+                    }
                 }
             } catch (const std::exception& e) {
-#ifdef TRACE_LOG
-                for (size_t i = 0; i < sizeof(pc_log) / sizeof(*pc_log); ++i) {
-                    std::cerr << pc_log[(pc_log_pos + i) % pc_log_size] << "\n";
-                }
-#endif
                 cpu.show_state(std::cerr);
                 std::cerr << "\n" << e.what() << "\n\n";
-
-#ifndef TRACE_LOG
                 serdata_flush();
-                active_debugger();
                 if (cmdline_args.test_mode)
                     throw;
-#else
-                throw;
-#endif
+                active_debugger();
             }
         }
 
