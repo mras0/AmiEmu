@@ -102,11 +102,16 @@ public:
     uint16_t read_u16(uint32_t, uint32_t offset) override;
     void write_u8(uint32_t addr, uint32_t offset, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t offset, uint16_t val) override;
-    void reset() override { }
+    void reset() override {
+        write_protect_ = false;
+    }
 
 private:
     memory_handler& mem_handler_;
     std::vector<uint8_t> rom_data_;
+    std::vector<uint8_t> wom_;
+    bool ovl_ = false;
+    bool write_protect_ = false;
 };
 
 class memory_handler {

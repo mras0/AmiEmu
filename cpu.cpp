@@ -1954,7 +1954,7 @@ private:
     void handle_RESET()
     {
         // Handle externally
-        state_.pc = start_pc_;
+        add_cycles(128);
         poll_ipl(); // TODO: Verify placement (IPL)
     }
 

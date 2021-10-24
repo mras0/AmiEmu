@@ -705,7 +705,7 @@ int main(int argc, char* argv[])
         bool audio_buffer_ready[2] = { false, false };
         int audio_next_to_play = 0;
         int audio_next_to_fill = 0;
-        bool reset = false;
+        enum { no_reset, cpu_reset, keyboard_reset } reset = no_reset;
 
         if (!cmdline_args.debug_script.empty()) {
             debug_script = std::make_unique<std::ifstream>(cmdline_args.debug_script);
@@ -968,7 +968,7 @@ int main(int argc, char* argv[])
                         quit = true;
                         break;
                     case gui::event_type::reset:
-                        reset = true;
+                        reset = keyboard_reset;
                         break;
                     case gui::event_type::keyboard:
                         cias.keyboard_event(evt.keyboard.pressed, evt.keyboard.scancode);
@@ -1545,16 +1545,17 @@ check_breakpoint:
                     }
 
                     if (cpu_step.instruction == reset_instruction_num)
-                        reset = true;
+                        reset = cpu_reset;
                     do_all_custom_cylces();
                 }
 
-                if (reset) {
-                    std::cout << "RESET\n";
+                if (reset != no_reset) {
+                    std::cout << (reset == cpu_reset ? "CPU reset" : "Keyboard reset") << "\n";
                     if (!debug_mode) {
                         mem.reset();
-                        cpu.reset();
-                        reset = false;
+                        if (reset != cpu_reset)
+                            cpu.reset();
+                        reset = no_reset;
                     }
                 }
 

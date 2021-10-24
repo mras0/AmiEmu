@@ -100,8 +100,13 @@ rom_area_handler::rom_area_handler(memory_handler& mem_handler, std::vector<uint
     , rom_data_ { std::move(data) }
 {
     const auto size = static_cast<uint32_t>(rom_data_.size());
-    if (size != 256 * 1024 && size != 512 * 1024 && size != 1024 * 1024) {
+    if (size != 64 * 1024 && size != 256 * 1024 && size != 512 * 1024 && size != 1024 * 1024) {
         throw std::runtime_error { "Unexpected size of ROM: $" + hexstring(size) };
+    }
+
+    if (size < 256 * 1024) {
+        // A1000 bootrom
+        wom_.resize(256 * 1024);
     }
 
     if (size == 1024 * 1024) {
@@ -111,11 +116,14 @@ rom_area_handler::rom_area_handler(memory_handler& mem_handler, std::vector<uint
     }
     mem_handler_.register_handler(*this, 0xf80000, size);
     if (rom_data_.size() != 512 * 1024)
-        mem_handler_.register_handler(*this, 0xfc0000, size);
+        mem_handler_.register_handler(*this, 0xfc0000, 256 * 1024);
 }
 
 void rom_area_handler::set_overlay(bool ovl)
 {
+    if (ovl_ == ovl)
+        return;
+    ovl_ = ovl;
     const auto size = static_cast<uint32_t>(rom_data_.size());
     std::cerr << "[ROM handler] Turning overlay " << (ovl ? "on" : "off") << "\n";
     if (ovl)
@@ -124,26 +132,40 @@ void rom_area_handler::set_overlay(bool ovl)
         mem_handler_.unregister_handler(*this, 0, size);
 }
 
-uint8_t rom_area_handler::read_u8(uint32_t, uint32_t offset)
+uint8_t rom_area_handler::read_u8(uint32_t addr, uint32_t offset)
 {
+    if (addr >= 0xfc0000 && !wom_.empty()) {
+        return wom_[offset];
+    }
     assert(offset < rom_data_.size());
     return rom_data_[offset];
 }
 
-uint16_t rom_area_handler::read_u16(uint32_t, uint32_t offset)
+uint16_t rom_area_handler::read_u16(uint32_t addr, uint32_t offset)
 {
+    if (addr >= 0xfc0000 && !wom_.empty()) {
+        return get_u16(&wom_[offset]);
+    }
     assert(offset < rom_data_.size() - 1);
     return get_u16(&rom_data_[offset]);
 }
 
 void rom_area_handler::write_u8(uint32_t addr, uint32_t offset, uint8_t val)
 {
+    if (addr >= 0xfc0000 && !wom_.empty() && !write_protect_) {
+        wom_[offset] = val;
+        return;
+    }
     std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
     //throw std::runtime_error { "Write to ROM" };
 }
 
 void rom_area_handler::write_u16(uint32_t addr, uint32_t offset, uint16_t val)
 {
+    if (addr >= 0xfc0000 && !wom_.empty() && !write_protect_) {
+        put_u16(&wom_[offset], val);
+        return;
+    }
     std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
     //throw std::runtime_error { "Write to ROM" };
 }
