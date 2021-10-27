@@ -1,5 +1,6 @@
 #include <cassert>
 #include <iostream>
+#include <fstream>
 
 #include "disasm.h"
 #include "ioutil.h"
@@ -33,6 +34,26 @@ uint32_t hex_or_die(const char* s)
         throw std::runtime_error { "Invalid hex number: " + std::string { s } };
     return val;
 }
+
+constexpr const char* const cia_regname[16] = {
+    "pra",
+    "prb",
+    "ddra",
+    "ddrb",
+    "talo",
+    "tahi",
+    "tblo",
+    "tbhi",
+    "todlo",
+    "todmid",
+    "todhi ",
+    "unused",
+    "sdr",
+    "icr",
+    "cra",
+    "crb"
+};
+
 
 constexpr const char* const custom_regname[0x100] = {
     "BLTDDAT",
@@ -348,13 +369,239 @@ struct simregs {
     simval a[8];
 };
 
+enum class base_data_type {
+    unknown_,
+    char_,
+    byte_,
+    word_,
+    long_,
+    code_,
+    ptr_,
+};
+
+class type {
+public:
+    explicit type(base_data_type t)
+        : t_ { t }
+    {
+    }
+    explicit type(const type& base, uint32_t len)
+        : t_ { base_data_type::ptr_ }
+        , ptr_ { &base }
+        , len_ { len }
+    {
+    }
+    type(const type&) = delete;
+    type& operator=(const type&) = delete;
+
+    base_data_type base() const
+    {
+        return t_;
+    }
+
+    const type* ptr() const
+    {
+        return ptr_;
+    }
+
+    uint32_t len() const
+    {
+        return len_;
+    }
+
+private:
+    base_data_type t_;
+    const type* ptr_ = nullptr;
+    uint32_t len_ = 0;
+};
+
+std::ostream& operator<<(std::ostream& os, const type& t)
+{
+    if (t.ptr()) {
+        os << *t.ptr();
+        if (t.len())
+            os << "[" << t.len() << "]";
+        else
+            os << "*";
+    } else {
+        switch (t.base()) {
+        case base_data_type::unknown_:
+            return os << "UNKNOWN";
+        case base_data_type::char_:
+            return os << "CHAR";
+        case base_data_type::byte_:
+            return os << "BYTE";
+        case base_data_type::word_:
+            return os << "WORD";
+        case base_data_type::long_:
+            return os << "LONG";
+        case base_data_type::code_:
+            return os << "CODE";
+        }
+        assert(false);
+    }
+    return os;
+}
+
+const type unknown_type { base_data_type::unknown_ };
+const type char_type { base_data_type::char_ };
+const type byte_type { base_data_type::byte_ };
+const type word_type { base_data_type::word_ };
+const type long_type { base_data_type::long_ };
+const type code_type { base_data_type::code_ };
+const type unknown_ptr { unknown_type, 0 };
+const type char_ptr { byte_type, 0 };
+const type byte_ptr { byte_type, 0 };
+const type code_ptr { code_type, 0 };
+
+const type& make_array_type(const type& base, uint32_t len)
+{
+    assert(len);
+    static std::vector<std::unique_ptr<type>> types;
+    for (const auto& t : types) {
+        if (t->ptr() == &base && t->len() == len) {
+            return *t.get();
+        }
+    }
+    types.push_back(std::make_unique<type>(base, len));
+    return *types.back().get();
+}
+
+const type& make_pointer_type(const type& base)
+{
+    if (&base == &unknown_type)
+        return unknown_ptr;
+    else if (&base == &char_type)
+        return char_ptr;
+    else if (&base == &byte_type)
+        return byte_ptr;
+    else if (&base == &code_type)
+        return code_ptr;
+
+    std::ostringstream oss;
+    oss << "TODO: make_pointer_type for " << base;
+    throw std::runtime_error { oss.str() };
+}
+
+const type& type_from_size(opsize s)
+{
+    switch (s) {
+    case opsize::none:
+    default:
+        return unknown_type;
+    case opsize::b:
+        return byte_type;
+    case opsize::w:
+        return word_type;
+    case opsize::l:
+        return long_type;
+    }
+}
+
+const uint32_t sizeof_type(const type& t)
+{
+    if (t.ptr())
+        return t.len() ? t.len() * sizeof_type(*t.ptr()) : 4;
+    switch (t.base()) {
+    //case base_data_type::unknown_:
+    case base_data_type::char_:
+    case base_data_type::byte_:
+        return 1;
+    case base_data_type::word_:
+        return 2;
+    case base_data_type::long_:
+        return 4;
+    //case base_data_type::code_:
+    //case base_data_type::ptr_:
+    }
+    std::ostringstream oss;
+    oss << "Unhandled type in sizeof_type: " << t;
+    throw std::runtime_error { oss.str() };
+}
+
+const std::unordered_map<std::string, const type*> typenames{
+    { "UNKNOWN", &unknown_type },
+    { "CHAR", &char_type },
+    { "BYTE", &byte_type },
+    { "WORD", &word_type },
+    { "LONG", &long_type },
+    { "CODE", &code_type },
+};
+
 class analyzer {
 public:
     explicit analyzer()
-        : written_(max_ram)
-        , data_(max_ram)        
+        : written_(max_mem)
+        , data_(max_mem)        
         , regs_ {}
     {
+    }
+
+    void read_info_file(const std::string& filename)
+    {
+        std::ifstream in { filename };
+        if (!in || !in.is_open())
+            throw std::runtime_error { "Could not open " + filename };
+
+        uint32_t linenum = 1;
+        for (std::string line; std::getline(in, line); ++linenum) {
+            size_t start = 0, end = line.length();
+            while (start < line.length() && isspace(line[start]))
+                ++start;
+            for (size_t p = start; p < end; ++p) {
+                if (line[p] == '#') {
+                    end = p;
+                    break;
+                }
+            }
+            while (end > start && isspace(line[end - 1]))
+                --end;
+            if (start >= end)
+                continue;
+            std::vector<std::string> parts;
+            std::istringstream iss { line.substr(start, end - start) };
+            for (std::string part; std::getline(iss, part, ' ');) {
+                if (!part.empty())
+                    parts.push_back(part);
+            }
+            if (parts.size() != 3)
+                throw std::runtime_error { "Error in " + filename + " line " + std::to_string(linenum) + ": " + line };
+            const auto [ok, addr] = from_hex(parts[0]);
+            if (!ok)
+                throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
+
+            std::string basetype;
+            size_t p = 0;
+            while (p < parts[1].length() && parts[1][p] != '*' && parts[1][p] != '[')
+                basetype.push_back(parts[1][p++]);
+
+            const type* t = nullptr;
+            if (auto it = typenames.find(basetype); it != typenames.end())
+                t = it->second;
+            if (!t)
+                throw std::runtime_error { "Invalid base type in " + filename + " line " + std::to_string(linenum) + ": " + line + " \"" + basetype + "\"" };
+
+            for (;  p < parts[1].length(); ++p) {
+                if (parts[1][p] == '*')
+                    t = &make_pointer_type(*t);
+                else if (parts[1][p] == '[' && ++p < parts[1].length()) {
+                    uint32_t len = 0;
+                    while (p < parts[1].length() && isdigit(parts[1][p]))
+                        len = len * 10 + (parts[1][p++] - '0');
+                    if (p >= parts[1].length() || parts[1][p] != ']')
+                        goto typeerr;
+                    ++p;
+                    t = &make_array_type(*t, len);
+                } else {
+                typeerr:
+                    throw std::runtime_error { "Unsupported type in " + filename + " line " + std::to_string(linenum) + ": " + line + " \"" + parts[1] + "\"" };
+                }
+            }
+
+            add_label(addr, parts[2], *t);
+            if (t == &code_type)
+                add_root(addr, simregs {}, true);
+        }
     }
 
     void write_data(uint32_t addr, const uint8_t* data, uint32_t length)
@@ -367,31 +614,35 @@ public:
         insert_area(addr, addr + length);
     }
 
-    void add_root(uint32_t addr, const simregs& regs)
+    void add_root(uint32_t addr, const simregs& regs, bool force = false)
     {
         // Don't visit non-written areas
-        if (!written_[addr] || addr < 0x400)
+        if (!force && (!written_[addr] || addr < 0x400))
             return;
 
         if (visited_.find(addr) == visited_.end()) {
             roots_.push({ addr, regs });
             visited_[addr] = regs; // Mark visitied now to avoid re-insertion
         }
-        add_auto_label(addr);
+        add_auto_label(addr, code_type);
     }
 
-    void add_label(uint32_t addr, const std::string& name)
+    void add_label(uint32_t addr, const std::string& name, const type& t)
     {
-        if (labels_.find(addr) == labels_.end())
-            labels_[addr] = name;
+        auto it = labels_.find(addr);
+        if (it == labels_.end())
+            labels_[addr] = { name, &t };
+        else if (it->second.t != &t) {
+            if (it->second.t == &unknown_type)
+                it->second.t = &t;
+            else
+                std::cerr << "Type conflict for " << name << " was " << *it->second.t << " now " << t << "\n";
+        }
     
     }
 
-    void add_auto_label(uint32_t addr)
+    void add_auto_label(uint32_t addr, const type& t)
     {
-        // Add automatic label
-        if (labels_.find(addr) != labels_.end())
-            return;
         if (addr < 0x400 && (addr & 3) == 0) {
             // Interrupt vector
             const auto vec = addr >> 2;
@@ -443,11 +694,11 @@ public:
                 if (vec >= 32 && vec < 48)
                     lab = "Trap" + hexstring(vec - 32, 1) + "Vec";
             }
-            labels_[addr] = lab;
+            add_label(addr, lab, code_ptr);
             return;
         }
 
-        labels_[addr] = "lab_" + hexstring(addr);
+        add_label(addr, "lab_" + hexstring(addr), t);
     }
 
     void run()
@@ -567,8 +818,11 @@ public:
                         switch (ea & ea_xn_mask) {
                         case ea_other_abs_w:
                         case ea_other_abs_l:
+                            print_addr(ea_addr_[i].raw());
+                            break;
                         case ea_other_pc_disp16:
-                            print_addr(ea_val_[i].raw());
+                            print_addr(ea_addr_[i].raw());
+                            std::cout << "(PC)";
                             break;
                         case ea_other_pc_index: {
                             const auto extw = ea_data_[i];
@@ -605,7 +859,7 @@ public:
                         } else if (ea == ea_bitnum) {
                             std::cout << "#" << ea_data_[i];
                         } else if (ea == ea_disp) {
-                            print_addr(ea_val_[i].raw());
+                            print_addr(ea_addr_[i].raw());
                         } else {
                             if (inst.size == opsize::l && inst.data > 0x400 && labels_.find(inst.data) != labels_.end()) {
                                 std::cout << "#";
@@ -628,21 +882,25 @@ public:
     }
 
 private:
-    static constexpr uint32_t max_ram = 10 << 20;
-    std::vector<bool> written_;
-    std::vector<uint8_t> data_;
-    std::queue<std::pair<uint32_t, simregs>> roots_;
-    std::map<uint32_t, simregs> visited_;
-    std::map<uint32_t, std::string> labels_;
-    simregs regs_;
-
+    static constexpr uint32_t max_mem = 1 << 24;
     struct area {
         uint32_t beg;
         uint32_t end;
     };
+    struct label_info {
+        std::string name;
+        const type* t;
+    };
+    std::vector<bool> written_;
+    std::vector<uint8_t> data_;
+    std::queue<std::pair<uint32_t, simregs>> roots_;
+    std::map<uint32_t, simregs> visited_;
+    std::map<uint32_t, label_info> labels_;
+    simregs regs_;
     std::vector<area> areas_;
 
     uint32_t ea_data_[2];
+    simval ea_addr_[2];
     simval ea_val_[2];
 
     void insert_area(uint32_t beg, uint32_t end)
@@ -658,48 +916,163 @@ private:
         areas_.insert(it, { beg, end });
     }
 
-    void maybe_print_label(uint32_t pos) const
+    const type* maybe_print_label(uint32_t pos) const
     {
-        if (auto it = labels_.find(pos); it != labels_.end())
-            std::cout << std::setw(32) << std::left << it->second << "\t; $" << hexfmt(it->first) << "\n";
+        if (auto it = labels_.find(pos); it != labels_.end()) {
+            std::cout << std::setw(32) << std::left << it->second.name << "\t; $" << hexfmt(it->first) << " " << *it->second.t << "\n";
+            return it->second.t;
+        }
+        return nullptr;
+    }
+
+    uint32_t handle_array_range(uint32_t pos, uint32_t end, uint32_t elemsize)
+    {
+        assert(elemsize == 1 || elemsize == 2 || elemsize == 4);
+        assert((end - pos) % elemsize == 0);
+        const char suffix = elemsize == 1 ? 'b' : elemsize == 2 ? 'w' : 'l';
+        const auto elem_per_line = (80 - 16) / (3 + 2 * elemsize);        
+
+        while (pos < end) {
+            const auto here = std::min(elem_per_line, (end - pos) / elemsize);
+            // Check for a run of similar elements
+            uint32_t runlen = 0;
+            for (uint32_t i = 1; pos + i * elemsize <= end; ++i) {
+                if (memcmp(&data_[pos], &data_[pos + i * elemsize], elemsize))
+                    break;
+                ++runlen;
+            }
+
+            if (runlen > elem_per_line) {
+                const uint32_t val = elemsize == 1 ? data_[pos] : elemsize == 2 ? get_u16(&data_[pos]) : get_u32(&data_[pos]);
+                std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8) << ", $" << hexfmt(val, 2 * elemsize) << "\n";
+                pos += runlen * elemsize;
+                continue;
+            }
+
+            std::cout << "\tdc." << suffix << "\t";
+            for (uint32_t i = 0; i < here && pos < end; ++i) {
+                if (i)
+                    std::cout << ", ";
+                std::cout << "$";
+                if (elemsize == 1)
+                    std::cout << hexfmt(data_[pos]);
+                else if (elemsize == 2)
+                    std::cout << hexfmt(get_u16(&data_[pos]));
+                else
+                    std::cout << hexfmt(get_u32(&data_[pos]));
+                pos += elemsize;
+            }
+            std::cout << "\n";
+        }
+        return pos;
     }
 
     void handle_data_area(uint32_t pos, uint32_t end)
     {
+        if (labels_.find(pos) == labels_.end())
+            std::cout << "; $" << hexfmt(pos) << "\n";
         while (pos < end) {
-            maybe_print_label(pos);
             const auto next_label = labels_.upper_bound(pos);
             const auto next_pos = std::min(end, next_label == labels_.end() ? ~0U : next_label->first);
 
-            uint32_t runlen = 0;
-            uint16_t runword = 0;
-            auto output_run = [&]() {
-                if (!runlen)
-                    return;
-                if (runlen > 1)
-                    std::cout << "\tds.w\t$" << hexfmt(runword) << ", " << runlen << "\n";
-                else
-                    std::cout << "\tdc.w\t$" << hexfmt(runword) << "\n";
-                runlen = 0;
-            };
-            for (; pos < next_pos; pos += 2) {
-                const auto w = get_u16(&data_[pos]);
-                if (runlen && w == runword) {
-                    ++runlen;
-                } else {
-                    output_run();
-                    runlen = 1;
-                    runword = w;
+            if (auto t = maybe_print_label(pos); t) {
+                switch (t->base()) {
+                case base_data_type::unknown_:
+                case base_data_type::code_:
+                    break;
+                case base_data_type::char_:
+                case base_data_type::byte_:
+                    std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
+                    ++pos;
+                    continue;
+                case base_data_type::word_:
+                    std::cout << "\tdc.w\t$" << hexfmt(get_u16(&data_[pos])) << "\n";
+                    pos += 2;
+                    continue;
+                case base_data_type::ptr_:
+                    if (t->len()) {
+                        if (t->ptr()->base() == base_data_type::char_) {
+                            bool in = false;
+                            uint32_t linepos = 0;
+                            auto end_quote = [&]() {
+                                if (in) {
+                                    std::cout << '\'';
+                                    in = false;
+                                    linepos++;
+                                }
+                            };
+                            auto maybe_sep = [&]() {
+                                if (linepos > 16) {
+                                    std::cout << ", ";
+                                    linepos += 3;
+                                }
+                            };
+                            for (uint32_t i = 0; i < t->len() && pos < next_pos; ++i, ++pos) {
+                                if (linepos == 0) {
+                                    std::cout << "\tdc.b\t";
+                                    linepos = 16;
+                                    in = false;
+                                }
+                                const uint8_t c = data_[pos];
+                                if (c >= ' ' && c < 128) {
+                                    if (!in) {
+                                        maybe_sep();
+                                        std::cout << '\'';
+                                        in = true;
+                                        ++linepos;
+                                    }
+                                    std::cout << static_cast<char>(c);
+                                    ++linepos;
+                                } else {
+                                    end_quote();
+                                    maybe_sep();
+                                    std::cout << "$" << hexfmt(c);
+                                    linepos += 3;
+                                }
+                                if (linepos+in >= 80) {
+                                    end_quote();
+                                    std::cout << "\n";
+                                    linepos = 0;
+                                }
+                            }
+                            end_quote();
+                            if (linepos)
+                                std::cout << "\n";
+                            continue;
+                        }
+                        const auto elem_size = sizeof_type(*t->ptr());
+                        pos = handle_array_range(pos, std::min(pos + elem_size * t->len(), next_pos), elem_size);
+                        continue;
+                    } else {
+                        std::cout << "\tdc.l\t";
+                        if (!print_addr_maybe(get_u32(&data_[pos])))
+                            std::cout << "$" << hexfmt(get_u32(&data_[pos]));
+                        std::cout << "\n";
+                        pos += 4;
+                        continue;
+                    }
+                    break;
+                case base_data_type::long_:
+                    std::cout << "\tdc.l\t$" << hexfmt(get_u32(&data_[pos])) << "\n";
+                    pos += 4;
+                    continue;
                 }
             }
-            output_run();
+
+            // ALIGN
+            if (pos & 1) {
+                std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
+                ++pos;
+            }
+
+            pos = handle_array_range(pos, next_pos, 2);
         }
     }
 
     bool print_addr_maybe(uint32_t addr)
     {
         if (auto it = labels_.find(addr); it != labels_.end()) {
-            std::cout << it->second;
+            std::cout << it->second.name;
             return true;
         }
 
@@ -708,14 +1081,25 @@ private:
             return true;
         }
 
-        #if 0
-        //constexpr uint32_t cia_base_addr = 0xA00000;
-        //constexpr uint32_t cia_mem_size = 0xC00000 - cia_base_addr;
         if (addr >= 0xA00000 && addr < 0xC00000) {
-            throw std::runtime_error { "TODO: CIA" };
+            // CIA-A is selected when A12=0, CIA-B is selcted when A13=0
+            switch ((addr >> 12) & 3) {
+            case 0: // Both!
+                std::cout << "ciaboth";
+                break;
+            case 1: // CIAB
+                std::cout << "ciab";
+                break;
+            case 2: // CIAA
+                std::cout << "ciaa";
+                break;
+            case 3: // Niether!
+                return false;
+            }
+            std::cout << cia_regname[(addr >> 8) & 0xf];
+            return true;
         }
 
-        #endif
         if (addr == 0xdff000) {
             std::cout << "CustomBase";
             return true;
@@ -744,7 +1128,7 @@ private:
 
     uint16_t read_iword(uint32_t addr)
     {
-        if ((addr & 1) || addr < 0x400 || addr > max_ram - 2)
+        if ((addr & 1) || addr < 0x400 || addr > max_mem - 2)
             throw std::runtime_error { "Reading instruction word from invalid address $" + hexstring(addr) };
         return get_u16(&data_[addr]);
     }
@@ -765,8 +1149,10 @@ private:
             reglist = iwords[eaw++];
 
         ea_val_[0] = simval {};
+        ea_addr_[0] = simval {};
         ea_data_[0] = 0;
         ea_val_[1] = simval {};
+        ea_addr_[0] = simval {};
         ea_data_[1] = 0;
 
         for (int i = 0; i < inst.nea; ++i) {
@@ -779,15 +1165,16 @@ private:
                 ea_val_[i] = regs_.a[ea & ea_xn_mask];
                 break;
             case ea_m_A_ind:
+                ea_addr_[i] = regs_.a[ea & ea_xn_mask];
                 // TODO: ea_val_
                 break;
             case ea_m_A_ind_post:
-                // TODO: ea_val_
+                // TODO: ea_val_, ea_addr_
                 // TODO: increment
                 break;
             case ea_m_A_ind_pre:
                 // TODO: decrement
-                // TODO: ea_val_
+                // TODO: ea_val_, ea_addr_
                 break;
             case ea_m_A_ind_disp16: {
                 assert(eaw < inst.ilen);
@@ -807,18 +1194,21 @@ private:
                 switch (ea & ea_xn_mask) {
                 case ea_other_abs_w:
                     ea_data_[i] = static_cast<uint32_t>(static_cast<int16_t>(iwords[eaw++]));
-                    ea_val_[i] = simval { ea_data_[i] };
+                    ea_addr_[i] = simval { ea_data_[i] };
+                    // TODO: ea_val_
                     break;
                 case ea_other_abs_l:
                     ea_data_[i] = iwords[eaw] << 16 | iwords[eaw + 1];
-                    ea_val_[i] = simval { ea_data_[i] };
+                    ea_addr_[i] = simval { ea_data_[i] };
                     eaw += 2;
+                    // TODO: ea_val_
                     break;
                 case ea_other_pc_disp16: {
                     assert(eaw < inst.ilen);
                     int16_t n = iwords[eaw++];
                     ea_data_[i] = static_cast<uint32_t>(n);
-                    ea_val_[i] = simval { addr + (eaw - 1) * 2 + n };
+                    ea_addr_[i] = simval { addr + (eaw - 1) * 2 + n };
+                    // TODO: ea_val_
                     break;
                 }
                 case ea_other_pc_index: {
@@ -826,6 +1216,7 @@ private:
                     const auto extw = iwords[eaw++];
                     ea_data_[i] = static_cast<uint32_t>(extw);
                     // TODO: ea_val_
+                    // TODO: ea_addr_
                     break;
                 }
                 case ea_other_imm:
@@ -870,10 +1261,10 @@ private:
                     assert(eaw < inst.ilen);
                     const auto disp = static_cast<int16_t>(iwords[eaw++]);
                     ea_data_[i] = static_cast<uint32_t>(disp);
-                    ea_val_[i] = simval { addr + 2 + disp };
+                    ea_addr_[i] = simval { addr + 2 + disp };
                 } else if (ea == ea_disp) {
                     ea_data_[i] = static_cast<int8_t>(inst.data);
-                    ea_val_[i] = simval { addr + 2 + static_cast<int8_t>(inst.data) };
+                    ea_addr_[i] = simval { addr + 2 + static_cast<int8_t>(inst.data) };
                 } else {
                 }
                 break;
@@ -915,23 +1306,21 @@ private:
             case inst_type::BSR:
             case inst_type::BRA: {
                 assert(inst.nea == 1 && inst.ea[0] == ea_disp);
-                add_root(ea_val_[0].raw(), regs_);
+                add_root(ea_addr_[0].raw(), regs_);
                 if (inst.type == inst_type::BRA)
                     goto finish;
                 break;
             }
             case inst_type::DBcc:
                 assert(inst.nea == 2 && inst.ea[1] == ea_disp && inst.ilen == 2);
-                add_root(ea_val_[1].raw(), regs_);
+                add_root(ea_addr_[1].raw(), regs_);
                 break;
 
             case inst_type::JSR:
             case inst_type::JMP:
                 assert(inst.nea == 1);
-
-                if (ea_val_[0].known())
-                    add_root(ea_val_[0].raw(), regs_);
-
+                if (ea_addr_[0].known())
+                    add_root(ea_addr_[0].raw(), regs_);
                 if (inst.type == inst_type::JMP)
                     goto finish;
                 break;
@@ -946,11 +1335,14 @@ private:
 
             default:
                 for (int i = 0; i < inst.nea; ++i) {
-                    if (!ea_val_[i].known())
+                    if (!ea_addr_[i].known())
                         continue;
-                    const auto ea_addr = ea_val_[i].raw() & 0xffffff;
+                    const auto ea_addr = ea_addr_[i].raw() & 0xffffff;
                     if (ea_addr >= written_.size() || !written_[ea_addr])
                         continue;
+
+                    const auto& t = inst.type == inst_type::LEA ? unknown_type : type_from_size(inst.size);
+
                     switch (inst.ea[i] >> ea_m_shift) {
                     case ea_m_Dn:
                         break;
@@ -960,7 +1352,7 @@ private:
                     case ea_m_A_ind_pre:
                     case ea_m_A_ind_disp16:
                     case ea_m_A_ind_index:
-                        add_auto_label(ea_addr);
+                        add_auto_label(ea_addr, t);
                         break;
                     case ea_m_Other:
                         switch (inst.ea[i] & ea_xn_mask) {
@@ -968,12 +1360,12 @@ private:
                         case ea_other_abs_l:
                         case ea_other_pc_disp16:
                         case ea_other_pc_index:                            
-                            add_auto_label(ea_addr);
+                            add_auto_label(ea_addr, t);
                             break;
                         case ea_other_imm:
                             // Maybe better heuristics here?
                             if (inst.size == opsize::l)
-                                add_auto_label(ea_addr);
+                                add_auto_label(ea_addr, t);
                             break;
                         default:
                             throw std::runtime_error { "Unsupported EA " + ea_string(inst.ea[i]) };
@@ -999,7 +1391,7 @@ private:
             return;
         
         if (size == opsize::l && !(addr & 3) && addr < 0x400) {
-            add_auto_label(addr);
+            add_auto_label(addr, code_ptr);
             add_root(val.raw(), simregs {});
             return;
         }
@@ -1045,7 +1437,7 @@ private:
     {
         switch (inst.type) {
         case inst_type::LEA:
-            update_ea(opsize::l, 1, inst.ea[1], ea_val_[0]);
+            update_ea(opsize::l, 1, inst.ea[1], ea_addr_[0]);
             break;
         case inst_type::MOVE:
         case inst_type::MOVEA: // TODO: sign extend if opsize == w
@@ -1154,9 +1546,9 @@ constexpr bool is_initial_hunk(uint32_t hunk_type)
 
 class hunk_file {
 public:
-    explicit hunk_file(const std::vector<uint8_t>& data, bool analyze)
+    explicit hunk_file(const std::vector<uint8_t>& data, analyzer* a)
         : data_ { data }
-        , analyze_ { analyze }
+        , a_ { a }
     {
         if (data.size() < 8)
             throw std::runtime_error { "File is too small to be Amiga HUNK file" };
@@ -1171,7 +1563,7 @@ public:
 
 private:
     const std::vector<uint8_t>& data_;
-    bool analyze_;
+    analyzer* a_;
     uint32_t pos_ = 0;
 
     struct reloc_info {
@@ -1395,35 +1787,33 @@ void hunk_file::read_hunk_exe()
     if (pos_ != data_.size())
         throw std::runtime_error { "File not done pos=$" + hexstring(pos_) + " size=" + hexstring(data_.size(), 8) };
 
-    if (!analyze_) {
+    if (!a_) {
         for (uint32_t i = 0; i < table_size; ++i) {
             if (hunks[i].type != HUNK_CODE)
                 continue;
             disasm_stmts(hunks[i].data, 0, hunks[i].loaded_size, hunks[i].addr);
         }
     } else {
-        analyzer a;
-
         for (const auto& s : symbols)
-            a.add_label(s.addr, s.name);
+            a_->add_label(s.addr, s.name, unknown_type);
         bool has_code = false;
         for (const auto& h : hunks) {
-            a.write_data(h.addr, h.data.data(), static_cast<uint32_t>(h.data.size()));
+            a_->write_data(h.addr, h.data.data(), static_cast<uint32_t>(h.data.size()));
             if (!has_code && h.type == HUNK_CODE) {
-                a.add_label(h.addr, "$$entry"); // Add label if not already present
-                a.add_root(h.addr, simregs {});
+                a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
+                a_->add_root(h.addr, simregs {});
                 has_code = true;
             }
         }
         assert(has_code);
 
-        a.run();
+        a_->run();
     }
 }
 
 void hunk_file::read_hunk_unit()
 {
-    if (analyze_)
+    if (a_)
         throw std::runtime_error { "Analyze not supported for HUNK_UNIT" };
 
     const auto unit_name = read_string();
@@ -1513,46 +1903,212 @@ void hunk_file::read_hunk_unit()
     }
 }
 
-void read_hunk(const std::vector<uint8_t>& data, bool analyze)
+void read_hunk(const std::vector<uint8_t>& data, analyzer* a)
 {
-    hunk_file hf { data, analyze };
+    hunk_file hf { data, a };
+}
+
+struct rom_tag {
+    uint32_t matchtag;  // RT_MATCHTAG     (pointer RTC_MATCHWORD)
+    uint32_t endskip;   // RT_ENDSKIP      (pointer to end of code)
+    uint8_t  flags;     // RT_FLAGS        (no flags)
+    uint8_t  version;   // RT_VERSION      (version number)
+    uint8_t  type;      // RT_TYPE         (NT_LIBRARY)
+    uint8_t  priority;  // RT_PRI          (priority = 126)
+    uint32_t name_addr; // RT_NAME         (pointer to name)
+    uint32_t id_addr;   // RT_IDSTRING     (pointer to ID string)
+    uint32_t init_addr; // RT_INIT         (execution address)*
+
+    std::string name;
+};
+
+void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
+{
+    const auto start = get_u32(&data[4]);
+    //std::cout << "ROM detected\n";
+    //std::cout << "Entry point: $" << hexfmt(start) << "\n";
+    const uint32_t rom_base = start & 0xffff0000;
+    if (rom_base != 0xf80000 && rom_base != 0xfc0000)
+        throw std::runtime_error { "Unsupported ROM base: $" + hexstring(rom_base) };
+    //std::cout << "Base address: $" << hexfmt(rom_base) << "\n";
+    if (start - rom_base >= data.size())
+        throw std::runtime_error { "Invalid ROM entry point: $" + hexstring(start) };
+
+    // Scan for ROM tags
+    std::vector<rom_tag> rom_tags;
+    for (uint32_t offset = 0; offset < data.size() - 24;) {
+        if (get_u16(&data[offset]) != 0x4afc || get_u32(&data[offset + 2]) != offset + rom_base) {
+            offset += 2;
+            continue;
+        }
+
+        std::cout << "Found tag at $" << hexfmt(rom_base + offset) << "\n";
+        rom_tag tag
+        {
+            .matchtag = get_u32(&data[offset + 2]),
+            .endskip = get_u32(&data[offset + 6]),
+            .flags = data[offset + 10],
+            .version = data[offset + 11],
+            .type = data[offset + 12],
+            .priority = data[offset + 13],
+            .name_addr = get_u32(&data[offset + 14]),
+            .id_addr = get_u32(&data[offset + 18]),
+            .init_addr = get_u32(&data[offset + 22]),
+        };
+
+        uint32_t end_offset = tag.endskip - rom_base;
+        if (end_offset <= offset || end_offset > data.size()) {
+            std::cout << "Invalid end offset\n";
+            end_offset = offset + 26;
+        }
+
+        auto get_string = [&](uint32_t addr) {
+            if (addr <= rom_base || addr - rom_base >= data.size())
+                throw std::runtime_error { "Invalid string in ROM tag: addr=$" + hexstring(addr) };
+            addr -= rom_base;
+            std::string s;
+            for (; addr < data.size() && data[addr]; ++addr) {
+                if (data[addr] >= ' ' && data[addr] < 128)
+                    s.push_back(data[addr]);
+                else
+                    s += "\\x" + hexstring(data[addr]);
+            }
+            return s;
+        };
+
+        tag.name = get_string(tag.name_addr);
+
+        std::cout << "  End=$" << hexfmt(tag.endskip) << "\n";
+        std::cout << "  Flags=$" << hexfmt(tag.flags) << " version=$" << hexfmt(tag.version) << " type=$" << hexfmt(tag.type) << " priority=$" << hexfmt(tag.priority) << "\n";
+        std::cout << "  Name='" << tag.name << "'\n";
+        std::cout << "  ID='" << get_string(tag.id_addr) << "'\n";
+        std::cout << "  Init=$" << hexfmt(tag.init_addr) << "\n";
+
+        rom_tags.push_back(tag);
+        offset = end_offset;
+    }
+
+    if (!a) {
+        if (rom_tags.empty()) {
+            disasm_stmts(data, start - rom_base, static_cast<uint32_t>(data.size()), rom_base);
+        } else {
+            for (const auto& tag : rom_tags) {
+                disasm_stmts(data, tag.init_addr - rom_base, tag.endskip - rom_base, rom_base);
+            }
+        }
+        return;
+    }
+
+    a->write_data(rom_base, data.data(), static_cast<uint32_t>(data.size()));
+
+    bool has_entry_name = false;
+    for (const auto& tag : rom_tags) {
+        std::string name;
+        for (char c : tag.name) {
+            if (isalpha(c) || (!name.empty() && isdigit(c)))
+                name.push_back(c);
+            else
+                name.push_back('_');
+        }
+
+        auto slen = [&](uint32_t addr) {
+            addr -= rom_base;
+            uint32_t l = 0;
+            while (addr + 1 < data.size() && data[addr++])
+                ++l;
+            return l + 1; // Include nul terminator
+        };
+
+        a->add_label(tag.matchtag, name + "_matchword", word_type);
+        a->add_label(tag.matchtag + 2, name + "_matchtag", unknown_ptr); // Pointer to struct Resident
+        a->add_label(tag.matchtag + 6, name + "_endskip", unknown_ptr);
+        a->add_label(tag.matchtag + 10, name + "_flags", byte_type);
+        a->add_label(tag.matchtag + 11, name + "_version", byte_type);
+        a->add_label(tag.matchtag + 12, name + "_type", byte_type);
+        a->add_label(tag.matchtag + 13, name + "_priority", byte_type);
+        a->add_label(tag.matchtag + 14, name + "_name_addr", char_ptr);
+        a->add_label(tag.matchtag + 18, name + "_id_addr", char_ptr);
+        a->add_label(tag.matchtag + 22, name + "_init_addr", code_ptr);
+
+        a->add_label(tag.init_addr, name + "_init", code_type);
+        a->add_label(tag.name_addr, name + "_name", make_array_type(char_type, slen(tag.name_addr)));
+        a->add_label(tag.id_addr, name + "_id", make_array_type(char_type, slen(tag.id_addr)));
+        a->add_root(tag.init_addr, simregs {});
+        if (tag.init_addr == start)
+            has_entry_name = true;
+    }
+
+    if (!has_entry_name) {
+        a->add_label(start, "$$entry", code_type);
+        a->add_root(start, simregs {});
+    }
+
+    a->add_label(rom_base, "RomStart", word_type);
+    a->run();
+}
+
+void usage()
+{
+    std::cerr << "Usage: m68kdisasm [-a] [-i info] file [options...]\n";
+    std::cerr << "   file    source file\n";
+    std::cerr << "   -a      analyze\n";
+    std::cerr << "   -i      infofile (implies -a)\n";
+    std::cerr << "\n";
+    std::cerr << "Options for non-hunk files:";
+    std::cerr << "   Normal (non-analysis mode) options: [offset] [end] - Normal dissasembly of starting from offset..end\n";
+    std::cerr << "   Analayze options: PC starting program counter of memory dump\n";
 }
 
 int main(int argc, char* argv[])
 {
     try {
-        if (argc < 2) {
-            std::cerr << "Usage: " << argv[0] << " [-a] file [options...]\n";
-            std::cerr << "   file    source file\n";
-            std::cerr << "   -a      analyze\n";
-            std::cerr << "\n";
-            std::cerr << "Options for non-hunk files:";
-            std::cerr << "   Normal (non-analysis mode) options: [offset] [end] - Normal dissasembly of starting from offset..end\n";
-            std::cerr << "   Analayze options: PC starting program counter of memory dump\n";
-            return 1;
+        std::unique_ptr<analyzer> a;
+        while (argc >= 2) {
+            if (!strcmp(argv[1], "-a")) {
+                if (!a)
+                    a = std::make_unique<analyzer>();
+                ++argv;
+                --argc;
+            } else if (!strcmp(argv[1], "-i")) {
+                ++argv;
+                --argc;
+                if (argc < 2) {
+                    usage();
+                    return 1;
+                }
+                if (!a)
+                    a = std::make_unique<analyzer>();
+                a->read_info_file(argv[1]);
+                ++argv;
+                --argc;
+            } else {
+                break;
+            }
         }
 
-        bool analyze = false;
-        if (!strcmp(argv[1], "-a")) {
-            analyze = true;
-            ++argv;
-            --argc;
+        if (argc < 2) {
+            usage();
+            return 1;
         }
         
         const auto data = read_file(argv[1]);
         if (data.size() > 4 && (get_u32(&data[0]) == HUNK_HEADER || get_u32(&data[0]) == HUNK_UNIT)) {
             if (argc > 2)
                 throw std::runtime_error { "Too many arguments" };
-            read_hunk(data, analyze);
+            read_hunk(data, a.get());
+        } else if (data.size() >= 8 * 1024 && data[0] == 0x11 && (data[1] == 0x11 || data[1] == 0x14) && get_u16(&data[2]) == 0x4ef9) {
+            // ROM
+            if (argc > 2)
+                throw std::runtime_error { "Too many arguments" };
+            handle_rom(data, a.get());
         } else {
-            if (analyze) {
+            if (a) {
                 if (argc <= 2)
                     throw std::runtime_error { "Missing start PC" };
                 const auto offset = hex_or_die(argv[2]);
-                analyzer a;
-                a.write_data(0, data.data(), static_cast<uint32_t>(data.size()));
-                a.add_root(offset, simregs {});
-                a.run();
+                a->write_data(0, data.data(), static_cast<uint32_t>(data.size()));
+                a->add_root(offset, simregs {});
+                a->run();
             } else {
                 if (argc > 4)
                     throw std::runtime_error { "Too many arguments" };
