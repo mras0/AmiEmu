@@ -616,6 +616,9 @@ public:
 
     void add_root(uint32_t addr, const simregs& regs, bool force = false)
     {
+        if (addr >= max_mem || (addr & 1))
+            return;
+
         // Don't visit non-written areas
         if (!force && (!written_[addr] || addr < 0x400))
             return;
@@ -927,13 +930,14 @@ private:
         return nullptr;
     }
 
-    uint32_t handle_array_range(uint32_t pos, uint32_t end, uint32_t elemsize)
+    uint32_t handle_array_range(uint32_t startpos, uint32_t end, uint32_t elemsize)
     {
         assert(elemsize == 1 || elemsize == 2 || elemsize == 4);
-        assert((end - pos) % elemsize == 0);
+        assert((end - startpos) % elemsize == 0);
         const char suffix = elemsize == 1 ? 'b' : elemsize == 2 ? 'w' : 'l';
-        const auto elem_per_line = (80 - 16) / (3 + 2 * elemsize);        
+        const uint32_t elem_per_line = elemsize == 1 ? 16 : elemsize == 2 ? 8 : 4;
 
+        uint32_t pos = startpos;
         while (pos < end) {
             const auto here = std::min(elem_per_line, (end - pos) / elemsize);
             // Check for a run of similar elements
@@ -946,7 +950,7 @@ private:
                 runend += elemsize;
             }
 
-            if (runlen > elem_per_line || (runlen > 1 && runend == end)) {
+            if (runlen > elem_per_line || (runlen > 1 && pos == startpos && runend == end)) {
                 const uint32_t val = elemsize == 1 ? data_[pos] : elemsize == 2 ? get_u16(&data_[pos]) : get_u32(&data_[pos]);
                 std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8) << ", $" << hexfmt(val, 2 * elemsize) << "\n";
                 pos += runlen * elemsize;
@@ -1064,12 +1068,13 @@ private:
             }
 
             // ALIGN
-            if (pos & 1) {
+            if ((pos & 1) || next_pos == pos + 1) {
                 std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
-                ++pos;
+                if (++pos == next_pos)
+                    continue;
             }
 
-            pos = handle_array_range(pos, next_pos, 2);
+            pos = handle_array_range(pos, next_pos & ~1, 2);
         }
     }
 
@@ -1156,7 +1161,7 @@ private:
         ea_addr_[0] = simval {};
         ea_data_[0] = 0;
         ea_val_[1] = simval {};
-        ea_addr_[0] = simval {};
+        ea_addr_[1] = simval {};
         ea_data_[1] = 0;
 
         for (int i = 0; i < inst.nea; ++i) {
@@ -1173,7 +1178,8 @@ private:
                 // TODO: ea_val_
                 break;
             case ea_m_A_ind_post:
-                // TODO: ea_val_, ea_addr_
+                ea_addr_[i] = regs_.a[ea & ea_xn_mask];
+                // TODO: ea_val_
                 // TODO: increment
                 break;
             case ea_m_A_ind_pre:
@@ -1391,21 +1397,19 @@ private:
         if (!val.known())
             return;
         
+        //std::cerr << "Update $" << hexfmt(addr) << "." << (size == opsize::l ? "L" : size == opsize::w ? "W" : "B") << " to $" << hexfmt(val.raw(), 2*opsize_bytes(size)) << "\n";
         if (size == opsize::l && !(addr & 3) && addr < 0x400) {
             add_auto_label(addr, code_ptr);
             add_root(val.raw(), simregs {});
             return;
         }
 
-        std::cerr << "Update $" << hexfmt(addr) << "." << (size == opsize::l ? "L" : size == opsize::w ? "W" : "B") << " to $" << hexfmt(val.raw(), 2*opsize_bytes(size)) << "\n";
         //throw std::runtime_error { "TODO" };
     }
 
     void update_ea(opsize size, uint8_t idx, uint8_t ea, const simval& val)
     {
-        const auto& ea_val = ea_val_[idx];
-
-        // XXX: TODO
+        // TODO
         if (size != opsize::l)
             return;
 
@@ -1416,19 +1420,23 @@ private:
         case ea_m_An:
             regs_.a[ea & ea_xn_mask] = val;
             return;
-            // TOOD
-        //case ea_m_A_ind:
-        //case ea_m_A_ind_post:
+        case ea_m_A_ind:
+        case ea_m_A_ind_post:
+        case ea_m_A_ind_disp16:
+        case ea_m_A_ind_index:
+            if (ea_addr_[idx].known())
+                update_mem(size, ea_addr_[idx].raw(), val);
+            break;
         //case ea_m_A_ind_pre:
-        //case ea_m_A_ind_disp16:
-        //case ea_m_A_ind_index:
+            // TODO
         case ea_m_Other:
             switch (ea & ea_xn_mask) {
             case ea_other_abs_w:
             case ea_other_abs_l:
             case ea_other_pc_disp16:
             case ea_other_pc_index:
-                update_mem(size, ea_val.raw(), val);
+                if (ea_addr_[idx].known())
+                    update_mem(size, ea_addr_[idx].raw(), val);
                 break;
             }
         }
@@ -1443,10 +1451,11 @@ private:
         case inst_type::MOVE:
             update_ea(inst.size, 1, inst.ea[1], ea_val_[0]);
             break;
-        case inst_type::MOVEA: // TODO: sign extend if opsize == w
-            if (inst.size == opsize::l && inst.ea[0] == ea_immediate && ea_val_[0].raw() < max_mem && written_[ea_val_[0].raw()])
+        case inst_type::MOVEA:
+            auto val = ea_val_[0].known() ? simval { static_cast<uint32_t>(sext(ea_val_[0].raw(), inst.size)) } : simval {};
+            if (inst.ea[0] == ea_immediate && val.raw() < max_mem && written_[val.raw()])
                 add_auto_label(ea_val_[0].raw(), unknown_type);
-            update_ea(inst.size, 1, inst.ea[1], ea_val_[0]);
+            update_ea(opsize::l, 1, inst.ea[1], val);
             break;
         }
     }
@@ -1947,7 +1956,7 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
             continue;
         }
 
-        std::cout << "Found tag at $" << hexfmt(rom_base + offset) << "\n";
+        //std::cout << "Found tag at $" << hexfmt(rom_base + offset) << "\n";
         rom_tag tag
         {
             .matchtag = get_u32(&data[offset + 2]),
@@ -1983,11 +1992,11 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
 
         tag.name = get_string(tag.name_addr);
 
-        std::cout << "  End=$" << hexfmt(tag.endskip) << "\n";
-        std::cout << "  Flags=$" << hexfmt(tag.flags) << " version=$" << hexfmt(tag.version) << " type=$" << hexfmt(tag.type) << " priority=$" << hexfmt(tag.priority) << "\n";
-        std::cout << "  Name='" << tag.name << "'\n";
-        std::cout << "  ID='" << get_string(tag.id_addr) << "'\n";
-        std::cout << "  Init=$" << hexfmt(tag.init_addr) << "\n";
+        //std::cout << "  End=$" << hexfmt(tag.endskip) << "\n";
+        //std::cout << "  Flags=$" << hexfmt(tag.flags) << " version=$" << hexfmt(tag.version) << " type=$" << hexfmt(tag.type) << " priority=$" << hexfmt(tag.priority) << "\n";
+        //std::cout << "  Name='" << tag.name << "'\n";
+        //std::cout << "  ID='" << get_string(tag.id_addr) << "'\n";
+        //std::cout << "  Init=$" << hexfmt(tag.init_addr) << "\n";
 
         rom_tags.push_back(tag);
         offset = end_offset;
@@ -2035,10 +2044,13 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
         a->add_label(tag.matchtag + 18, name + "_id_addr", char_ptr);
         a->add_label(tag.matchtag + 22, name + "_init_addr", code_ptr);
 
-        a->add_label(tag.init_addr, name + "_init", code_type);
         a->add_label(tag.name_addr, name + "_name", make_array_type(char_type, slen(tag.name_addr)));
         a->add_label(tag.id_addr, name + "_id", make_array_type(char_type, slen(tag.id_addr)));
-        a->add_root(tag.init_addr, simregs {});
+        if (tag.init_addr) {
+            a->add_label(tag.init_addr, name + "_init", code_type);
+            if (!(tag.flags & 0x80)) // Not RTF_AUTOINIT
+                a->add_root(tag.init_addr, simregs {});
+        }
         if (tag.init_addr == start)
             has_entry_name = true;
     }

@@ -31,7 +31,7 @@ constexpr int32_t sext(uint32_t val, opsize size)
     case opsize::b:
         return static_cast<int8_t>(val & 0xff);
     case opsize::w:
-        return static_cast<int16_t>(val & 0xfffff);
+        return static_cast<int16_t>(val & 0xffff);
     default:
         return static_cast<int32_t>(val);
     }
