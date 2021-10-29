@@ -840,7 +840,9 @@ public:
                             break;
                         }
                         case ea_other_imm:
-                            std::cout << "#$" << hexfmt(ea_data_[i], opsize_bytes(inst.size)*2);
+                            std::cout << "#";
+                            if (inst.size != opsize::l || !print_addr_maybe(ea_data_[i]))
+                                std::cout << "$" << hexfmt(ea_data_[i], opsize_bytes(inst.size) * 2);
                             break;
                         default:
                             throw std::runtime_error { "TODO: " + ea_string(ea) };
@@ -935,14 +937,16 @@ private:
         while (pos < end) {
             const auto here = std::min(elem_per_line, (end - pos) / elemsize);
             // Check for a run of similar elements
-            uint32_t runlen = 0;
-            for (uint32_t i = 1; pos + i * elemsize <= end; ++i) {
-                if (memcmp(&data_[pos], &data_[pos + i * elemsize], elemsize))
+            uint32_t runlen = 1;
+            uint32_t runend = pos + elemsize;
+            while (runend < end) {
+                if (memcmp(&data_[pos], &data_[runend], elemsize))
                     break;
                 ++runlen;
+                runend += elemsize;
             }
 
-            if (runlen > elem_per_line) {
+            if (runlen > elem_per_line || (runlen > 1 && runend == end)) {
                 const uint32_t val = elemsize == 1 ? data_[pos] : elemsize == 2 ? get_u16(&data_[pos]) : get_u32(&data_[pos]);
                 std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8) << ", $" << hexfmt(val, 2 * elemsize) << "\n";
                 pos += runlen * elemsize;
@@ -1363,9 +1367,6 @@ private:
                             add_auto_label(ea_addr, t);
                             break;
                         case ea_other_imm:
-                            // Maybe better heuristics here?
-                            if (inst.size == opsize::l)
-                                add_auto_label(ea_addr, t);
                             break;
                         default:
                             throw std::runtime_error { "Unsupported EA " + ea_string(inst.ea[i]) };
@@ -1440,7 +1441,11 @@ private:
             update_ea(opsize::l, 1, inst.ea[1], ea_addr_[0]);
             break;
         case inst_type::MOVE:
+            update_ea(inst.size, 1, inst.ea[1], ea_val_[0]);
+            break;
         case inst_type::MOVEA: // TODO: sign extend if opsize == w
+            if (inst.size == opsize::l && inst.ea[0] == ea_immediate && ea_val_[0].raw() < max_mem && written_[ea_val_[0].raw()])
+                add_auto_label(ea_val_[0].raw(), unknown_type);
             update_ea(inst.size, 1, inst.ea[1], ea_val_[0]);
             break;
         }
