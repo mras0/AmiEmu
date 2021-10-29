@@ -107,12 +107,15 @@ public:
     {
         uint8_t flags = DSKF_ALL;
         if (data_.empty()) {
-            flags &= ~(DSKF_CHANGE | DSKF_TRACK0);
+            flags &= ~DSKF_CHANGE;
         } else {
-            if (s_.cyl == 0)
-                flags &= ~DSKF_TRACK0;
             flags &= ~DSKF_PROT;
         }
+
+        // Even if no disk is inserted track0 sensor works (a1000 bootrom)
+        if (s_.cyl == 0)
+            flags &= ~DSKF_TRACK0;
+
         // When the motor is off the RDY bit is used for drive identification.
         // The 32-bit ID of a normal drive is all 1's, which means /RDY should
         // always be reset (active low). If proper drive ID is to be supported
