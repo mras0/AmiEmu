@@ -377,18 +377,29 @@ enum class base_data_type {
     long_,
     code_,
     ptr_,
+    struct_,
 };
+
+class structure_definition;
 
 class type {
 public:
     explicit type(base_data_type t)
         : t_ { t }
+        , ptr_ { nullptr }
+        , len_ { 0 }
     {
     }
     explicit type(const type& base, uint32_t len)
         : t_ { base_data_type::ptr_ }
         , ptr_ { &base }
         , len_ { len }
+    {
+    }
+    explicit type(const structure_definition& s)
+        : t_ { base_data_type::struct_ }
+        , struct_ { &s }
+        , len_ { 0 }
     {
     }
     type(const type&) = delete;
@@ -401,7 +412,12 @@ public:
 
     const type* ptr() const
     {
-        return ptr_;
+        return t_ == base_data_type::ptr_ ? ptr_ : nullptr;
+    }
+
+    const structure_definition* struct_def() const
+    {
+        return t_ == base_data_type::struct_ ? struct_ : nullptr;
     }
 
     uint32_t len() const
@@ -411,37 +427,12 @@ public:
 
 private:
     base_data_type t_;
-    const type* ptr_ = nullptr;
+    union {
+        const type* ptr_;
+        const structure_definition* struct_;
+    };
     uint32_t len_ = 0;
 };
-
-std::ostream& operator<<(std::ostream& os, const type& t)
-{
-    if (t.ptr()) {
-        os << *t.ptr();
-        if (t.len())
-            os << "[" << t.len() << "]";
-        else
-            os << "*";
-    } else {
-        switch (t.base()) {
-        case base_data_type::unknown_:
-            return os << "UNKNOWN";
-        case base_data_type::char_:
-            return os << "CHAR";
-        case base_data_type::byte_:
-            return os << "BYTE";
-        case base_data_type::word_:
-            return os << "WORD";
-        case base_data_type::long_:
-            return os << "LONG";
-        case base_data_type::code_:
-            return os << "CODE";
-        }
-        assert(false);
-    }
-    return os;
-}
 
 const type unknown_type { base_data_type::unknown_ };
 const type char_type { base_data_type::char_ };
@@ -450,9 +441,21 @@ const type word_type { base_data_type::word_ };
 const type long_type { base_data_type::long_ };
 const type code_type { base_data_type::code_ };
 const type unknown_ptr { unknown_type, 0 };
-const type char_ptr { byte_type, 0 };
+const type char_ptr { char_type, 0 };
 const type byte_ptr { byte_type, 0 };
 const type code_ptr { code_type, 0 };
+
+std::unordered_map<std::string, const type*> typenames {
+    { "UNKNOWN", &unknown_type },
+    { "CHAR", &char_type },
+    { "BYTE", &byte_type },
+    { "WORD", &word_type },
+    { "LONG", &long_type },
+    { "CODE", &code_type },
+};
+
+uint32_t sizeof_type(const type& t);
+std::ostream& operator<<(std::ostream& os, const type& t);
 
 const type& make_array_type(const type& base, uint32_t len)
 {
@@ -478,9 +481,26 @@ const type& make_pointer_type(const type& base)
     else if (&base == &code_type)
         return code_ptr;
 
-    std::ostringstream oss;
-    oss << "TODO: make_pointer_type for " << base;
-    throw std::runtime_error { oss.str() };
+    static std::vector<std::unique_ptr<type>> types;
+    for (const auto& t : types) {
+        if (t->ptr() == &base) {
+            return *t.get();
+        }
+    }
+    types.push_back(std::make_unique<type>(base, 0));
+    return *types.back().get();
+}
+
+const type& make_struct_type(const structure_definition& s)
+{
+    static std::vector<std::unique_ptr<type>> types;
+    for (const auto& t : types) {
+        if (t->struct_def() == &s) {
+            return *t.get();
+        }
+    }
+    types.push_back(std::make_unique<type>(s));
+    return *types.back().get();
 }
 
 const type& type_from_size(opsize s)
@@ -498,7 +518,134 @@ const type& type_from_size(opsize s)
     }
 }
 
-const uint32_t sizeof_type(const type& t)
+class struct_field {
+public:
+    struct_field(const char* name, const type& t, int32_t offset = auto_offset)
+        : name_ { name }
+        , offset_ { offset }
+        , type_ { &t }
+    {
+    }
+
+    const char* name() const
+    {
+        return name_;
+    }
+
+    int32_t offset() const
+    {
+        assert(offset_ != auto_offset);
+        return offset_;
+    }
+
+    int32_t end_offset() const
+    {
+        assert(offset_ != auto_offset);
+        return offset_ + sizeof_type(*type_);
+    }
+
+    const type& t() const
+    {
+        return *type_;
+    }
+
+private:
+    const char* name_;
+    int32_t offset_;
+    const type* type_;
+    static constexpr int32_t auto_offset = INT32_MAX;
+
+    friend class structure_definition;
+};
+
+class structure_definition {
+public:
+    explicit structure_definition(const char* const name, const std::vector<struct_field>& fields)
+        : name_ { name }
+        , fields_ { fields }
+    {
+        // handle auto offset
+        int32_t offset = 0;
+        for (auto& f : fields_) {
+            if (f.offset_ == struct_field::auto_offset)
+                f.offset_ = offset;
+            offset = f.end_offset();
+        }
+
+        std::sort(fields_.begin(), fields_.end(), [](const struct_field& l, const struct_field& r) { return l.offset() < r.offset(); });
+
+        if (!typenames.insert({ name_, &make_struct_type(*this) }).second) {
+            throw std::runtime_error { "Redefinition of struct " + std::string { name_ } };
+        }
+    }
+
+    structure_definition(structure_definition&) = delete;
+    const structure_definition& operator=(structure_definition&) = delete;
+
+    const char* name() const
+    {
+        return name_;
+    }
+
+    const std::vector<struct_field>& fields() const
+    {
+        return fields_;
+    }
+
+    uint32_t size() const
+    {
+        return static_cast<uint32_t>(fields_.empty() ? 0 : fields_.back().end_offset());
+    }
+
+    const struct_field* field_at(int32_t offset) const
+    {
+        for (const auto& f : fields_) {
+            if (offset >= f.offset() && offset < f.end_offset()) {
+                if (f.t().struct_def())
+                    return f.t().struct_def()->field_at(offset - f.offset());
+                return &f;
+            }
+        }
+        return nullptr;
+    }
+
+private:
+    const char* const name_;
+    std::vector<struct_field> fields_;
+};
+
+
+std::ostream& operator<<(std::ostream& os, const type& t)
+{
+    if (t.ptr()) {
+        os << *t.ptr();
+        if (t.len())
+            os << "[" << t.len() << "]";
+        else
+            os << "*";
+        return os;
+    }
+    switch (t.base()) {
+    case base_data_type::unknown_:
+        return os << "UNKNOWN";
+    case base_data_type::char_:
+        return os << "CHAR";
+    case base_data_type::byte_:
+        return os << "BYTE";
+    case base_data_type::word_:
+        return os << "WORD";
+    case base_data_type::long_:
+        return os << "LONG";
+    case base_data_type::code_:
+        return os << "CODE";
+    case base_data_type::struct_:
+        return os << "struct " << t.struct_def()->name();
+    }
+    assert(false);
+    return os;
+}
+
+uint32_t sizeof_type(const type& t)
 {
     if (t.ptr())
         return t.len() ? t.len() * sizeof_type(*t.ptr()) : 4;
@@ -511,28 +658,334 @@ const uint32_t sizeof_type(const type& t)
         return 2;
     case base_data_type::long_:
         return 4;
-    //case base_data_type::code_:
-    //case base_data_type::ptr_:
+        //case base_data_type::code_:
+        //case base_data_type::ptr_:
+    case base_data_type::struct_:
+        return t.struct_def()->size();
     }
     std::ostringstream oss;
     oss << "Unhandled type in sizeof_type: " << t;
     throw std::runtime_error { oss.str() };
 }
 
-const std::unordered_map<std::string, const type*> typenames{
-    { "UNKNOWN", &unknown_type },
-    { "CHAR", &char_type },
-    { "BYTE", &byte_type },
-    { "WORD", &word_type },
-    { "LONG", &long_type },
-    { "CODE", &code_type },
+// nodes.h
+const structure_definition MinNode {
+    "MinNode",
+    {
+        { "mln_Succ", make_pointer_type(make_struct_type(MinNode)) },
+        { "mln_Pred", make_pointer_type(make_struct_type(MinNode)) },
+    }
+};
+
+const structure_definition Node {
+    "Node",
+    {
+        { "ln_Succ", make_pointer_type(make_struct_type(Node)) },
+        { "ln_Pred", make_pointer_type(make_struct_type(Node)) },
+        { "ln_Type", byte_type },
+        { "ln_Pri", byte_type },
+        { "ln_Name", char_ptr },
+    }
+};
+
+// lists.h
+const structure_definition List {
+    "List",
+    {
+        { "lh_Head", make_pointer_type(make_struct_type(List)) },
+        { "lh_Tail", make_pointer_type(make_struct_type(List)) },
+        { "lh_TailPred", make_pointer_type(make_struct_type(List)) },
+        { "lh_Type", byte_type },
+        { "l_pad", byte_type },
+    }
+};
+
+const structure_definition MinList {
+    "MinList",
+    {
+        { "mlh_Head", make_pointer_type(make_struct_type(MinList)) },
+        { "mlh_Tail", make_pointer_type(make_struct_type(MinList)) },
+        { "mlh_TailPred", make_pointer_type(make_struct_type(MinList)) },
+    }
+};
+
+const structure_definition Library {
+    "Library",
+    {
+        { "lib_Node", make_struct_type(Node) },
+        { "lib_Flags", byte_type },
+        { "lib_pad", byte_type },
+        { "lib_NegSize", word_type },
+        { "lib_PosSize", word_type },
+        { "lib_Version", word_type },
+        { "lib_Revision", word_type },
+        { "lib_IdString", char_ptr },
+        { "lib_Sum", long_type },
+        { "lib_OpenCnt", word_type },
+    }
+};
+
+// interrupts.h
+const structure_definition IntVector {
+    "IntVector",
+    {
+        { "iv_Data", unknown_ptr },
+        { "iv_Code", code_ptr },
+        { "iv_Node", make_pointer_type(make_struct_type(IntVector)) },
+    }
+};
+
+const structure_definition SoftIntList {
+    "SoftIntList",
+    {
+        { "sh_List", make_struct_type(List) },
+        { "sh_Pad", word_type },
+    }
+};
+
+// tasks.h
+const structure_definition Task {
+    "Task",
+    {
+        { "tc_Node", make_struct_type(Node) },
+        { "tc_Flags", byte_type },
+        { "tc_State", byte_type },
+        { "tc_IDNestCnt", byte_type },
+        { "tc_TDNestCnt", byte_type },
+        { "tc_SigAlloc", long_type },
+        { "tc_SigWait", long_type },
+        { "tc_SigRecvd", long_type },
+        { "tc_SigExcept", long_type },
+        { "tc_TrapAlloc", word_type },
+        { "tc_TrapAble", word_type },
+        { "tc_ExceptData", unknown_ptr },
+        { "tc_ExceptCode", unknown_ptr },
+        { "tc_TrapData", unknown_ptr },
+        { "tc_TrapCode", unknown_ptr },
+        { "tc_SPReg", unknown_ptr },
+        { "tc_SPLower", unknown_ptr },
+        { "tc_SPUpper", unknown_ptr },
+        { "tc_Switch", code_ptr }, // VOID (*tc_Switch)()
+        { "tc_Launch", code_ptr }, // VOID (*tc_Launch)()
+        { "tc_MemEntry", make_struct_type(List) },
+        { "tc_UserData", unknown_ptr },
+    }
+};
+
+// resident.h
+const structure_definition Resident {
+    "Resident",
+    {
+        { "rt_MatchWord", word_type },
+        { "rt_MatchTag", make_pointer_type(make_struct_type(Resident)) },
+        { "rt_EndSkip", unknown_ptr },
+        { "rt_Flags", byte_type },
+        { "rt_Version", byte_type },
+        { "rt_Type", byte_type },
+        { "rt_Pri", byte_type },
+        { "rt_Name", char_ptr },
+        { "rt_IdString", char_ptr },
+        { "rt_Init", unknown_ptr },
+    }
+};
+
+const structure_definition ExecBase {
+    "ExecBase",
+    {
+        { "LibNode", make_struct_type(Library) },
+        { "SoftVer", word_type },
+        { "LowMemChkSum", word_type },
+        { "ChkBase", long_type },
+        { "ColdCapture", unknown_ptr },
+        { "CoolCapture", unknown_ptr },
+        { "WarmCapture", unknown_ptr },
+        { "SysStkUpper", unknown_ptr },
+        { "SysStkLower", unknown_ptr },
+        { "MaxLocMem", long_type },
+        { "DebugEntry", unknown_ptr },
+        { "DebugData", unknown_ptr },
+        { "AlertData", unknown_ptr },
+        { "MaxExtMem", unknown_ptr },
+        { "ChkSum", word_type },
+        { "IntVects", make_array_type(make_struct_type(IntVector), 16) },
+        { "ThisTask", make_pointer_type(make_struct_type(Task)) },
+        { "IdleCount", long_type },
+        { "DispCount", long_type },
+        { "Quantum", word_type },
+        { "Elapsed", word_type },
+        { "SysFlags", word_type },
+        { "IDNestCnt", byte_type },
+        { "TDNestCnt", byte_type },
+        { "AttnFlags", word_type },
+        { "AttnResched", word_type },
+        { "ResModules", unknown_ptr },
+        { "TaskTrapCode", unknown_ptr },
+        { "TaskExceptCode", unknown_ptr },
+        { "TaskExitCode", unknown_ptr },
+        { "TaskSigAlloc", long_type },
+        { "TaskTrapAlloc", word_type },
+        { "MemList", make_struct_type(List) },
+        { "ResourceList", make_struct_type(List) },
+        { "DeviceList", make_struct_type(List) },
+        { "IntrList", make_struct_type(List) },
+        { "LibList", make_struct_type(List) },
+        { "PortList", make_struct_type(List) },
+        { "TaskReady", make_struct_type(List) },
+        { "TaskWait", make_struct_type(List) },
+        { "SoftInts", make_array_type(make_struct_type(SoftIntList), 5) },
+        { "LastAlert", make_array_type(long_type, 4) },
+        { "VBlankFrequency", byte_type },
+        { "PowerSupplyFrequency", byte_type },
+        { "SemaphoreList", make_struct_type(List) },
+        { "KickMemPtr", unknown_ptr },
+        { "KickTagPtr", unknown_ptr },
+        { "KickCheckSum", unknown_ptr },
+        { "ex_Pad0", word_type },
+        { "ex_LaunchPoint", long_type },
+        { "ex_RamLibPrivate", unknown_ptr },
+        { "ex_EClockFrequency", long_type },
+        { "ex_CacheControl", long_type },
+        { "ex_TaskID", long_type },
+        { "ex_Reserved1", make_array_type(long_type, 5) },
+        { "ex_MMULock", unknown_ptr },
+        { "ex_Reserved2", make_array_type(long_type, 3) },
+        { "ex_MemHandlers", make_struct_type(MinList) },
+        { "ex_MemHandler", unknown_ptr },
+
+        { "_LVOSupervisor", code_ptr, -30 },
+        { "_LVOExitIntr", code_ptr, -36 },
+        { "_LVOSchedule", code_ptr, -42 },
+        { "_LVOReschedule", code_ptr, -48 },
+        { "_LVOSwitch", code_ptr, -54 },
+        { "_LVODispatch", code_ptr, -60 },
+        { "_LVOException", code_ptr, -66 },
+        { "_LVOInitCode", code_ptr, -72 },
+        { "_LVOInitStruct", code_ptr, -78 },
+        { "_LVOMakeLibrary", code_ptr, -84 },
+        { "_LVOMakeFunctions", code_ptr, -90 },
+        { "_LVOFindResident", code_ptr, -96 },
+        { "_LVOInitResident", code_ptr, -102 },
+        { "_LVOAlert", code_ptr, -108 },
+        { "_LVODebug", code_ptr, -114 },
+        { "_LVODisable", code_ptr, -120 },
+        { "_LVOEnable", code_ptr, -126 },
+        { "_LVOForbid", code_ptr, -132 },
+        { "_LVOPermit", code_ptr, -138 },
+        { "_LVOSetSR", code_ptr, -144 },
+        { "_LVOSuperState", code_ptr, -150 },
+        { "_LVOUserState", code_ptr, -156 },
+        { "_LVOSetIntVector", code_ptr, -162 },
+        { "_LVOAddIntServer", code_ptr, -168 },
+        { "_LVORemIntServer", code_ptr, -174 },
+        { "_LVOCause", code_ptr, -180 },
+        { "_LVOAllocate", code_ptr, -186 },
+        { "_LVODeallocate", code_ptr, -192 },
+        { "_LVOAllocMem", code_ptr, -198 },
+        { "_LVOAllocAbs", code_ptr, -204 },
+        { "_LVOFreeMem", code_ptr, -210 },
+        { "_LVOAvailMem", code_ptr, -216 },
+        { "_LVOAllocEntry", code_ptr, -222 },
+        { "_LVOFreeEntry", code_ptr, -228 },
+        { "_LVOInsert", code_ptr, -234 },
+        { "_LVOAddHead", code_ptr, -240 },
+        { "_LVOAddTail", code_ptr, -246 },
+        { "_LVORemove", code_ptr, -252 },
+        { "_LVORemHead", code_ptr, -258 },
+        { "_LVORemTail", code_ptr, -264 },
+        { "_LVOEnqueue", code_ptr, -270 },
+        { "_LVOFindName", code_ptr, -276 },
+        { "_LVOAddTask", code_ptr, -282 },
+        { "_LVORemTask", code_ptr, -288 },
+        { "_LVOFindTask", code_ptr, -294 },
+        { "_LVOSetTaskPri", code_ptr, -300 },
+        { "_LVOSetSignal", code_ptr, -306 },
+        { "_LVOSetExcept", code_ptr, -312 },
+        { "_LVOWait", code_ptr, -318 },
+        { "_LVOSignal", code_ptr, -324 },
+        { "_LVOAllocSignal", code_ptr, -330 },
+        { "_LVOFreeSignal", code_ptr, -336 },
+        { "_LVOAllocTrap", code_ptr, -342 },
+        { "_LVOFreeTrap", code_ptr, -348 },
+        { "_LVOAddPort", code_ptr, -354 },
+        { "_LVORemPort", code_ptr, -360 },
+        { "_LVOPutMsg", code_ptr, -366 },
+        { "_LVOGetMsg", code_ptr, -372 },
+        { "_LVOReplyMsg", code_ptr, -378 },
+        { "_LVOWaitPort", code_ptr, -384 },
+        { "_LVOFindPort", code_ptr, -390 },
+        { "_LVOAddLibrary", code_ptr, -396 },
+        { "_LVORemLibrary", code_ptr, -402 },
+        { "_LVOOldOpenLibrary", code_ptr, -408 },
+        { "_LVOCloseLibrary", code_ptr, -414 },
+        { "_LVOSetFunction", code_ptr, -420 },
+        { "_LVOSumLibrary", code_ptr, -426 },
+        { "_LVOAddDevice", code_ptr, -432 },
+        { "_LVORemDevice", code_ptr, -438 },
+        { "_LVOOpenDevice", code_ptr, -444 },
+        { "_LVOCloseDevice", code_ptr, -450 },
+        { "_LVODoIO", code_ptr, -456 },
+        { "_LVOSendIO", code_ptr, -462 },
+        { "_LVOCheckIO", code_ptr, -468 },
+        { "_LVOWaitIO", code_ptr, -474 },
+        { "_LVOAbortIO", code_ptr, -480 },
+        { "_LVOAddResource", code_ptr, -486 },
+        { "_LVORemResource", code_ptr, -492 },
+        { "_LVOOpenResource", code_ptr, -498 },
+        { "_LVORawIOInit", code_ptr, -504 },
+        { "_LVORawMayGetChar", code_ptr, -510 },
+        { "_LVORawPutChar", code_ptr, -516 },
+        { "_LVORawDoFmt", code_ptr, -522 },
+        { "_LVOGetCC", code_ptr, -528 },
+        { "_LVOTypeOfMem", code_ptr, -534 },
+        { "_LVOProcure", code_ptr, -540 },
+        { "_LVOVacate", code_ptr, -546 },
+        { "_LVOOpenLibrary", code_ptr, -552 },
+        { "_LVOInitSemaphore", code_ptr, -558 },
+        { "_LVOObtainSemaphore", code_ptr, -564 },
+        { "_LVOReleaseSemaphore", code_ptr, -570 },
+        { "_LVOAttemptSemaphore", code_ptr, -576 },
+        { "_LVOObtainSemaphoreList", code_ptr, -582 },
+        { "_LVOReleaseSemaphoreList", code_ptr, -588 },
+        { "_LVOFindSemaphore", code_ptr, -594 },
+        { "_LVOAddSemaphore", code_ptr, -600 },
+        { "_LVORemSemaphore", code_ptr, -606 },
+        { "_LVOSumKickData", code_ptr, -612 },
+        { "_LVOAddMemList", code_ptr, -618 },
+        { "_LVOCopyMem", code_ptr, -624 },
+        { "_LVOCopyMemQuick", code_ptr, -630 },
+        { "_LVOCacheClearU", code_ptr, -636 },
+        { "_LVOCacheClearE", code_ptr, -642 },
+        { "_LVOCacheControl", code_ptr, -648 },
+        { "_LVOCreateIORequest", code_ptr, -654 },
+        { "_LVODeleteIORequest", code_ptr, -660 },
+        { "_LVOCreateMsgPort", code_ptr, -666 },
+        { "_LVODeleteMsgPort", code_ptr, -672 },
+        { "_LVOObtainSemaphoreShared", code_ptr, -678 },
+        { "_LVOAllocVec", code_ptr, -684 },
+        { "_LVOFreeVec", code_ptr, -690 },
+        { "_LVOCreatePrivatePool", code_ptr, -696 },
+        { "_LVODeletePrivatePool", code_ptr, -702 },
+        { "_LVOAllocPooled", code_ptr, -708 },
+        { "_LVOFreePooled", code_ptr, -714 },
+        { "_LVOAttemptSemaphoreShared", code_ptr, -720 },
+        { "_LVOColdReboot", code_ptr, -726 },
+        { "_LVOStackSwap", code_ptr, -732 },
+        { "_LVOChildFree", code_ptr, -738 },
+        { "_LVOChildOrphan", code_ptr, -744 },
+        { "_LVOChildStatus", code_ptr, -750 },
+        { "_LVOChildWait", code_ptr, -756 },
+        { "_LVOCachePreDMA", code_ptr, -762 },
+        { "_LVOCachePostDMA", code_ptr, -768 },
+        { "_LVOAddMemHandler", code_ptr, -774 },
+        { "_LVORemMemHandler", code_ptr, -780 },
+    }
 };
 
 class analyzer {
 public:
     explicit analyzer()
         : written_(max_mem)
-        , data_(max_mem)        
+        , data_(max_mem)
         , regs_ {}
     {
     }
@@ -581,7 +1034,7 @@ public:
             if (!t)
                 throw std::runtime_error { "Invalid base type in " + filename + " line " + std::to_string(linenum) + ": " + line + " \"" + basetype + "\"" };
 
-            for (;  p < parts[1].length(); ++p) {
+            for (; p < parts[1].length(); ++p) {
                 if (parts[1][p] == '*')
                     t = &make_pointer_type(*t);
                 else if (parts[1][p] == '[' && ++p < parts[1].length()) {
@@ -598,9 +1051,7 @@ public:
                 }
             }
 
-            add_label(addr, parts[2], *t);
-            if (t == &code_type)
-                add_root(addr, simregs {}, true);
+            predef_info_.push_back({ addr, { parts[2], t } });
         }
     }
 
@@ -641,7 +1092,6 @@ public:
             else
                 std::cerr << "Type conflict for " << name << " was " << *it->second.t << " now " << t << "\n";
         }
-    
     }
 
     void add_auto_label(uint32_t addr, const type& t)
@@ -706,6 +1156,14 @@ public:
 
     void run()
     {
+        handle_predef_info();
+
+        if (!exec_base_) {
+            // add fake exec base
+            exec_base_ = 0xcc000000;
+        }
+        add_label(exec_base_, "SysBase", make_struct_type(ExecBase));
+
         while (!roots_.empty()) {
             const auto r = roots_.front();
             roots_.pop();
@@ -783,7 +1241,8 @@ public:
                         desc << hexfmt(static_cast<uint16_t>(n));
                         desc << "(A" << (ea & 7) << ")";
                         if (aval.known()) {
-                            const auto addr = aval.raw() + static_cast<int16_t>(ea_data_[i]);
+                            const int32_t offset = static_cast<int16_t>(ea_data_[i]);
+                            const auto addr = aval.raw() + offset;
                             // Custom reg
                             if (addr >= 0xDE0000 && addr < 0xE00000) {
                                 const auto ra = addr & ~0x1ff;
@@ -792,6 +1251,15 @@ public:
                                     std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
                                 std::cout << "(A" << (ea & 7) << ")";
                                 break;
+                            } else if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
+                                const auto& t = *lit->second.t;
+                                extra << "\t" << "A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
+                                if (t.struct_def()) {
+                                    if (auto f = t.struct_def()->field_at(offset)) {
+                                        std::cout << f->name() <<  "(A" << (ea & 7) << ")";
+                                        break;
+                                    }
+                                }
                             } else {
                                 extra << "\t" << desc.str() << " = $" << hexfmt(addr);
                             }
@@ -883,7 +1351,6 @@ public:
                 pos += inst.ilen * 2;
             }
         }
-
     }
 
 private:
@@ -903,6 +1370,8 @@ private:
     std::map<uint32_t, label_info> labels_;
     simregs regs_;
     std::vector<area> areas_;
+    std::vector<std::pair<uint32_t, label_info>> predef_info_;
+    uint32_t exec_base_ = 0;
 
     uint32_t ea_data_[2];
     simval ea_addr_[2];
@@ -921,23 +1390,22 @@ private:
         areas_.insert(it, { beg, end });
     }
 
-    const type* maybe_print_label(uint32_t pos) const
+    std::map<uint32_t, label_info>::const_iterator maybe_print_label(uint32_t pos) const
     {
-        if (auto it = labels_.find(pos); it != labels_.end()) {
+        auto it = labels_.find(pos);
+        if (it != labels_.end()) {
             std::cout << std::setw(32) << std::left << it->second.name << "\t; $" << hexfmt(it->first) << " " << *it->second.t << "\n";
-            return it->second.t;
         }
-        return nullptr;
+        return it;
     }
 
-    uint32_t handle_array_range(uint32_t startpos, uint32_t end, uint32_t elemsize)
+    void handle_array_range(uint32_t& pos, uint32_t end, uint32_t elemsize)
     {
+        const uint32_t startpos = pos;
         assert(elemsize == 1 || elemsize == 2 || elemsize == 4);
         assert((end - startpos) % elemsize == 0);
         const char suffix = elemsize == 1 ? 'b' : elemsize == 2 ? 'w' : 'l';
         const uint32_t elem_per_line = elemsize == 1 ? 16 : elemsize == 2 ? 8 : 4;
-
-        uint32_t pos = startpos;
         while (pos < end) {
             const auto here = std::min(elem_per_line, (end - pos) / elemsize);
             // Check for a run of similar elements
@@ -952,7 +1420,8 @@ private:
 
             if (runlen > elem_per_line || (runlen > 1 && pos == startpos && runend == end)) {
                 const uint32_t val = elemsize == 1 ? data_[pos] : elemsize == 2 ? get_u16(&data_[pos]) : get_u32(&data_[pos]);
-                std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8) << ", $" << hexfmt(val, 2 * elemsize) << "\n";
+                std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8)
+                          << ", $" << hexfmt(val, 2 * elemsize) << "\n";
                 pos += runlen * elemsize;
                 continue;
             }
@@ -972,100 +1441,135 @@ private:
             }
             std::cout << "\n";
         }
-        return pos;
+    }
+
+    void handle_char_array(uint32_t& pos, uint32_t next_pos, uint32_t len)
+    {
+        assert(len);
+        bool in = false;
+        uint32_t linepos = 0;
+        auto end_quote = [&]() {
+            if (in) {
+                std::cout << '\'';
+                in = false;
+                linepos++;
+            }
+        };
+        auto maybe_sep = [&]() {
+            if (linepos > 16) {
+                std::cout << ", ";
+                linepos += 3;
+            }
+        };
+        for (uint32_t i = 0; i < len && pos < next_pos; ++i, ++pos) {
+            if (linepos == 0) {
+                std::cout << "\tdc.b\t";
+                linepos = 16;
+                in = false;
+            }
+            const uint8_t c = data_[pos];
+            if (c >= ' ' && c < 128) {
+                if (!in) {
+                    maybe_sep();
+                    std::cout << '\'';
+                    in = true;
+                    ++linepos;
+                }
+                std::cout << static_cast<char>(c);
+                ++linepos;
+            } else {
+                end_quote();
+                maybe_sep();
+                std::cout << "$" << hexfmt(c);
+                linepos += 3;
+            }
+            if (linepos + in >= 80) {
+                end_quote();
+                std::cout << "\n";
+                linepos = 0;
+            }
+        }
+        end_quote();
+        if (linepos)
+            std::cout << "\n";
+    }
+
+    bool handle_typed_data(uint32_t& pos, uint32_t next_pos, const type& t, std::string name="")
+    {
+        switch (t.base()) {
+        case base_data_type::unknown_:
+        case base_data_type::code_:
+            return false;
+        case base_data_type::char_:
+        case base_data_type::byte_:
+            std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
+            ++pos;
+            return true;
+        case base_data_type::word_:
+            std::cout << "\tdc.w\t$" << hexfmt(get_u16(&data_[pos])) << "\n";
+            pos += 2;
+            return true;
+        case base_data_type::long_:
+            std::cout << "\tdc.l\t$" << hexfmt(get_u32(&data_[pos])) << "\n";
+            pos += 4;
+            return true;
+        case base_data_type::ptr_:
+            if (t.len()) {
+                if (t.ptr()->base() == base_data_type::char_) {
+                    handle_char_array(pos, next_pos, t.len());
+                } else {
+                    const auto elem_size = sizeof_type(*t.ptr());
+                    if (elem_size > 4) {
+                        assert(false);
+                        throw std::runtime_error { "TODO: Handle array of something other than elementary types" };
+                    }
+                    handle_array_range(pos, std::min(pos + elem_size * t.len(), next_pos), elem_size);
+                }
+            } else {
+                std::cout << "\tdc.l\t";
+                if (!print_addr_maybe(get_u32(&data_[pos])))
+                    std::cout << "$" << hexfmt(get_u32(&data_[pos]));
+                std::cout << "\n";
+                pos += 4;
+            }
+            return true;
+        case base_data_type::struct_: {
+            const auto end_pos = pos + t.struct_def()->size();
+            if (end_pos > next_pos) {
+                std::cerr << "WARNING: Structure size goes beyond next_pos!\n";
+                assert(!"TODO");
+                return false;
+            }
+            for (const auto& f : t.struct_def()->fields()) {
+                if (f.offset() < 0)
+                    continue;
+                const auto n = name + "." + f.name();
+                auto p = pos + f.offset();
+                std::cout << "; " << std::left << std::setw(32) << n << " $" << hexfmt(p) << " " << f.t() << "\n";
+                handle_typed_data(p, next_pos, f.t(), n);
+            }
+            pos = end_pos;
+            return true;
+        }
+        default:
+            std::cerr << "TODO: Handle typed data with type=" << t << "\n";
+            assert(!"TODO");
+            break;
+        }
+        return false;
     }
 
     void handle_data_area(uint32_t pos, uint32_t end)
     {
+        assert(pos < end && end <= max_mem);
         if (labels_.find(pos) == labels_.end())
             std::cout << "; $" << hexfmt(pos) << "\n";
         while (pos < end) {
             const auto next_label = labels_.upper_bound(pos);
             const auto next_pos = std::min(end, next_label == labels_.end() ? ~0U : next_label->first);
 
-            if (auto t = maybe_print_label(pos); t) {
-                switch (t->base()) {
-                case base_data_type::unknown_:
-                case base_data_type::code_:
-                    break;
-                case base_data_type::char_:
-                case base_data_type::byte_:
-                    std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
-                    ++pos;
-                    continue;
-                case base_data_type::word_:
-                    std::cout << "\tdc.w\t$" << hexfmt(get_u16(&data_[pos])) << "\n";
-                    pos += 2;
-                    continue;
-                case base_data_type::ptr_:
-                    if (t->len()) {
-                        if (t->ptr()->base() == base_data_type::char_) {
-                            bool in = false;
-                            uint32_t linepos = 0;
-                            auto end_quote = [&]() {
-                                if (in) {
-                                    std::cout << '\'';
-                                    in = false;
-                                    linepos++;
-                                }
-                            };
-                            auto maybe_sep = [&]() {
-                                if (linepos > 16) {
-                                    std::cout << ", ";
-                                    linepos += 3;
-                                }
-                            };
-                            for (uint32_t i = 0; i < t->len() && pos < next_pos; ++i, ++pos) {
-                                if (linepos == 0) {
-                                    std::cout << "\tdc.b\t";
-                                    linepos = 16;
-                                    in = false;
-                                }
-                                const uint8_t c = data_[pos];
-                                if (c >= ' ' && c < 128) {
-                                    if (!in) {
-                                        maybe_sep();
-                                        std::cout << '\'';
-                                        in = true;
-                                        ++linepos;
-                                    }
-                                    std::cout << static_cast<char>(c);
-                                    ++linepos;
-                                } else {
-                                    end_quote();
-                                    maybe_sep();
-                                    std::cout << "$" << hexfmt(c);
-                                    linepos += 3;
-                                }
-                                if (linepos+in >= 80) {
-                                    end_quote();
-                                    std::cout << "\n";
-                                    linepos = 0;
-                                }
-                            }
-                            end_quote();
-                            if (linepos)
-                                std::cout << "\n";
-                            continue;
-                        }
-                        const auto elem_size = sizeof_type(*t->ptr());
-                        pos = handle_array_range(pos, std::min(pos + elem_size * t->len(), next_pos), elem_size);
-                        continue;
-                    } else {
-                        std::cout << "\tdc.l\t";
-                        if (!print_addr_maybe(get_u32(&data_[pos])))
-                            std::cout << "$" << hexfmt(get_u32(&data_[pos]));
-                        std::cout << "\n";
-                        pos += 4;
-                        continue;
-                    }
-                    break;
-                case base_data_type::long_:
-                    std::cout << "\tdc.l\t$" << hexfmt(get_u32(&data_[pos])) << "\n";
-                    pos += 4;
-                    continue;
-                }
-            }
+            if (auto it = maybe_print_label(pos); it != labels_.end() && handle_typed_data(pos, next_pos, *it->second.t, it->second.name))
+                continue;
 
             // ALIGN
             if ((pos & 1) || next_pos == pos + 1) {
@@ -1074,7 +1578,7 @@ private:
                     continue;
             }
 
-            pos = handle_array_range(pos, next_pos & ~1, 2);
+            handle_array_range(pos, next_pos & ~1, 2);
         }
     }
 
@@ -1205,20 +1709,20 @@ private:
                 case ea_other_abs_w:
                     ea_data_[i] = static_cast<uint32_t>(static_cast<int16_t>(iwords[eaw++]));
                     ea_addr_[i] = simval { ea_data_[i] };
-                    // TODO: ea_val_
+                    ea_val_[i] = read_mem(ea_addr_[i]);
                     break;
                 case ea_other_abs_l:
                     ea_data_[i] = iwords[eaw] << 16 | iwords[eaw + 1];
                     ea_addr_[i] = simval { ea_data_[i] };
+                    ea_val_[i] = read_mem(ea_addr_[i]);
                     eaw += 2;
-                    // TODO: ea_val_
                     break;
                 case ea_other_pc_disp16: {
                     assert(eaw < inst.ilen);
                     int16_t n = iwords[eaw++];
                     ea_data_[i] = static_cast<uint32_t>(n);
                     ea_addr_[i] = simval { addr + (eaw - 1) * 2 + n };
-                    // TODO: ea_val_
+                    ea_val_[i] = read_mem(ea_addr_[i]);
                     break;
                 }
                 case ea_other_pc_index: {
@@ -1392,6 +1896,16 @@ private:
         }
     }
 
+    simval read_mem(const simval& addr)
+    {
+        if (!addr.known())
+            return simval {};
+        const auto a = addr.raw();
+        if (a == 4)
+            return simval { exec_base_ };
+        return a >= 0x400 && a < max_mem - 3 && written_[a] ? simval { get_u32(&data_[a]) } : simval {};
+    }
+
     void update_mem(opsize size, uint32_t addr, const simval& val)
     {
         if (!val.known())
@@ -1459,7 +1973,129 @@ private:
             break;
         }
     }
+
+    bool pointer_ok(uint32_t addr)
+    {
+        return addr && !(addr & 1) && addr < max_mem - 3 && written_[addr];
+    }
+
+    uint32_t try_read_pointer(uint32_t addr)
+    {
+        if (!pointer_ok(addr))
+            return 0;
+        const auto p = get_u32(&data_[addr]);
+        return pointer_ok(p) ? p : 0;
+    }
+
+    void handle_struct_at(uint32_t addr, const structure_definition& s);
+    void maybe_find_string_at(uint32_t addr);
+    void handle_data_at(uint32_t addr, const type& t);
+    void handle_predef_info();
 };
+
+
+void analyzer::handle_struct_at(uint32_t addr, const structure_definition& s)
+{
+    if (!pointer_ok(addr))
+        return;
+    for (const auto& f : s.fields()) {
+        handle_data_at(addr + f.offset(), f.t());
+    }
+}
+
+void analyzer::maybe_find_string_at(uint32_t addr)
+{
+    if (!pointer_ok(addr))
+        return;
+
+    const auto start_addr = addr;
+
+     // Arbitrary limits
+    constexpr uint32_t max_len = 4096;
+    uint32_t len = 0, nprint = 0;
+    while (addr < max_mem && written_[addr]) {
+        if (len > max_len)
+            return;
+        const auto c = data_[addr];
+        if (!c) {
+            ++addr;
+            ++len;
+            // Fold extra NUL into string if present (even after dc.b)
+            if (addr + 1 < max_mem && written_[addr + 1] && !data_[addr]) {
+                ++addr;
+                ++len;            
+            }
+            break;
+        }
+        if (!isprint(c))
+            ++nprint;
+        ++len;
+        ++addr;
+    }
+
+    // Too many non-printable characters?
+    if (nprint * 10 > len)
+        return;
+
+    add_label(start_addr, "text_" + hexstring(start_addr), make_array_type(char_type, len));
+}
+
+void analyzer::handle_data_at(uint32_t addr, const type& t)
+{
+    if (!pointer_ok(addr) || !written_[addr])
+        return;
+
+    switch (t.base()) {
+    default:
+        assert(!"TODO");
+        [[fallthrough]];
+    case base_data_type::unknown_:
+    case base_data_type::char_:
+    case base_data_type::byte_:
+    case base_data_type::word_:
+    case base_data_type::long_:
+        return;
+    case base_data_type::code_:
+        add_root(addr, simregs {}, true);
+        return;
+    case base_data_type::ptr_:
+        if (auto p = try_read_pointer(addr); p) {
+            auto it = labels_.find(p);
+            if (it != labels_.end()) {
+                if (it->second.t != t.ptr())
+                    std::cerr << "TODO: Maybe handle " << *t.ptr() << " at $" << hexfmt(p) << " - already present as " << it->second.name << " (" << *it->second.t << ")\n";
+                return;
+            }
+
+            if (t.ptr() == &code_type) {
+                std::cerr << "TODO: Pointer to code at $" << hexfmt(p) << "!\n";
+                assert(0);
+                return;
+            } else if (t.ptr()->base() == base_data_type::struct_) {
+                std::cerr << "TODO: Pointer to struct at $" << hexfmt(p) << "!\n";
+                assert(0);
+                return;
+            } else if (t.ptr() == &char_type) {
+                maybe_find_string_at(p);
+                return;
+            }
+        }
+        return;
+    case base_data_type::struct_:
+        handle_struct_at(addr, *t.struct_def());
+        return;
+    }
+}
+
+void analyzer::handle_predef_info()
+{
+    for (const auto& i : predef_info_) {
+        const auto& t = *i.second.t;
+        add_label(i.first, i.second.name, t);
+        handle_data_at(i.first, t);
+    }
+    predef_info_.clear();
+}
 
 
 constexpr uint32_t HUNK_UNIT    = 999;
@@ -1743,7 +2379,7 @@ void hunk_file::read_hunk_exe()
             throw std::runtime_error { "Too much data for hunk " + std::to_string(hunk_num) };
         }
 
-        if (hunk_type != HUNK_BSS) {
+        if (hunk_type != HUNK_BSS && hunk_bytes) {
             check_pos(hunk_bytes);
             memcpy(&hunks[hunk_num].data[0], &data_[pos_], hunk_bytes);
             pos_ += hunk_bytes;
