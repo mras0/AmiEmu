@@ -981,6 +981,7 @@ constexpr int32_t _LVOFindTask = -294;
 constexpr int32_t _LVOAddLibrary = -396;
 constexpr int32_t _LVOOldOpenLibrary = -408;
 constexpr int32_t _LVOOpenDevice = -444;
+constexpr int32_t _LVOOpenResource = -498;
 constexpr int32_t _LVOOpenLibrary = -552;
 
 const structure_definition ExecBase {
@@ -1124,7 +1125,7 @@ const structure_definition ExecBase {
         { "_LVOAbortIO", code_ptr, -480 },
         { "_LVOAddResource", code_ptr, -486 },
         { "_LVORemResource", code_ptr, -492 },
-        { "_LVOOpenResource", code_ptr, -498 },
+        { "_LVOOpenResource", code_ptr, _LVOOpenResource },
         { "_LVORawIOInit", code_ptr, -504 },
         { "_LVORawMayGetChar", code_ptr, -510 },
         { "_LVORawPutChar", code_ptr, -516 },
@@ -1760,7 +1761,7 @@ public:
         insert_area(addr, addr + length);
     }
 
-    void add_root(uint32_t addr, const simregs& regs, bool force = false)
+    void add_root(uint32_t addr, const simregs& regs, bool force = false, bool is_func = true)
     {
         if (addr >= max_mem || (addr & 1))
             return;
@@ -1773,7 +1774,7 @@ public:
             roots_.push({ addr, regs });
             visited_[addr] = regs; // Mark visitied now to avoid re-insertion
         }
-        add_auto_label(addr, code_type);
+        add_auto_label(addr, code_type, is_func ? "func" : "lab");
     }
 
     void add_label(uint32_t addr, const std::string& name, const type& t)
@@ -1782,14 +1783,16 @@ public:
         if (it == labels_.end())
             labels_[addr] = { name, &t };
         else if (it->second.t != &t) {
-            if (it->second.t == &unknown_type)
+            if (it->second.t == &unknown_type || t.struct_def() || (t.ptr() && t.len())) {
+                it->second.name = name;
                 it->second.t = &t;
-            else
+            } else if (&t != &unknown_type) {
                 std::cerr << "Type conflict for " << name << " was " << *it->second.t << " now " << t << "\n";
+            }
         }
     }
 
-    void add_auto_label(uint32_t addr, const type& t)
+    void add_auto_label(uint32_t addr, const type& t, const std::string& prefix = "dat")
     {
         if (addr < 0x400 && (addr & 3) == 0) {
             // Interrupt vector
@@ -1846,7 +1849,7 @@ public:
             return;
         }
 
-        add_label(addr, "lab_" + hexstring(addr), t);
+        add_label(addr, prefix + "_" + hexstring(addr), t);
     }
 
     void add_library(const std::string& name, const std::string& id, uint32_t addr, const type& t)
@@ -1910,7 +1913,6 @@ public:
                                                              {},
                                                              { { regname::A1, "libName", &char_ptr } },
                 open_library } });
-        //_LVOOpenDevice
         functions_.insert({ exec_base_ + _LVOOpenDevice, function_description { {}, {
                                                                                         { regname::A0, "devName", &char_ptr },
                                                                                         { regname::D0, "unitNumber", &byte_type },
@@ -1918,6 +1920,10 @@ public:
                                                                                         { regname::D1, "flags", &byte_type }, 
                                                                                     },
                                                              /*open_device*/ } });
+        functions_.insert({ exec_base_ + _LVOOpenResource, function_description { {}, {
+                                                                                        { regname::A1, "resName", &char_ptr },
+                                                                                    },
+                                                             /*open_resource*/ } });
         functions_.insert({ exec_base_ + _LVOOpenLibrary, function_description { {}, {
                                                                                          { regname::A1, "libName", &char_ptr },
                                                                                          { regname::D0, "version", &long_type },
@@ -2616,6 +2622,95 @@ private:
         regs_.d[0] = simval {};
     }
 
+    void do_init_struct(uint32_t init_table, uint32_t mem, uint32_t /*size*/)
+    {
+        const auto table_start = init_table;
+        // Note: seems to always be kept aligned despite description...
+        for (;;) {
+            if (init_table + 3 >= max_mem || !written_[init_table])
+                return;
+            const auto cmd = data_[init_table++];
+            if (!cmd) {
+                if (!data_[init_table])
+                    ++init_table;
+                break;
+            }
+
+            /*
+    ddssnnnn
+        dd  the destination type (and size):
+            00  no offset, use next destination, nnnn is count
+            01  no offset, use next destination, nnnn is repeat
+            10  destination offset is in the next byte, nnnn is count
+            11  destination offset is in the next 24-bits, nnnn is count
+        ss  the size and location of the source:
+            00  long, from the next two aligned words
+            01  word, from the next aligned word
+            10  byte, from the next byte
+            11  ERROR - will cause an ALERT (see below)
+      nnnn  the count or repeat:
+         count  the (number+1) of source items to copy
+        repeat  the source is copied (number+1) times.
+*/
+
+            const auto dd  = cmd >> 6;
+            const auto ss  = (cmd >> 4) & 3;
+            const auto rep = (cmd & 15) + 1;
+
+            uint32_t offset = 0, val = 0;
+            opsize sz {};
+            switch (dd) {
+            case 0b00:
+            case 0b01:
+                goto unsupported;
+            case 0b10:
+                offset = data_[init_table++];
+                break;
+            case 0b11:
+                offset = data_[init_table++] << 16;
+                offset |= data_[init_table++] << 8;
+                offset |= data_[init_table++];
+                break;
+            }
+            switch (ss) {
+            case 0b00:
+                if (init_table & 1)
+                    ++init_table;
+                val = get_u32(&data_[init_table]);
+                init_table += 4;
+                sz = opsize::l;
+                break;
+            case 0b01:
+                if (init_table & 1)
+                    ++init_table;
+                val = get_u16(&data_[init_table]);
+                init_table += 2;
+                sz = opsize::w;
+                break;
+            case 0b10:
+                val = data_[init_table++];
+                ++init_table; // Seems to always be kept aligned?
+                sz = opsize::b;
+                break;
+            case 0b11:
+                goto unsupported;
+            }
+
+            if (0) {
+            unsupported:
+                std::cerr << "TODO: Init struct cmd=$" << hexfmt(cmd) << " dd=" << (int)dd << " ss=" << (int)dd << " rep=" << (int)rep << "\n";
+                throw std::runtime_error { "TODO" };
+            }
+
+            for (int i = 0; i < rep; ++i) {
+                update_mem(sz, mem + offset + i * opsize_bytes(sz), simval { val });
+            }
+        }
+        const auto sz = init_table - table_start;
+        const bool w = !(table_start & 1) && !(sz & 1);
+        add_auto_label(table_start, make_array_type(w ? word_type : byte_type, w ? sz >> 1 : sz), "inittab");
+    }
+
     void do_make_library()
     {
         //std::cerr << "TODO: Handle MakeLibrary\n";
@@ -2637,7 +2732,7 @@ private:
                         break;
                     vectors.push_back(static_cast<int16_t>(ofs) + vecbase);
                 }
-                add_auto_label(vecbase, make_array_type(word_type, 2 + static_cast<uint32_t>(vectors.size())));
+                add_auto_label(vecbase, make_array_type(word_type, 2 + static_cast<uint32_t>(vectors.size())), "libvecofs");
             } else {
                 for (uint32_t a = vecbase; pointer_ok(a); a += 4) {
                     const auto v = get_u32(&data_[a]);
@@ -2645,7 +2740,7 @@ private:
                         break;
                     vectors.push_back(v);
                 }
-                add_auto_label(vecbase, make_array_type(code_ptr, 1 + static_cast<uint32_t>(vectors.size())));
+                add_auto_label(vecbase, make_array_type(code_ptr, 1 + static_cast<uint32_t>(vectors.size())), "libvecs");
             }
         } else {
             vectors.resize(256); // Fake number
@@ -2674,13 +2769,15 @@ private:
         }
 
         if (lib_ptr) {
+            if (regs_.a[1].known() && pointer_ok(regs_.a[1].raw())) {
+                do_init_struct(regs_.a[1].raw(), lib_ptr, data_size);
+            }
+
             regs_.d[0] = simval { lib_ptr };
-            add_auto_label(lib_ptr, make_struct_type(Library));
+            add_auto_label(lib_ptr, make_struct_type(Library), "lib");
         } else {
             regs_.d[0] = simval {};
         }
-
-        // TODO: InitStruct
 
         if (regs_.a[2].known() && pointer_ok(regs_.a[2].raw())) {
             std::cout << "TODO: Handle init function at " << regs_.a[2] << "\n"; 
@@ -2696,12 +2793,12 @@ private:
         }
     }
 
-    void do_branch(uint32_t addr, bool kill_std_regs)
+    void do_branch(uint32_t addr, bool is_func)
     {
         auto it = functions_.find(addr);
         if (it == functions_.end()) {
-            add_root(addr, regs_);
-            if (kill_std_regs) {
+            add_root(addr, regs_, false, is_func);
+            if (is_func) {
                 regs_.a[0] = simval {};
                 regs_.a[1] = simval {};
                 regs_.d[0] = simval {};
@@ -2712,9 +2809,10 @@ private:
         const auto& fd = it->second;
         for (const auto& i : fd.input()) {
             if (i.reg >= regname::A0 && i.reg < regname::A7) {
+                const auto& areg = regs_.a[static_cast<uint8_t>(i.reg) - static_cast<uint8_t>(regname::A0)];
+                //std::cout << i.reg << " = " << areg << " -> type " << *i.t << "\n";
                 if (auto pt = i.t->ptr()) {
-                    const auto& areg = regs_.a[static_cast<uint8_t>(i.reg) - static_cast<uint8_t>(regname::A0)];
-                    if (areg.known()) {                        
+                    if (areg.known()) {
                         if (pt == &code_type) {
                             add_root(areg.raw(), regs_);
                         } else if (pt == &char_type) {
@@ -2729,7 +2827,7 @@ private:
                                     std::cerr << "Warning: Type conflict for " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
                                 }
                             } else {
-                                add_auto_label(areg.raw(), *pt);
+                                add_auto_label(areg.raw(), *pt, pt->struct_def()->name());
                             }
                         }
                     }
@@ -2782,7 +2880,7 @@ private:
             case inst_type::DBcc:
                 assert(inst.nea == 2 && inst.ea[1] == ea_disp && inst.ilen == 2);
                 // don't use do_branch here
-                add_root(ea_addr_[1].raw(), regs_);
+                add_root(ea_addr_[1].raw(), regs_, false, false);
                 break;
 
             case inst_type::JSR:
@@ -2867,7 +2965,7 @@ private:
         
         //std::cerr << "Update $" << hexfmt(addr) << "." << (size == opsize::l ? "L" : size == opsize::w ? "W" : "B") << " to $" << hexfmt(val.raw(), 2*opsize_bytes(size)) << "\n";
         if (size == opsize::l && !(addr & 3) && addr < 0x400) {
-            add_auto_label(addr, code_ptr);
+            add_auto_label(addr, code_ptr, "interrupthandler");
             add_root(rv, simregs {});
             return;
         }
@@ -3003,7 +3101,7 @@ void analyzer::handle_struct_at(uint32_t addr, const structure_definition& s)
 
 void analyzer::maybe_find_string_at(uint32_t addr)
 {
-    if (!pointer_ok(addr))
+    if (addr >= max_mem || !written_[addr])
         return;
 
     const auto start_addr = addr;
