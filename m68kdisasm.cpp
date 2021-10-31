@@ -373,12 +373,27 @@ public:
         return *this;
     }
 
+    simval& operator-=(const simval& rhs)
+    {
+        if (known() && rhs.known())
+            raw_ -= rhs.raw_;
+        else
+            reset();
+        return *this;
+    }
+
 private:
     uint32_t raw_;
     enum { STATE_UNKNOWN, STATE_KNOWN } state_;
 };
 
 simval operator+(const simval& lhs, const simval& rhs)
+{
+    auto res = lhs;
+    return res += rhs;
+}
+
+simval operator-(const simval& lhs, const simval& rhs)
 {
     auto res = lhs;
     return res += rhs;
@@ -696,10 +711,9 @@ public:
         return input_;
     }
 
-    void simulate() const
+    const std::function<void(void)>& sim() const
     {
-        if (sim_)
-            sim_();
+        return sim_;
     }
 
 private:
@@ -960,6 +974,7 @@ const structure_definition IOStdReq {
 // execbase.h
 
 constexpr int32_t _LVOSupervisor = -30;
+constexpr int32_t _LVOMakeLibrary = -84;
 constexpr int32_t _LVOFindResident = -96;
 constexpr int32_t _LVOAllocMem = -198;
 constexpr int32_t _LVOFindTask = -294;
@@ -1040,7 +1055,7 @@ const structure_definition ExecBase {
         { "_LVOException", code_ptr, -66 },
         { "_LVOInitCode", code_ptr, -72 },
         { "_LVOInitStruct", code_ptr, -78 },
-        { "_LVOMakeLibrary", code_ptr, -84 },
+        { "_LVOMakeLibrary", code_ptr, _LVOMakeLibrary },
         { "_LVOMakeFunctions", code_ptr, -90 },
         { "_LVOFindResident", code_ptr, _LVOFindResident },
         { "_LVOInitResident", code_ptr, -102 },
@@ -1865,6 +1880,16 @@ public:
                                                              {},
                                                              { { regname::A5, "userFunc", &code_ptr } },
                                                          } });
+        functions_.insert({ exec_base_ + _LVOMakeLibrary, function_description { {}, {
+                                                                                      { regname::A0, "vectors", &unknown_ptr },
+                                                                                      { regname::A1, "structure", &unknown_ptr },
+                                                                                      { regname::A2, "init", /*&code_ptr*/&unknown_ptr }, // Handle adding root in do_make_library
+                                                                                      { regname::D0, "dSize", &long_type },
+                                                                                      { regname::D1, "segList", &bptr_type },
+                                                                                  },
+                                                           [this]() {
+                                                                                 do_make_library();
+                                                                             } } });
         functions_.insert({ exec_base_ + _LVOFindResident, function_description {
                                                              {},
                                                              { { regname::A1, "name", &char_ptr } },
@@ -1920,11 +1945,10 @@ public:
                 }
 
                 maybe_print_label(pos);
+                regs_ = it->second;
                 uint16_t iwords[max_instruction_words];
                 read_instruction(iwords, pos);
                 const auto& inst = instructions[iwords[0]];
-
-                regs_ = it->second;
 
                 std::ostringstream extra;
 
@@ -2592,6 +2616,86 @@ private:
         regs_.d[0] = simval {};
     }
 
+    void do_make_library()
+    {
+        //std::cerr << "TODO: Handle MakeLibrary\n";
+        //std::cerr << "\tvectors = " << regs_.a[0] << "\n";
+        //std::cerr << "\tstructure = " << regs_.a[1] << "\n";
+        //std::cerr << "\tinit = " << regs_.a[2] << "\n";
+        //std::cerr << "\tdSize = " << regs_.d[0] << "\n";
+        //std::cerr << "\tsegList = " << regs_.d[1] << "\n";
+
+        std::vector<uint32_t> vectors;
+        if (regs_.a[0].known() && pointer_ok(regs_.a[0].raw())) {
+            const auto vecbase = regs_.a[0].raw();
+            if (get_u16(&data_[vecbase]) == 0xffff) {
+                for (uint32_t a = vecbase + 2;; a += 2) {
+                    if (!pointer_ok(a))
+                        break;
+                    const auto ofs = get_u16(&data_[a]);
+                    if (ofs == 0xffff)
+                        break;
+                    vectors.push_back(static_cast<int16_t>(ofs) + vecbase);
+                }
+                add_auto_label(vecbase, make_array_type(word_type, 2 + static_cast<uint32_t>(vectors.size())));
+            } else {
+                for (uint32_t a = vecbase; pointer_ok(a); a += 4) {
+                    const auto v = get_u32(&data_[a]);
+                    if (v == 0xffffffff)
+                        break;
+                    vectors.push_back(v);
+                }
+                add_auto_label(vecbase, make_array_type(code_ptr, 1 + static_cast<uint32_t>(vectors.size())));
+            }
+        } else {
+            vectors.resize(256); // Fake number
+        }
+
+        const auto data_size = regs_.d[0].known() ? regs_.d[0].raw() : 256; // Fake number if unknown
+        const auto neg_size = static_cast<uint32_t>(vectors.size()) * 6;
+        
+        auto lib_ptr = alloc_fake_mem(data_size + neg_size);
+        if (lib_ptr)
+            lib_ptr += neg_size;
+        // TODO: points to library base
+        simregs lib_init_regs {};
+        if (lib_ptr)
+            lib_init_regs.a[6] = simval { lib_ptr };
+        auto fptr = lib_ptr;
+        for (const auto v : vectors) {
+            if (pointer_ok(v)) {
+                add_root(v, lib_init_regs);
+            }
+            if (fptr) {
+                fptr -= 6;
+                update_mem(opsize::w, fptr, simval { 0x4EF9 }); // JMP abs.l (not currently written)
+                update_mem(opsize::l, fptr + 2, simval { v });
+            }
+        }
+
+        if (lib_ptr) {
+            regs_.d[0] = simval { lib_ptr };
+            add_auto_label(lib_ptr, make_struct_type(Library));
+        } else {
+            regs_.d[0] = simval {};
+        }
+
+        // TODO: InitStruct
+
+        if (regs_.a[2].known() && pointer_ok(regs_.a[2].raw())) {
+            std::cout << "TODO: Handle init function at " << regs_.a[2] << "\n"; 
+            //init -  If non-NULL, an entry point that will be called before adding
+            //the library to the system.  Registers are as follows:
+            //        d0 = libAddr    ;Your Library Address
+            //        a0 = segList    ;Your AmigaDOS segment list
+            //        a6 = ExecBase  ;Address of exec.library
+            simregs init_regs = regs_; // d0 handled above
+            init_regs.a[0] = regs_.d[1];
+            init_regs.a[6] = simval { exec_base_ };
+            add_root(regs_.a[2].raw(), init_regs);
+        }
+    }
+
     void do_branch(uint32_t addr, bool kill_std_regs)
     {
         auto it = functions_.find(addr);
@@ -2607,7 +2711,6 @@ private:
         }
         const auto& fd = it->second;
         for (const auto& i : fd.input()) {
-            //std::cerr << "TODO: " << i.reg << " contains " << i.name << " (" << *i.t << ")\n";
             if (i.reg >= regname::A0 && i.reg < regname::A7) {
                 if (auto pt = i.t->ptr()) {
                     const auto& areg = regs_.a[static_cast<uint8_t>(i.reg) - static_cast<uint8_t>(regname::A0)];
@@ -2618,15 +2721,25 @@ private:
                             maybe_find_string_at(areg.raw());
                         } else if (pt->struct_def()) {
                             //handle_struct_at(areg.raw(), *pt->struct_def());
-                            add_auto_label(areg.raw(), *pt);
+                            if (auto lit = labels_.find(areg.raw()); lit != labels_.end()) {
+                                if (!lit->second.t->ptr() && !lit->second.t->struct_def()) {
+                                    std::cerr << "Warning: Overriding type of " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
+                                    lit->second.t = pt;
+                                } else {
+                                    std::cerr << "Warning: Type conflict for " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
+                                }
+                            } else {
+                                add_auto_label(areg.raw(), *pt);
+                            }
                         }
                     }
                 }
             }
         }
-        if (!fd.output().empty())
+        if (fd.sim())
+            fd.sim()();
+        else if (!fd.output().empty())
             throw std::runtime_error { "TODO: update regs not implemented in do_branch" };
-        fd.simulate();
     }
 
     void trace(uint32_t addr)
@@ -2643,9 +2756,11 @@ private:
             addr += 2 * inst.ilen;
 
             #if 0
-            print_sim_regs();
-            disasm(std::cout, start, iwords, inst.ilen);
-            std::cout << "\n";
+            if (start >= 0x00fe8924 && start <= 0x00fe897a) {
+                print_sim_regs();
+                disasm(std::cout, start, iwords, inst.ilen);
+                std::cout << "\n";
+            }
             #endif
 
             if (visited_.find(start) == visited_.end()) {
@@ -2824,14 +2939,35 @@ private:
         case inst_type::LEA:
             update_ea(opsize::l, 1, inst.ea[1], ea_addr_[0]);
             break;
+        case inst_type::LINK: {
+            // Allocate a stack frame and make it unqiue
+            auto& areg = regs_.a[inst.ea[0] & ea_xn_mask];
+            areg = simval {};
+            if (const auto amm = -static_cast<int16_t>(ea_data_[1]); amm > 0) {
+                if (const auto ptr = alloc_fake_mem(amm)) {
+                    areg = simval { ptr };
+                }
+            }
+            break;
+        }
         case inst_type::MOVE:
             update_ea(inst.size, 1, inst.ea[1], ea_val_[0]);
             break;
-        case inst_type::MOVEA:
+        case inst_type::MOVEA: {
             auto val = ea_val_[0].known() ? simval { static_cast<uint32_t>(sext(ea_val_[0].raw(), inst.size)) } : simval {};
             if (inst.ea[0] == ea_immediate && val.raw() < max_mem && written_[val.raw()])
                 add_auto_label(ea_val_[0].raw(), unknown_type);
             update_ea(opsize::l, 1, inst.ea[1], val);
+            break;
+        }
+        case inst_type::SUB:
+        case inst_type::SUBA:
+            if (inst.size == opsize::l) {
+                if (auto reg = reg_from_ea(inst.ea[1])) {
+                    *reg -= ea_val_[0];
+                    break;
+                }
+            }
             break;
         }
     }
