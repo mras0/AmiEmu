@@ -345,6 +345,12 @@ public:
         return raw_;
     }
 
+    void reset()
+    {
+        raw_ = 0;
+        state_ = STATE_UNKNOWN;
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const simval& v)
     {
         switch (v.state_) {
@@ -358,11 +364,25 @@ public:
         }
     }
 
+    simval& operator+=(const simval& rhs)
+    {
+        if (known() && rhs.known())
+            raw_ += rhs.raw_;
+        else
+            reset();
+        return *this;
+    }
 
 private:
     uint32_t raw_;
     enum { STATE_UNKNOWN, STATE_KNOWN } state_;
 };
+
+simval operator+(const simval& lhs, const simval& rhs)
+{
+    auto res = lhs;
+    return res += rhs;
+}
 
 struct simregs {
     simval d[8];
@@ -446,6 +466,9 @@ const type byte_ptr { byte_type, 0 };
 const type word_ptr { word_type, 0 };
 const type long_ptr { long_type, 0 };
 const type code_ptr { code_type, 0 };
+// For now just alias these to long
+const type& bptr_type = long_type;
+const type& bstr_type = long_type;
 
 std::unordered_map<std::string, const type*> typenames {
     { "UNKNOWN", &unknown_type },
@@ -599,6 +622,7 @@ public:
         return static_cast<uint32_t>(fields_.empty() ? 0 : fields_.back().end_offset());
     }
 
+    #if 0
     const struct_field* field_at(int32_t offset) const
     {
         for (const auto& f : fields_) {
@@ -609,6 +633,26 @@ public:
             }
         }
         return nullptr;
+    }
+    #endif
+
+    std::pair<bool, std::string> field_name(int32_t offset, bool address_op) const
+    {
+        for (const auto& f : fields_) {
+            if (offset >= f.offset() && offset < f.end_offset()) {
+                std::string name = f.name();
+                const auto diff = offset - f.offset();
+                if (f.t().struct_def() && (!address_op || diff)) {
+                    if (const auto [ok, n] = f.t().struct_def()->field_name(diff, address_op); ok) {
+                        return { true, name + "_" + n };
+                    }
+                }
+                if (diff)
+                    name += "+$" + hexstring(diff, 4);
+                return { true, name };
+            }
+        }
+        return { false, "" };
     }
 
 private:
@@ -848,8 +892,80 @@ const structure_definition Resident {
     }
 };
 
+// ports.h
+const structure_definition MsgPort {
+    "MsgPort",
+    {
+        { "mp_Node", make_struct_type(Node) },
+        { "mp_Flags", byte_type },
+        { "mp_SigBit", byte_type },
+        { "mp_SigTask", unknown_ptr },
+        { "mp_MsgList", make_struct_type(List) },
+    }
+};
+const structure_definition Message {
+    "Message",
+    {
+        { "mn_Node", make_struct_type(Node) },
+        { "mn_ReplyPort", make_pointer_type(make_struct_type(MsgPort)) },
+        { "mn_Length", word_type },
+    }
+};
+
+// devices.h
+const structure_definition Device {
+    "Device",
+    {
+        { "dd_Library", make_struct_type(Library) },
+    }
+};
+const structure_definition Unit {
+    "Unit",
+    {
+        { "unit_MsgPort", make_struct_type(MsgPort) },
+        { "unit_flags", byte_type },
+        { "unit_pad", byte_type },
+        { "unit_OpenCnt", word_type },
+    }
+};
+
+// io.h
+const structure_definition IORequest {
+    "IORequest",
+    {
+        { "io_Message", make_struct_type(Message) },
+        { "io_Device", make_pointer_type(make_struct_type(Device)) },
+        { "io_Unit", make_pointer_type(make_struct_type(Unit)) },
+        { "io_Command", word_type },
+        { "io_Flags", byte_type },
+        { "io_Error", byte_type },
+    }
+};
+const structure_definition IOStdReq {
+    "IOStdReq",
+    {
+        { "io_Message", make_struct_type(Message) },
+        { "io_Device", make_pointer_type(make_struct_type(Device)) },
+        { "io_Unit", make_pointer_type(make_struct_type(Unit)) },
+        { "io_Command", word_type },
+        { "io_Flags", byte_type },
+        { "io_Error", byte_type },
+        { "io_Actual", long_type },
+        { "io_Length", long_type },
+        { "io_Data", unknown_ptr },
+        { "io_Offset", long_type },
+    }
+};
+
+// execbase.h
+
 constexpr int32_t _LVOSupervisor = -30;
+constexpr int32_t _LVOFindResident = -96;
+constexpr int32_t _LVOAllocMem = -198;
+constexpr int32_t _LVOFindTask = -294;
+constexpr int32_t _LVOAddLibrary = -396;
 constexpr int32_t _LVOOldOpenLibrary = -408;
+constexpr int32_t _LVOOpenDevice = -444;
 constexpr int32_t _LVOOpenLibrary = -552;
 
 const structure_definition ExecBase {
@@ -926,7 +1042,7 @@ const structure_definition ExecBase {
         { "_LVOInitStruct", code_ptr, -78 },
         { "_LVOMakeLibrary", code_ptr, -84 },
         { "_LVOMakeFunctions", code_ptr, -90 },
-        { "_LVOFindResident", code_ptr, -96 },
+        { "_LVOFindResident", code_ptr, _LVOFindResident },
         { "_LVOInitResident", code_ptr, -102 },
         { "_LVOAlert", code_ptr, -108 },
         { "_LVODebug", code_ptr, -114 },
@@ -943,7 +1059,7 @@ const structure_definition ExecBase {
         { "_LVOCause", code_ptr, -180 },
         { "_LVOAllocate", code_ptr, -186 },
         { "_LVODeallocate", code_ptr, -192 },
-        { "_LVOAllocMem", code_ptr, -198 },
+        { "_LVOAllocMem", code_ptr, _LVOAllocMem },
         { "_LVOAllocAbs", code_ptr, -204 },
         { "_LVOFreeMem", code_ptr, -210 },
         { "_LVOAvailMem", code_ptr, -216 },
@@ -959,7 +1075,7 @@ const structure_definition ExecBase {
         { "_LVOFindName", code_ptr, -276 },
         { "_LVOAddTask", code_ptr, -282 },
         { "_LVORemTask", code_ptr, -288 },
-        { "_LVOFindTask", code_ptr, -294 },
+        { "_LVOFindTask", code_ptr, _LVOFindTask },
         { "_LVOSetTaskPri", code_ptr, -300 },
         { "_LVOSetSignal", code_ptr, -306 },
         { "_LVOSetExcept", code_ptr, -312 },
@@ -976,7 +1092,7 @@ const structure_definition ExecBase {
         { "_LVOReplyMsg", code_ptr, -378 },
         { "_LVOWaitPort", code_ptr, -384 },
         { "_LVOFindPort", code_ptr, -390 },
-        { "_LVOAddLibrary", code_ptr, -396 },
+        { "_LVOAddLibrary", code_ptr, _LVOAddLibrary },
         { "_LVORemLibrary", code_ptr, -402 },
         { "_LVOOldOpenLibrary", code_ptr, _LVOOldOpenLibrary },
         { "_LVOCloseLibrary", code_ptr, -414 },
@@ -984,7 +1100,7 @@ const structure_definition ExecBase {
         { "_LVOSumLibrary", code_ptr, -426 },
         { "_LVOAddDevice", code_ptr, -432 },
         { "_LVORemDevice", code_ptr, -438 },
-        { "_LVOOpenDevice", code_ptr, -444 },
+        { "_LVOOpenDevice", code_ptr, _LVOOpenDevice },
         { "_LVOCloseDevice", code_ptr, -450 },
         { "_LVODoIO", code_ptr, -456 },
         { "_LVOSendIO", code_ptr, -462 },
@@ -1332,10 +1448,22 @@ const structure_definition GfxBase {
 };
 
 // Dos
+TEMP_STRUCT(RootNode);
+TEMP_STRUCT(ErrorString);
+TEMP_STRUCT(timerequest);
 const structure_definition DosBase {
     "DosBase",
     {
-        { "LibNode", make_struct_type(Library) },
+        { "dl_lib", make_struct_type(Library) },
+        { "dl_Root", make_pointer_type(make_struct_type(RootNode)) },
+        { "dl_GV", unknown_ptr },
+        { "dl_A2", long_type },
+        { "dl_A5", long_type },
+        { "dl_A6", long_type },
+        { "dl_Errors", make_pointer_type(make_struct_type(ErrorString)) },
+        { "dl_TimeReq", make_pointer_type(make_struct_type(timerequest)) },
+        { "dl_UtilityBase", make_pointer_type(make_struct_type(Library)) },
+        { "dl_IntuitionBase", make_pointer_type(make_struct_type(Library)) },
 
         { "_LVOOpen", code_ptr, -30 },
         { "_LVOClose", code_ptr, -36 },
@@ -1499,6 +1627,37 @@ const structure_definition DosBase {
     }
 };
 
+const structure_definition Process {
+    "Process",
+    {
+        { "pr_Task", make_struct_type(Task) },
+        { "pr_MsgPort", make_struct_type(MsgPort) },
+        { "pr_Pad", word_type },
+        { "pr_SegList", bptr_type },
+        { "pr_StackSize", long_type },
+        { "pr_GlobVec", unknown_ptr },
+        { "pr_TaskNum", long_type },
+        { "pr_StackBase", bptr_type },
+        { "pr_Result2", long_type },
+        { "pr_CurrentDir", bptr_type },
+        { "pr_CIS", bptr_type },
+        { "pr_COS", bptr_type },
+        { "pr_ConsoleTask", unknown_ptr },
+        { "pr_FileSystemTask", unknown_ptr },
+        { "pr_CLI", bptr_type },
+        { "pr_ReturnAddr", unknown_ptr },
+        { "pr_PktWait", unknown_ptr },
+        { "pr_WindowPtr", unknown_ptr },
+        { "pr_HomeDir", bptr_type },
+        { "pr_Flags", long_type },
+        { "pr_ExitCode", code_ptr }, // void (*pr_ExitCode)()
+        { "pr_ExitData", long_type },
+        { "pr_Arguments", byte_ptr },
+        { "pr_LocalVars", make_struct_type(MinList) },
+        { "pr_ShellPrivate", long_type },
+        { "pr_CES", bptr_type },
+    }
+};
 
 class analyzer {
 public:
@@ -1508,6 +1667,8 @@ public:
         , regs_ {}
     {
     }
+
+    static constexpr uint32_t fake_exec_base = 0xcc000000;
 
     void read_info_file(const std::string& filename)
     {
@@ -1687,30 +1848,56 @@ public:
 
         if (!exec_base_) {
             // add fake library bases
-            exec_base_ = 0xcc000000;
+            exec_base_ = fake_exec_base;
             add_library("graphics.library", "GfxBase", exec_base_ + 1 * 0x10000, make_struct_type(GfxBase));
             add_library("dos.library", "DosBase", exec_base_ + 2 * 0x10000, make_struct_type(DosBase));
         } else {
             throw std::runtime_error { "TODO: Support exec_base being present already" };
         }
+
+
         saved_pointers_.insert({ 4, exec_base_ });
         add_library("exec.library", "SysBase", exec_base_, make_struct_type(ExecBase));
+        fake_process_ = alloc_fake_mem(Process.size());
+        add_label(fake_process_, "FakeProcess", make_struct_type(Process));
         // exec.library
         functions_.insert({ exec_base_ + _LVOSupervisor, function_description {
                                                              {},
                                                              { { regname::A5, "userFunc", &code_ptr } },
                                                          } });
+        functions_.insert({ exec_base_ + _LVOFindResident, function_description {
+                                                             {},
+                                                             { { regname::A1, "name", &char_ptr } },
+                                                         } });
 
+        functions_.insert({ exec_base_ + _LVOAllocMem, function_description {
+                                                             {},
+                                                           { { regname::D0, "byteSize", &long_type }, { regname::D1, "attributes", &long_type } }, [this]() {
+                                                                                 do_alloc_mem();
+                                                                             }
+                                                         } });
+        functions_.insert({ exec_base_ + _LVOFindTask, function_description { {}, { { regname::A1, "name", &char_ptr } }, [this]() {
+                                                                                 regs_.d[0] = simval { fake_process_ };
+                                                                             } } });
+        functions_.insert({ exec_base_ + _LVOAddLibrary, function_description { {}, { { regname::A1, "library", &make_pointer_type(make_struct_type(Library)) } } } });
         auto open_library = [this]() { do_open_library(); };
         functions_.insert({ exec_base_ + _LVOOldOpenLibrary, function_description {
                                                              {},
                                                              { { regname::A1, "libName", &char_ptr } },
                 open_library } });
+        //_LVOOpenDevice
+        functions_.insert({ exec_base_ + _LVOOpenDevice, function_description { {}, {
+                                                                                        { regname::A0, "devName", &char_ptr },
+                                                                                        { regname::D0, "unitNumber", &byte_type },
+                                                                                        { regname::A1, "iORequest", &make_pointer_type(make_struct_type(IOStdReq)) },
+                                                                                        { regname::D1, "flags", &byte_type }, 
+                                                                                    },
+                                                             /*open_device*/ } });
         functions_.insert({ exec_base_ + _LVOOpenLibrary, function_description { {}, {
                                                                                          { regname::A1, "libName", &char_ptr },
                                                                                          { regname::D0, "version", &long_type },
                                                                                      },
-                                                              open_library} });
+                                                              open_library} });        
 
         while (!roots_.empty()) {
             const auto r = roots_.front();
@@ -1803,8 +1990,14 @@ public:
                                 const auto& t = *lit->second.t;
                                 extra << "\t" << "A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
                                 if (t.struct_def()) {
+                                    #if 0
                                     if (auto f = t.struct_def()->field_at(offset)) {
                                         std::cout << f->name() <<  "(A" << (ea & 7) << ")";
+                                        break;
+                                    }
+                                    #endif
+                                    if (const auto [ok, name] = t.struct_def()->field_name(offset, inst.type == inst_type::LEA); ok) {
+                                        std::cout << name << "(A" << (ea & 7) << ")";
                                         break;
                                     }
                                 }
@@ -1922,11 +2115,13 @@ private:
     std::vector<std::pair<uint32_t, label_info>> predef_info_;
     uint32_t exec_base_ = 0;
     std::map<std::string, uint32_t> library_bases_;
+    uint32_t fake_process_ = 0;
 
     uint32_t ea_data_[2];
     simval ea_addr_[2];
     simval ea_val_[2];
     std::map<uint32_t, uint32_t> saved_pointers_;
+    uint32_t alloc_top_ = 0xa00000; // serve memory (from AllocMem) from here..
 
     void insert_area(uint32_t beg, uint32_t end)
     {
@@ -2375,6 +2570,28 @@ private:
         throw std::runtime_error { "Library not found: \"" + libname + "\"" };
     }
 
+    uint32_t alloc_fake_mem(uint32_t size)
+    {
+        if (size < alloc_top_ && !written_[alloc_top_ - size]) {
+            alloc_top_ -= size;
+            std::fill(written_.begin() + alloc_top_, written_.begin() + alloc_top_ + size, true); // So assignments will be tracked and pointers are deemed OK
+            return alloc_top_;
+        }
+        return 0;
+    }
+
+    void do_alloc_mem()
+    {
+        if (regs_.d[0].known()) {
+            const auto size = regs_.d[0].raw();
+            if (uint32_t ptr = alloc_fake_mem(size))
+                return;
+            else
+                std::cerr << "AllocMem failed for size: $" << hexfmt(size) << " alloc_top_=$" << hexfmt(alloc_top_) << "\n";
+        }
+        regs_.d[0] = simval {};
+    }
+
     void do_branch(uint32_t addr, bool kill_std_regs)
     {
         auto it = functions_.find(addr);
@@ -2394,13 +2611,14 @@ private:
             if (i.reg >= regname::A0 && i.reg < regname::A7) {
                 if (auto pt = i.t->ptr()) {
                     const auto& areg = regs_.a[static_cast<uint8_t>(i.reg) - static_cast<uint8_t>(regname::A0)];
-                    if (areg.known()) {
+                    if (areg.known()) {                        
                         if (pt == &code_type) {
                             add_root(areg.raw(), regs_);
                         } else if (pt == &char_type) {
                             maybe_find_string_at(areg.raw());
                         } else if (pt->struct_def()) {
-                            handle_struct_at(areg.raw(), *pt->struct_def());
+                            //handle_struct_at(areg.raw(), *pt->struct_def());
+                            add_auto_label(areg.raw(), *pt);
                         }
                     }
                 }
@@ -2430,6 +2648,12 @@ private:
             std::cout << "\n";
             #endif
 
+            if (visited_.find(start) == visited_.end()) {
+                // Want registers before update
+                // TODO: Combine register values (or something)
+                visited_[start] = regs_;
+            }
+
             switch (inst.type) {
             case inst_type::Bcc:
             case inst_type::BSR:
@@ -2437,7 +2661,7 @@ private:
                 assert(inst.nea == 1 && inst.ea[0] == ea_disp);
                 do_branch(ea_addr_[0].raw(), inst.type == inst_type::BSR);
                 if (inst.type == inst_type::BRA)
-                    goto finish;
+                    return;
                 break;
             }
             case inst_type::DBcc:
@@ -2452,15 +2676,13 @@ private:
                 if (ea_addr_[0].known())
                     do_branch(ea_addr_[0].raw(), true);
                 if (inst.type == inst_type::JMP)
-                    goto finish;
+                    return;
                 break;
 
             case inst_type::ILLEGAL:
             case inst_type::RTS:
             case inst_type::RTE:
             case inst_type::RTR:
-            finish:
-                visited_[start] = regs_;
                 return;
 
             default:
@@ -2503,11 +2725,6 @@ private:
                     }
                 }
                 sim_inst(inst);
-            }
-
-            if (visited_.find(start) == visited_.end()) {
-                // TODO: Combine register values (or something)
-                visited_[start] = regs_;
             }
         }
     }
@@ -2583,9 +2800,27 @@ private:
         }
     }
 
+    simval* reg_from_ea(uint8_t ea)
+    {
+        if (ea >> ea_m_shift == ea_m_Dn)
+            return &regs_.d[ea & ea_xn_mask];
+        else if (ea >> ea_m_shift == ea_m_An)
+            return &regs_.a[ea & ea_xn_mask];
+        return nullptr;
+    }
+
     void sim_inst(const instruction& inst)
     {
         switch (inst.type) {
+        case inst_type::ADD:
+        case inst_type::ADDA:
+            if (inst.size == opsize::l) {
+                if (auto reg = reg_from_ea(inst.ea[1])) {
+                    *reg += ea_val_[0];
+                    break;
+                }
+            }
+            break;
         case inst_type::LEA:
             update_ea(opsize::l, 1, inst.ea[1], ea_addr_[0]);
             break;
@@ -3279,6 +3514,11 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
     a->write_data(rom_base, data.data(), static_cast<uint32_t>(data.size()));
 
     bool has_entry_name = false;
+    simregs rom_tag_init_regs = {};
+    // InitResident calls the RT_INIT function with these arguments:      
+    rom_tag_init_regs.d[0] = simval { 0 }; // D0 = 0
+    rom_tag_init_regs.a[0] = simval { 0 }; // A0 = segList (NULL for ROM modules)
+    rom_tag_init_regs.a[6] = simval { analyzer::fake_exec_base }; // A6 = ExecBase
     for (const auto& tag : rom_tags) {
         std::string name;
         for (char c : tag.name) {
@@ -3312,7 +3552,7 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
         if (tag.init_addr) {
             a->add_label(tag.init_addr, name + "_init", code_type);
             if (!(tag.flags & 0x80)) // Not RTF_AUTOINIT
-                a->add_root(tag.init_addr, simregs {});
+                a->add_root(tag.init_addr, rom_tag_init_regs);
         }
         if (tag.init_addr == start)
             has_entry_name = true;
