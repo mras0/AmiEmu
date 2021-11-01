@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 #include <fstream>
+#include <optional>
 
 #include "disasm.h"
 #include "ioutil.h"
@@ -646,37 +647,37 @@ public:
         return -fields_.front().offset();
     }
 
-    #if 0
-    const struct_field* field_at(int32_t offset) const
+    std::pair<const struct_field*, int32_t> field_at(int32_t offset) const
     {
         for (const auto& f : fields_) {
             if (offset >= f.offset() && offset < f.end_offset()) {
-                if (f.t().struct_def())
-                    return f.t().struct_def()->field_at(offset - f.offset());
-                return &f;
+                const auto diff = offset - f.offset();
+                if (f.t().struct_def()) {
+                    return f.t().struct_def()->field_at(diff);
+                }
+                return { &f, diff };
             }
         }
-        return nullptr;
+        return { nullptr, 0 };
     }
-    #endif
 
-    std::pair<bool, std::string> field_name(int32_t offset, bool address_op) const
+    std::optional<std::string> field_name(int32_t offset, bool address_op) const
     {
         for (const auto& f : fields_) {
             if (offset >= f.offset() && offset < f.end_offset()) {
                 std::string name = f.name();
                 const auto diff = offset - f.offset();
                 if (f.t().struct_def() && (!address_op || diff)) {
-                    if (const auto [ok, n] = f.t().struct_def()->field_name(diff, address_op); ok) {
-                        return { true, name + "_" + n };
+                    if (const auto n = f.t().struct_def()->field_name(diff, address_op); n) {
+                        return { name + "_" + *n };
                     }
                 }
                 if (diff)
                     name += "+$" + hexstring(diff, 4);
-                return { true, name };
+                return { name };
             }
         }
-        return { false, "" };
+        return { };
     }
 
 private:
@@ -774,8 +775,8 @@ uint32_t sizeof_type(const type& t)
         return 2;
     case base_data_type::long_:
         return 4;
-        //case base_data_type::code_:
-        //case base_data_type::ptr_:
+    //case base_data_type::code_:
+    //case base_data_type::ptr_:
     case base_data_type::struct_:
         return t.struct_def()->size();
     }
@@ -783,6 +784,8 @@ uint32_t sizeof_type(const type& t)
     oss << "Unhandled type in sizeof_type: " << t;
     throw std::runtime_error { oss.str() };
 }
+
+const type& libvec_code = make_array_type(word_type, 3);
 
 // nodes.h
 const structure_definition MinNode {
@@ -1002,9 +1005,9 @@ const structure_definition ExecBase {
         { "SoftVer", word_type },
         { "LowMemChkSum", word_type },
         { "ChkBase", long_type },
-        { "ColdCapture", unknown_ptr },
-        { "CoolCapture", unknown_ptr },
-        { "WarmCapture", unknown_ptr },
+        { "ColdCapture", code_ptr },
+        { "CoolCapture", code_ptr },
+        { "WarmCapture", code_ptr },
         { "SysStkUpper", unknown_ptr },
         { "SysStkLower", unknown_ptr },
         { "MaxLocMem", long_type },
@@ -1025,9 +1028,9 @@ const structure_definition ExecBase {
         { "AttnFlags", word_type },
         { "AttnResched", word_type },
         { "ResModules", unknown_ptr },
-        { "TaskTrapCode", unknown_ptr },
-        { "TaskExceptCode", unknown_ptr },
-        { "TaskExitCode", unknown_ptr },
+        { "TaskTrapCode", code_ptr },
+        { "TaskExceptCode", code_ptr },
+        { "TaskExitCode", code_ptr },
         { "TaskSigAlloc", long_type },
         { "TaskTrapAlloc", word_type },
         { "MemList", make_struct_type(List) },
@@ -1058,132 +1061,132 @@ const structure_definition ExecBase {
         { "ex_MemHandlers", make_struct_type(MinList) },
         { "ex_MemHandler", unknown_ptr },
 
-        { "_LVOSupervisor", code_ptr, _LVOSupervisor },
-        { "_LVOExitIntr", code_ptr, -36 },
-        { "_LVOSchedule", code_ptr, -42 },
-        { "_LVOReschedule", code_ptr, -48 },
-        { "_LVOSwitch", code_ptr, -54 },
-        { "_LVODispatch", code_ptr, -60 },
-        { "_LVOException", code_ptr, -66 },
-        { "_LVOInitCode", code_ptr, -72 },
-        { "_LVOInitStruct", code_ptr, -78 },
-        { "_LVOMakeLibrary", code_ptr, _LVOMakeLibrary },
-        { "_LVOMakeFunctions", code_ptr, -90 },
-        { "_LVOFindResident", code_ptr, _LVOFindResident },
-        { "_LVOInitResident", code_ptr, -102 },
-        { "_LVOAlert", code_ptr, -108 },
-        { "_LVODebug", code_ptr, -114 },
-        { "_LVODisable", code_ptr, -120 },
-        { "_LVOEnable", code_ptr, -126 },
-        { "_LVOForbid", code_ptr, -132 },
-        { "_LVOPermit", code_ptr, -138 },
-        { "_LVOSetSR", code_ptr, -144 },
-        { "_LVOSuperState", code_ptr, -150 },
-        { "_LVOUserState", code_ptr, -156 },
-        { "_LVOSetIntVector", code_ptr, _LVOSetIntVector },
-        { "_LVOAddIntServer", code_ptr, _LVOAddIntServer },
-        { "_LVORemIntServer", code_ptr, -174 },
-        { "_LVOCause", code_ptr, -180 },
-        { "_LVOAllocate", code_ptr, -186 },
-        { "_LVODeallocate", code_ptr, -192 },
-        { "_LVOAllocMem", code_ptr, _LVOAllocMem },
-        { "_LVOAllocAbs", code_ptr, -204 },
-        { "_LVOFreeMem", code_ptr, -210 },
-        { "_LVOAvailMem", code_ptr, -216 },
-        { "_LVOAllocEntry", code_ptr, -222 },
-        { "_LVOFreeEntry", code_ptr, -228 },
-        { "_LVOInsert", code_ptr, -234 },
-        { "_LVOAddHead", code_ptr, -240 },
-        { "_LVOAddTail", code_ptr, -246 },
-        { "_LVORemove", code_ptr, -252 },
-        { "_LVORemHead", code_ptr, -258 },
-        { "_LVORemTail", code_ptr, -264 },
-        { "_LVOEnqueue", code_ptr, -270 },
-        { "_LVOFindName", code_ptr, -276 },
-        { "_LVOAddTask", code_ptr, -282 },
-        { "_LVORemTask", code_ptr, -288 },
-        { "_LVOFindTask", code_ptr, _LVOFindTask },
-        { "_LVOSetTaskPri", code_ptr, -300 },
-        { "_LVOSetSignal", code_ptr, -306 },
-        { "_LVOSetExcept", code_ptr, -312 },
-        { "_LVOWait", code_ptr, -318 },
-        { "_LVOSignal", code_ptr, -324 },
-        { "_LVOAllocSignal", code_ptr, -330 },
-        { "_LVOFreeSignal", code_ptr, -336 },
-        { "_LVOAllocTrap", code_ptr, -342 },
-        { "_LVOFreeTrap", code_ptr, -348 },
-        { "_LVOAddPort", code_ptr, -354 },
-        { "_LVORemPort", code_ptr, -360 },
-        { "_LVOPutMsg", code_ptr, -366 },
-        { "_LVOGetMsg", code_ptr, -372 },
-        { "_LVOReplyMsg", code_ptr, -378 },
-        { "_LVOWaitPort", code_ptr, -384 },
-        { "_LVOFindPort", code_ptr, -390 },
-        { "_LVOAddLibrary", code_ptr, _LVOAddLibrary },
-        { "_LVORemLibrary", code_ptr, -402 },
-        { "_LVOOldOpenLibrary", code_ptr, _LVOOldOpenLibrary },
-        { "_LVOCloseLibrary", code_ptr, -414 },
-        { "_LVOSetFunction", code_ptr, -420 },
-        { "_LVOSumLibrary", code_ptr, -426 },
-        { "_LVOAddDevice", code_ptr, -432 },
-        { "_LVORemDevice", code_ptr, -438 },
-        { "_LVOOpenDevice", code_ptr, _LVOOpenDevice },
-        { "_LVOCloseDevice", code_ptr, -450 },
-        { "_LVODoIO", code_ptr, -456 },
-        { "_LVOSendIO", code_ptr, -462 },
-        { "_LVOCheckIO", code_ptr, -468 },
-        { "_LVOWaitIO", code_ptr, -474 },
-        { "_LVOAbortIO", code_ptr, -480 },
-        { "_LVOAddResource", code_ptr, -486 },
-        { "_LVORemResource", code_ptr, -492 },
-        { "_LVOOpenResource", code_ptr, _LVOOpenResource },
-        { "_LVORawIOInit", code_ptr, -504 },
-        { "_LVORawMayGetChar", code_ptr, -510 },
-        { "_LVORawPutChar", code_ptr, -516 },
-        { "_LVORawDoFmt", code_ptr, -522 },
-        { "_LVOGetCC", code_ptr, -528 },
-        { "_LVOTypeOfMem", code_ptr, -534 },
-        { "_LVOProcure", code_ptr, -540 },
-        { "_LVOVacate", code_ptr, -546 },
-        { "_LVOOpenLibrary", code_ptr, _LVOOpenLibrary },
-        { "_LVOInitSemaphore", code_ptr, -558 },
-        { "_LVOObtainSemaphore", code_ptr, -564 },
-        { "_LVOReleaseSemaphore", code_ptr, -570 },
-        { "_LVOAttemptSemaphore", code_ptr, -576 },
-        { "_LVOObtainSemaphoreList", code_ptr, -582 },
-        { "_LVOReleaseSemaphoreList", code_ptr, -588 },
-        { "_LVOFindSemaphore", code_ptr, -594 },
-        { "_LVOAddSemaphore", code_ptr, -600 },
-        { "_LVORemSemaphore", code_ptr, -606 },
-        { "_LVOSumKickData", code_ptr, -612 },
-        { "_LVOAddMemList", code_ptr, -618 },
-        { "_LVOCopyMem", code_ptr, -624 },
-        { "_LVOCopyMemQuick", code_ptr, -630 },
-        { "_LVOCacheClearU", code_ptr, -636 },
-        { "_LVOCacheClearE", code_ptr, -642 },
-        { "_LVOCacheControl", code_ptr, -648 },
-        { "_LVOCreateIORequest", code_ptr, -654 },
-        { "_LVODeleteIORequest", code_ptr, -660 },
-        { "_LVOCreateMsgPort", code_ptr, -666 },
-        { "_LVODeleteMsgPort", code_ptr, -672 },
-        { "_LVOObtainSemaphoreShared", code_ptr, -678 },
-        { "_LVOAllocVec", code_ptr, -684 },
-        { "_LVOFreeVec", code_ptr, -690 },
-        { "_LVOCreatePrivatePool", code_ptr, -696 },
-        { "_LVODeletePrivatePool", code_ptr, -702 },
-        { "_LVOAllocPooled", code_ptr, -708 },
-        { "_LVOFreePooled", code_ptr, -714 },
-        { "_LVOAttemptSemaphoreShared", code_ptr, -720 },
-        { "_LVOColdReboot", code_ptr, -726 },
-        { "_LVOStackSwap", code_ptr, -732 },
-        { "_LVOChildFree", code_ptr, -738 },
-        { "_LVOChildOrphan", code_ptr, -744 },
-        { "_LVOChildStatus", code_ptr, -750 },
-        { "_LVOChildWait", code_ptr, -756 },
-        { "_LVOCachePreDMA", code_ptr, -762 },
-        { "_LVOCachePostDMA", code_ptr, -768 },
-        { "_LVOAddMemHandler", code_ptr, -774 },
-        { "_LVORemMemHandler", code_ptr, -780 },
+        { "_LVOSupervisor", libvec_code, _LVOSupervisor },
+        { "_LVOExitIntr", libvec_code, -36 },
+        { "_LVOSchedule", libvec_code, -42 },
+        { "_LVOReschedule", libvec_code, -48 },
+        { "_LVOSwitch", libvec_code, -54 },
+        { "_LVODispatch", libvec_code, -60 },
+        { "_LVOException", libvec_code, -66 },
+        { "_LVOInitCode", libvec_code, -72 },
+        { "_LVOInitStruct", libvec_code, -78 },
+        { "_LVOMakeLibrary", libvec_code, _LVOMakeLibrary },
+        { "_LVOMakeFunctions", libvec_code, -90 },
+        { "_LVOFindResident", libvec_code, _LVOFindResident },
+        { "_LVOInitResident", libvec_code, -102 },
+        { "_LVOAlert", libvec_code, -108 },
+        { "_LVODebug", libvec_code, -114 },
+        { "_LVODisable", libvec_code, -120 },
+        { "_LVOEnable", libvec_code, -126 },
+        { "_LVOForbid", libvec_code, -132 },
+        { "_LVOPermit", libvec_code, -138 },
+        { "_LVOSetSR", libvec_code, -144 },
+        { "_LVOSuperState", libvec_code, -150 },
+        { "_LVOUserState", libvec_code, -156 },
+        { "_LVOSetIntVector", libvec_code, _LVOSetIntVector },
+        { "_LVOAddIntServer", libvec_code, _LVOAddIntServer },
+        { "_LVORemIntServer", libvec_code, -174 },
+        { "_LVOCause", libvec_code, -180 },
+        { "_LVOAllocate", libvec_code, -186 },
+        { "_LVODeallocate", libvec_code, -192 },
+        { "_LVOAllocMem", libvec_code, _LVOAllocMem },
+        { "_LVOAllocAbs", libvec_code, -204 },
+        { "_LVOFreeMem", libvec_code, -210 },
+        { "_LVOAvailMem", libvec_code, -216 },
+        { "_LVOAllocEntry", libvec_code, -222 },
+        { "_LVOFreeEntry", libvec_code, -228 },
+        { "_LVOInsert", libvec_code, -234 },
+        { "_LVOAddHead", libvec_code, -240 },
+        { "_LVOAddTail", libvec_code, -246 },
+        { "_LVORemove", libvec_code, -252 },
+        { "_LVORemHead", libvec_code, -258 },
+        { "_LVORemTail", libvec_code, -264 },
+        { "_LVOEnqueue", libvec_code, -270 },
+        { "_LVOFindName", libvec_code, -276 },
+        { "_LVOAddTask", libvec_code, -282 },
+        { "_LVORemTask", libvec_code, -288 },
+        { "_LVOFindTask", libvec_code, _LVOFindTask },
+        { "_LVOSetTaskPri", libvec_code, -300 },
+        { "_LVOSetSignal", libvec_code, -306 },
+        { "_LVOSetExcept", libvec_code, -312 },
+        { "_LVOWait", libvec_code, -318 },
+        { "_LVOSignal", libvec_code, -324 },
+        { "_LVOAllocSignal", libvec_code, -330 },
+        { "_LVOFreeSignal", libvec_code, -336 },
+        { "_LVOAllocTrap", libvec_code, -342 },
+        { "_LVOFreeTrap", libvec_code, -348 },
+        { "_LVOAddPort", libvec_code, -354 },
+        { "_LVORemPort", libvec_code, -360 },
+        { "_LVOPutMsg", libvec_code, -366 },
+        { "_LVOGetMsg", libvec_code, -372 },
+        { "_LVOReplyMsg", libvec_code, -378 },
+        { "_LVOWaitPort", libvec_code, -384 },
+        { "_LVOFindPort", libvec_code, -390 },
+        { "_LVOAddLibrary", libvec_code, _LVOAddLibrary },
+        { "_LVORemLibrary", libvec_code, -402 },
+        { "_LVOOldOpenLibrary", libvec_code, _LVOOldOpenLibrary },
+        { "_LVOCloseLibrary", libvec_code, -414 },
+        { "_LVOSetFunction", libvec_code, -420 },
+        { "_LVOSumLibrary", libvec_code, -426 },
+        { "_LVOAddDevice", libvec_code, -432 },
+        { "_LVORemDevice", libvec_code, -438 },
+        { "_LVOOpenDevice", libvec_code, _LVOOpenDevice },
+        { "_LVOCloseDevice", libvec_code, -450 },
+        { "_LVODoIO", libvec_code, -456 },
+        { "_LVOSendIO", libvec_code, -462 },
+        { "_LVOCheckIO", libvec_code, -468 },
+        { "_LVOWaitIO", libvec_code, -474 },
+        { "_LVOAbortIO", libvec_code, -480 },
+        { "_LVOAddResource", libvec_code, -486 },
+        { "_LVORemResource", libvec_code, -492 },
+        { "_LVOOpenResource", libvec_code, _LVOOpenResource },
+        { "_LVORawIOInit", libvec_code, -504 },
+        { "_LVORawMayGetChar", libvec_code, -510 },
+        { "_LVORawPutChar", libvec_code, -516 },
+        { "_LVORawDoFmt", libvec_code, -522 },
+        { "_LVOGetCC", libvec_code, -528 },
+        { "_LVOTypeOfMem", libvec_code, -534 },
+        { "_LVOProcure", libvec_code, -540 },
+        { "_LVOVacate", libvec_code, -546 },
+        { "_LVOOpenLibrary", libvec_code, _LVOOpenLibrary },
+        { "_LVOInitSemaphore", libvec_code, -558 },
+        { "_LVOObtainSemaphore", libvec_code, -564 },
+        { "_LVOReleaseSemaphore", libvec_code, -570 },
+        { "_LVOAttemptSemaphore", libvec_code, -576 },
+        { "_LVOObtainSemaphoreList", libvec_code, -582 },
+        { "_LVOReleaseSemaphoreList", libvec_code, -588 },
+        { "_LVOFindSemaphore", libvec_code, -594 },
+        { "_LVOAddSemaphore", libvec_code, -600 },
+        { "_LVORemSemaphore", libvec_code, -606 },
+        { "_LVOSumKickData", libvec_code, -612 },
+        { "_LVOAddMemList", libvec_code, -618 },
+        { "_LVOCopyMem", libvec_code, -624 },
+        { "_LVOCopyMemQuick", libvec_code, -630 },
+        { "_LVOCacheClearU", libvec_code, -636 },
+        { "_LVOCacheClearE", libvec_code, -642 },
+        { "_LVOCacheControl", libvec_code, -648 },
+        { "_LVOCreateIORequest", libvec_code, -654 },
+        { "_LVODeleteIORequest", libvec_code, -660 },
+        { "_LVOCreateMsgPort", libvec_code, -666 },
+        { "_LVODeleteMsgPort", libvec_code, -672 },
+        { "_LVOObtainSemaphoreShared", libvec_code, -678 },
+        { "_LVOAllocVec", libvec_code, -684 },
+        { "_LVOFreeVec", libvec_code, -690 },
+        { "_LVOCreatePrivatePool", libvec_code, -696 },
+        { "_LVODeletePrivatePool", libvec_code, -702 },
+        { "_LVOAllocPooled", libvec_code, -708 },
+        { "_LVOFreePooled", libvec_code, -714 },
+        { "_LVOAttemptSemaphoreShared", libvec_code, -720 },
+        { "_LVOColdReboot", libvec_code, -726 },
+        { "_LVOStackSwap", libvec_code, -732 },
+        { "_LVOChildFree", libvec_code, -738 },
+        { "_LVOChildOrphan", libvec_code, -744 },
+        { "_LVOChildStatus", libvec_code, -750 },
+        { "_LVOChildWait", libvec_code, -756 },
+        { "_LVOCachePreDMA", libvec_code, -762 },
+        { "_LVOCachePostDMA", libvec_code, -768 },
+        { "_LVOAddMemHandler", libvec_code, -774 },
+        { "_LVORemMemHandler", libvec_code, -780 },
     }
 };
 
@@ -1301,176 +1304,176 @@ const structure_definition GfxBase {
         { "HashTableSemaphore", make_pointer_type(make_struct_type(SignalSemaphore)) },
         { "HWEmul", make_array_type(long_ptr, 9) },
 
-        { "_LVOBltBitMap", code_ptr, -30 },
-        { "_LVOBltTemplate", code_ptr, -36 },
-        { "_LVOClearEOL", code_ptr, -42 },
-        { "_LVOClearScreen", code_ptr, -48 },
-        { "_LVOTextLength", code_ptr, -54 },
-        { "_LVOText", code_ptr, -60 },
-        { "_LVOSetFont", code_ptr, -66 },
-        { "_LVOOpenFont", code_ptr, -72 },
-        { "_LVOCloseFont", code_ptr, -78 },
-        { "_LVOAskSoftStyle", code_ptr, -84 },
-        { "_LVOSetSoftStyle", code_ptr, -90 },
-        { "_LVOAddBob", code_ptr, -96 },
-        { "_LVOAddVSprite", code_ptr, -102 },
-        { "_LVODoCollision", code_ptr, -108 },
-        { "_LVODrawGList", code_ptr, -114 },
-        { "_LVOInitGels", code_ptr, -120 },
-        { "_LVOInitMasks", code_ptr, -126 },
-        { "_LVORemIBob", code_ptr, -132 },
-        { "_LVORemVSprite", code_ptr, -138 },
-        { "_LVOSetCollision", code_ptr, -144 },
-        { "_LVOSortGList", code_ptr, -150 },
-        { "_LVOAddAnimOb", code_ptr, -156 },
-        { "_LVOAnimate", code_ptr, -162 },
-        { "_LVOGetGBuffers", code_ptr, -168 },
-        { "_LVOInitGMasks", code_ptr, -174 },
-        { "_LVODrawEllipse", code_ptr, -180 },
-        { "_LVOAreaEllipse", code_ptr, -186 },
-        { "_LVOLoadRGB4", code_ptr, -192 },
-        { "_LVOInitRastPort", code_ptr, -198 },
-        { "_LVOInitVPort", code_ptr, -204 },
-        { "_LVOMrgCop", code_ptr, -210 },
-        { "_LVOMakeVPort", code_ptr, -216 },
-        { "_LVOLoadView", code_ptr, -222 },
-        { "_LVOWaitBlit", code_ptr, -228 },
-        { "_LVOSetRast", code_ptr, -234 },
-        { "_LVOMove", code_ptr, -240 },
-        { "_LVODraw", code_ptr, -246 },
-        { "_LVOAreaMove", code_ptr, -252 },
-        { "_LVOAreaDraw", code_ptr, -258 },
-        { "_LVOAreaEnd", code_ptr, -264 },
-        { "_LVOWaitTOF", code_ptr, -270 },
-        { "_LVOQBlit", code_ptr, -276 },
-        { "_LVOInitArea", code_ptr, -282 },
-        { "_LVOSetRGB4", code_ptr, -288 },
-        { "_LVOQBSBlit", code_ptr, -294 },
-        { "_LVOBltClear", code_ptr, -300 },
-        { "_LVORectFill", code_ptr, -306 },
-        { "_LVOBltPattern", code_ptr, -312 },
-        { "_LVOReadPixel", code_ptr, -318 },
-        { "_LVOWritePixel", code_ptr, -324 },
-        { "_LVOFlood", code_ptr, -330 },
-        { "_LVOPolyDraw", code_ptr, -336 },
-        { "_LVOSetAPen", code_ptr, -342 },
-        { "_LVOSetBPen", code_ptr, -348 },
-        { "_LVOSetDrMd", code_ptr, -354 },
-        { "_LVOInitView", code_ptr, -360 },
-        { "_LVOCBump", code_ptr, -366 },
-        { "_LVOCMove", code_ptr, -372 },
-        { "_LVOCWait", code_ptr, -378 },
-        { "_LVOVBeamPos", code_ptr, -384 },
-        { "_LVOInitBitMap", code_ptr, -390 },
-        { "_LVOScrollRaster", code_ptr, -396 },
-        { "_LVOWaitBOVP", code_ptr, -402 },
-        { "_LVOGetSprite", code_ptr, -408 },
-        { "_LVOFreeSprite", code_ptr, -414 },
-        { "_LVOChangeSprite", code_ptr, -420 },
-        { "_LVOMoveSprite", code_ptr, -426 },
-        { "_LVOLockLayerRom", code_ptr, -432 },
-        { "_LVOUnlockLayerRom", code_ptr, -438 },
-        { "_LVOSyncSBitMap", code_ptr, -444 },
-        { "_LVOCopySBitMap", code_ptr, -450 },
-        { "_LVOOwnBlitter", code_ptr, -456 },
-        { "_LVODisownBlitter", code_ptr, -462 },
-        { "_LVOInitTmpRas", code_ptr, -468 },
-        { "_LVOAskFont", code_ptr, -474 },
-        { "_LVOAddFont", code_ptr, -480 },
-        { "_LVORemFont", code_ptr, -486 },
-        { "_LVOAllocRaster", code_ptr, -492 },
-        { "_LVOFreeRaster", code_ptr, -498 },
-        { "_LVOAndRectRegion", code_ptr, -504 },
-        { "_LVOOrRectRegion", code_ptr, -510 },
-        { "_LVONewRegion", code_ptr, -516 },
-        { "_LVOClearRectRegion", code_ptr, -522 },
-        { "_LVOClearRegion", code_ptr, -528 },
-        { "_LVODisposeRegion", code_ptr, -534 },
-        { "_LVOFreeVPortCopLists", code_ptr, -540 },
-        { "_LVOFreeCopList", code_ptr, -546 },
-        { "_LVOClipBlit", code_ptr, -552 },
-        { "_LVOXorRectRegion", code_ptr, -558 },
-        { "_LVOFreeCprList", code_ptr, -564 },
-        { "_LVOGetColorMap", code_ptr, -570 },
-        { "_LVOFreeColorMap", code_ptr, -576 },
-        { "_LVOGetRGB4", code_ptr, -582 },
-        { "_LVOScrollVPort", code_ptr, -588 },
-        { "_LVOUCopperListInit", code_ptr, -594 },
-        { "_LVOFreeGBuffers", code_ptr, -600 },
-        { "_LVOBltBitMapRastPort", code_ptr, -606 },
-        { "_LVOOrRegionRegion", code_ptr, -612 },
-        { "_LVOXorRegionRegion", code_ptr, -618 },
-        { "_LVOAndRegionRegion", code_ptr, -624 },
-        { "_LVOSetRGB4CM", code_ptr, -630 },
-        { "_LVOBltMaskBitMapRastPort", code_ptr, -636 },
-        { "_LVOGraphicsReserved1", code_ptr, -642 },
-        { "_LVOGraphicsReserved2", code_ptr, -648 },
-        { "_LVOAttemptLockLayerRom", code_ptr, -654 },
-        { "_LVOGfxNew", code_ptr, -660 },
-        { "_LVOGfxFree", code_ptr, -666 },
-        { "_LVOGfxAssociate", code_ptr, -672 },
-        { "_LVOBitMapScale", code_ptr, -678 },
-        { "_LVOScaleDiv", code_ptr, -684 },
-        { "_LVOTextExtent", code_ptr, -690 },
-        { "_LVOTextFit", code_ptr, -696 },
-        { "_LVOGfxLookUp", code_ptr, -702 },
-        { "_LVOVideoControl", code_ptr, -708 },
-        { "_LVOOpenMonitor", code_ptr, -714 },
-        { "_LVOCloseMonitor", code_ptr, -720 },
-        { "_LVOFindDisplayInfo", code_ptr, -726 },
-        { "_LVONextDisplayInfo", code_ptr, -732 },
-        { "_LVOAddDisplayInfo", code_ptr, -738 },
-        { "_LVOAddDisplayInfoData", code_ptr, -744 },
-        { "_LVOSetDisplayInfoData", code_ptr, -750 },
-        { "_LVOGetDisplayInfoData", code_ptr, -756 },
-        { "_LVOFontExtent", code_ptr, -762 },
-        { "_LVOReadPixelLine8", code_ptr, -768 },
-        { "_LVOWritePixelLine8", code_ptr, -774 },
-        { "_LVOReadPixelArray8", code_ptr, -780 },
-        { "_LVOWritePixelArray8", code_ptr, -786 },
-        { "_LVOGetVPModeID", code_ptr, -792 },
-        { "_LVOModeNotAvailable", code_ptr, -798 },
-        { "_LVOWeighTAMatch", code_ptr, -804 },
-        { "_LVOEraseRect", code_ptr, -810 },
-        { "_LVOExtendFont", code_ptr, -816 },
-        { "_LVOStripFont", code_ptr, -822 },
-        { "_LVOCalcIVG", code_ptr, -828 },
-        { "_LVOAttachPalExtra", code_ptr, -834 },
-        { "_LVOObtainBestPenA", code_ptr, -840 },
-        { "_LVOGfxInternal3", code_ptr, -846 },
-        { "_LVOSetRGB32", code_ptr, -852 },
-        { "_LVOGetAPen", code_ptr, -858 },
-        { "_LVOGetBPen", code_ptr, -864 },
-        { "_LVOGetDrMd", code_ptr, -870 },
-        { "_LVOGetOutlinePen", code_ptr, -876 },
-        { "_LVOLoadRGB32", code_ptr, -882 },
-        { "_LVOSetChipRev", code_ptr, -888 },
-        { "_LVOSetABPenDrMd", code_ptr, -894 },
-        { "_LVOGetRGB32", code_ptr, -900 },
-        { "_LVOGfxSpare1", code_ptr, -906 },
-        { "_LVOAllocBitMap", code_ptr, -918 },
-        { "_LVOFreeBitMap", code_ptr, -924 },
-        { "_LVOGetExtSpriteA", code_ptr, -930 },
-        { "_LVOCoerceMode", code_ptr, -936 },
-        { "_LVOChangeVPBitMap", code_ptr, -942 },
-        { "_LVOReleasePen", code_ptr, -948 },
-        { "_LVOObtainPen", code_ptr, -954 },
-        { "_LVOGetBitMapAttr", code_ptr, -960 },
-        { "_LVOAllocDBufInfo", code_ptr, -966 },
-        { "_LVOFreeDBufInfo", code_ptr, -972 },
-        { "_LVOSetOutlinePen", code_ptr, -978 },
-        { "_LVOSetWriteMask", code_ptr, -984 },
-        { "_LVOSetMaxPen", code_ptr, -990 },
-        { "_LVOSetRGB32CM", code_ptr, -996 },
-        { "_LVOScrollRasterBF", code_ptr, -1002 },
-        { "_LVOFindColor", code_ptr, -1008 },
-        { "_LVOGfxSpare2", code_ptr, -1014 },
-        { "_LVOAllocSpriteDataA", code_ptr, -1020 },
-        { "_LVOChangeExtSpriteA", code_ptr, -1026 },
-        { "_LVOFreeSpriteData", code_ptr, -1032 },
-        { "_LVOSetRPAttrsA", code_ptr, -1038 },
-        { "_LVOGetRPAttrsA", code_ptr, -1044 },
-        { "_LVOBestModeIDA", code_ptr, -1050 },
+        { "_LVOBltBitMap", libvec_code, -30 },
+        { "_LVOBltTemplate", libvec_code, -36 },
+        { "_LVOClearEOL", libvec_code, -42 },
+        { "_LVOClearScreen", libvec_code, -48 },
+        { "_LVOTextLength", libvec_code, -54 },
+        { "_LVOText", libvec_code, -60 },
+        { "_LVOSetFont", libvec_code, -66 },
+        { "_LVOOpenFont", libvec_code, -72 },
+        { "_LVOCloseFont", libvec_code, -78 },
+        { "_LVOAskSoftStyle", libvec_code, -84 },
+        { "_LVOSetSoftStyle", libvec_code, -90 },
+        { "_LVOAddBob", libvec_code, -96 },
+        { "_LVOAddVSprite", libvec_code, -102 },
+        { "_LVODoCollision", libvec_code, -108 },
+        { "_LVODrawGList", libvec_code, -114 },
+        { "_LVOInitGels", libvec_code, -120 },
+        { "_LVOInitMasks", libvec_code, -126 },
+        { "_LVORemIBob", libvec_code, -132 },
+        { "_LVORemVSprite", libvec_code, -138 },
+        { "_LVOSetCollision", libvec_code, -144 },
+        { "_LVOSortGList", libvec_code, -150 },
+        { "_LVOAddAnimOb", libvec_code, -156 },
+        { "_LVOAnimate", libvec_code, -162 },
+        { "_LVOGetGBuffers", libvec_code, -168 },
+        { "_LVOInitGMasks", libvec_code, -174 },
+        { "_LVODrawEllipse", libvec_code, -180 },
+        { "_LVOAreaEllipse", libvec_code, -186 },
+        { "_LVOLoadRGB4", libvec_code, -192 },
+        { "_LVOInitRastPort", libvec_code, -198 },
+        { "_LVOInitVPort", libvec_code, -204 },
+        { "_LVOMrgCop", libvec_code, -210 },
+        { "_LVOMakeVPort", libvec_code, -216 },
+        { "_LVOLoadView", libvec_code, -222 },
+        { "_LVOWaitBlit", libvec_code, -228 },
+        { "_LVOSetRast", libvec_code, -234 },
+        { "_LVOMove", libvec_code, -240 },
+        { "_LVODraw", libvec_code, -246 },
+        { "_LVOAreaMove", libvec_code, -252 },
+        { "_LVOAreaDraw", libvec_code, -258 },
+        { "_LVOAreaEnd", libvec_code, -264 },
+        { "_LVOWaitTOF", libvec_code, -270 },
+        { "_LVOQBlit", libvec_code, -276 },
+        { "_LVOInitArea", libvec_code, -282 },
+        { "_LVOSetRGB4", libvec_code, -288 },
+        { "_LVOQBSBlit", libvec_code, -294 },
+        { "_LVOBltClear", libvec_code, -300 },
+        { "_LVORectFill", libvec_code, -306 },
+        { "_LVOBltPattern", libvec_code, -312 },
+        { "_LVOReadPixel", libvec_code, -318 },
+        { "_LVOWritePixel", libvec_code, -324 },
+        { "_LVOFlood", libvec_code, -330 },
+        { "_LVOPolyDraw", libvec_code, -336 },
+        { "_LVOSetAPen", libvec_code, -342 },
+        { "_LVOSetBPen", libvec_code, -348 },
+        { "_LVOSetDrMd", libvec_code, -354 },
+        { "_LVOInitView", libvec_code, -360 },
+        { "_LVOCBump", libvec_code, -366 },
+        { "_LVOCMove", libvec_code, -372 },
+        { "_LVOCWait", libvec_code, -378 },
+        { "_LVOVBeamPos", libvec_code, -384 },
+        { "_LVOInitBitMap", libvec_code, -390 },
+        { "_LVOScrollRaster", libvec_code, -396 },
+        { "_LVOWaitBOVP", libvec_code, -402 },
+        { "_LVOGetSprite", libvec_code, -408 },
+        { "_LVOFreeSprite", libvec_code, -414 },
+        { "_LVOChangeSprite", libvec_code, -420 },
+        { "_LVOMoveSprite", libvec_code, -426 },
+        { "_LVOLockLayerRom", libvec_code, -432 },
+        { "_LVOUnlockLayerRom", libvec_code, -438 },
+        { "_LVOSyncSBitMap", libvec_code, -444 },
+        { "_LVOCopySBitMap", libvec_code, -450 },
+        { "_LVOOwnBlitter", libvec_code, -456 },
+        { "_LVODisownBlitter", libvec_code, -462 },
+        { "_LVOInitTmpRas", libvec_code, -468 },
+        { "_LVOAskFont", libvec_code, -474 },
+        { "_LVOAddFont", libvec_code, -480 },
+        { "_LVORemFont", libvec_code, -486 },
+        { "_LVOAllocRaster", libvec_code, -492 },
+        { "_LVOFreeRaster", libvec_code, -498 },
+        { "_LVOAndRectRegion", libvec_code, -504 },
+        { "_LVOOrRectRegion", libvec_code, -510 },
+        { "_LVONewRegion", libvec_code, -516 },
+        { "_LVOClearRectRegion", libvec_code, -522 },
+        { "_LVOClearRegion", libvec_code, -528 },
+        { "_LVODisposeRegion", libvec_code, -534 },
+        { "_LVOFreeVPortCopLists", libvec_code, -540 },
+        { "_LVOFreeCopList", libvec_code, -546 },
+        { "_LVOClipBlit", libvec_code, -552 },
+        { "_LVOXorRectRegion", libvec_code, -558 },
+        { "_LVOFreeCprList", libvec_code, -564 },
+        { "_LVOGetColorMap", libvec_code, -570 },
+        { "_LVOFreeColorMap", libvec_code, -576 },
+        { "_LVOGetRGB4", libvec_code, -582 },
+        { "_LVOScrollVPort", libvec_code, -588 },
+        { "_LVOUCopperListInit", libvec_code, -594 },
+        { "_LVOFreeGBuffers", libvec_code, -600 },
+        { "_LVOBltBitMapRastPort", libvec_code, -606 },
+        { "_LVOOrRegionRegion", libvec_code, -612 },
+        { "_LVOXorRegionRegion", libvec_code, -618 },
+        { "_LVOAndRegionRegion", libvec_code, -624 },
+        { "_LVOSetRGB4CM", libvec_code, -630 },
+        { "_LVOBltMaskBitMapRastPort", libvec_code, -636 },
+        { "_LVOGraphicsReserved1", libvec_code, -642 },
+        { "_LVOGraphicsReserved2", libvec_code, -648 },
+        { "_LVOAttemptLockLayerRom", libvec_code, -654 },
+        { "_LVOGfxNew", libvec_code, -660 },
+        { "_LVOGfxFree", libvec_code, -666 },
+        { "_LVOGfxAssociate", libvec_code, -672 },
+        { "_LVOBitMapScale", libvec_code, -678 },
+        { "_LVOScaleDiv", libvec_code, -684 },
+        { "_LVOTextExtent", libvec_code, -690 },
+        { "_LVOTextFit", libvec_code, -696 },
+        { "_LVOGfxLookUp", libvec_code, -702 },
+        { "_LVOVideoControl", libvec_code, -708 },
+        { "_LVOOpenMonitor", libvec_code, -714 },
+        { "_LVOCloseMonitor", libvec_code, -720 },
+        { "_LVOFindDisplayInfo", libvec_code, -726 },
+        { "_LVONextDisplayInfo", libvec_code, -732 },
+        { "_LVOAddDisplayInfo", libvec_code, -738 },
+        { "_LVOAddDisplayInfoData", libvec_code, -744 },
+        { "_LVOSetDisplayInfoData", libvec_code, -750 },
+        { "_LVOGetDisplayInfoData", libvec_code, -756 },
+        { "_LVOFontExtent", libvec_code, -762 },
+        { "_LVOReadPixelLine8", libvec_code, -768 },
+        { "_LVOWritePixelLine8", libvec_code, -774 },
+        { "_LVOReadPixelArray8", libvec_code, -780 },
+        { "_LVOWritePixelArray8", libvec_code, -786 },
+        { "_LVOGetVPModeID", libvec_code, -792 },
+        { "_LVOModeNotAvailable", libvec_code, -798 },
+        { "_LVOWeighTAMatch", libvec_code, -804 },
+        { "_LVOEraseRect", libvec_code, -810 },
+        { "_LVOExtendFont", libvec_code, -816 },
+        { "_LVOStripFont", libvec_code, -822 },
+        { "_LVOCalcIVG", libvec_code, -828 },
+        { "_LVOAttachPalExtra", libvec_code, -834 },
+        { "_LVOObtainBestPenA", libvec_code, -840 },
+        { "_LVOGfxInternal3", libvec_code, -846 },
+        { "_LVOSetRGB32", libvec_code, -852 },
+        { "_LVOGetAPen", libvec_code, -858 },
+        { "_LVOGetBPen", libvec_code, -864 },
+        { "_LVOGetDrMd", libvec_code, -870 },
+        { "_LVOGetOutlinePen", libvec_code, -876 },
+        { "_LVOLoadRGB32", libvec_code, -882 },
+        { "_LVOSetChipRev", libvec_code, -888 },
+        { "_LVOSetABPenDrMd", libvec_code, -894 },
+        { "_LVOGetRGB32", libvec_code, -900 },
+        { "_LVOGfxSpare1", libvec_code, -906 },
+        { "_LVOAllocBitMap", libvec_code, -918 },
+        { "_LVOFreeBitMap", libvec_code, -924 },
+        { "_LVOGetExtSpriteA", libvec_code, -930 },
+        { "_LVOCoerceMode", libvec_code, -936 },
+        { "_LVOChangeVPBitMap", libvec_code, -942 },
+        { "_LVOReleasePen", libvec_code, -948 },
+        { "_LVOObtainPen", libvec_code, -954 },
+        { "_LVOGetBitMapAttr", libvec_code, -960 },
+        { "_LVOAllocDBufInfo", libvec_code, -966 },
+        { "_LVOFreeDBufInfo", libvec_code, -972 },
+        { "_LVOSetOutlinePen", libvec_code, -978 },
+        { "_LVOSetWriteMask", libvec_code, -984 },
+        { "_LVOSetMaxPen", libvec_code, -990 },
+        { "_LVOSetRGB32CM", libvec_code, -996 },
+        { "_LVOScrollRasterBF", libvec_code, -1002 },
+        { "_LVOFindColor", libvec_code, -1008 },
+        { "_LVOGfxSpare2", libvec_code, -1014 },
+        { "_LVOAllocSpriteDataA", libvec_code, -1020 },
+        { "_LVOChangeExtSpriteA", libvec_code, -1026 },
+        { "_LVOFreeSpriteData", libvec_code, -1032 },
+        { "_LVOSetRPAttrsA", libvec_code, -1038 },
+        { "_LVOGetRPAttrsA", libvec_code, -1044 },
+        { "_LVOBestModeIDA", libvec_code, -1050 },
     }
 };
 
@@ -1478,6 +1481,8 @@ const structure_definition GfxBase {
 TEMP_STRUCT(RootNode);
 TEMP_STRUCT(ErrorString);
 TEMP_STRUCT(timerequest);
+constexpr int32_t _LVOOpen = -30;
+
 const structure_definition DosBase {
     "DosBase",
     {
@@ -1492,165 +1497,165 @@ const structure_definition DosBase {
         { "dl_UtilityBase", make_pointer_type(make_struct_type(Library)) },
         { "dl_IntuitionBase", make_pointer_type(make_struct_type(Library)) },
 
-        { "_LVOOpen", code_ptr, -30 },
-        { "_LVOClose", code_ptr, -36 },
-        { "_LVORead", code_ptr, -42 },
-        { "_LVOWrite", code_ptr, -48 },
-        { "_LVOInput", code_ptr, -54 },
-        { "_LVOOutput", code_ptr, -60 },
-        { "_LVOSeek", code_ptr, -66 },
-        { "_LVODeleteFile", code_ptr, -72 },
-        { "_LVORename", code_ptr, -78 },
-        { "_LVOLock", code_ptr, -84 },
-        { "_LVOUnLock", code_ptr, -90 },
-        { "_LVODupLock", code_ptr, -96 },
-        { "_LVOExamine", code_ptr, -102 },
-        { "_LVOExNext", code_ptr, -108 },
-        { "_LVOInfo", code_ptr, -114 },
-        { "_LVOCreateDir", code_ptr, -120 },
-        { "_LVOCurrentDir", code_ptr, -126 },
-        { "_LVOIoErr", code_ptr, -132 },
-        { "_LVOCreateProc", code_ptr, -138 },
-        { "_LVOExit", code_ptr, -144 },
-        { "_LVOLoadSeg", code_ptr, -150 },
-        { "_LVOUnLoadSeg", code_ptr, -156 },
-        { "_LVOGetPacket", code_ptr, -162 },
-        { "_LVOQueuePacket", code_ptr, -168 },
-        { "_LVODeviceProc", code_ptr, -174 },
-        { "_LVOSetComment", code_ptr, -180 },
-        { "_LVOSetProtection", code_ptr, -186 },
-        { "_LVODateStamp", code_ptr, -192 },
-        { "_LVODelay", code_ptr, -198 },
-        { "_LVOWaitForChar", code_ptr, -204 },
-        { "_LVOParentDir", code_ptr, -210 },
-        { "_LVOIsInteractive", code_ptr, -216 },
-        { "_LVOExecute", code_ptr, -222 },
-        { "_LVOAllocDosObject", code_ptr, -228 },
-        { "_LVOFreeDosObject", code_ptr, -234 },
-        { "_LVODoPkt", code_ptr, -240 },
-        { "_LVOSendPkt", code_ptr, -246 },
-        { "_LVOWaitPkt", code_ptr, -252 },
-        { "_LVOReplyPkt", code_ptr, -258 },
-        { "_LVOAbortPkt", code_ptr, -264 },
-        { "_LVOLockRecord", code_ptr, -270 },
-        { "_LVOLockRecords", code_ptr, -276 },
-        { "_LVOUnLockRecord", code_ptr, -282 },
-        { "_LVOUnLockRecords", code_ptr, -288 },
-        { "_LVOSelectInput", code_ptr, -294 },
-        { "_LVOSelectOutput", code_ptr, -300 },
-        { "_LVOFGetC", code_ptr, -306 },
-        { "_LVOFPutC", code_ptr, -312 },
-        { "_LVOUnGetC", code_ptr, -318 },
-        { "_LVOFRead", code_ptr, -324 },
-        { "_LVOFWrite", code_ptr, -330 },
-        { "_LVOFGets", code_ptr, -336 },
-        { "_LVOFPuts", code_ptr, -342 },
-        { "_LVOVFWritef", code_ptr, -348 },
-        { "_LVOVFPrintf", code_ptr, -354 },
-        { "_LVOFlush", code_ptr, -360 },
-        { "_LVOSetVBuf", code_ptr, -366 },
-        { "_LVODupLockFromFH", code_ptr, -372 },
-        { "_LVOOpenFromLock", code_ptr, -378 },
-        { "_LVOParentOffH", code_ptr, -384 },
-        { "_LVOExamineFH", code_ptr, -390 },
-        { "_LVOSetFileDate", code_ptr, -396 },
-        { "_LVONameFromLock", code_ptr, -402 },
-        { "_LVONameFromFH", code_ptr, -408 },
-        { "_LVOSplitName", code_ptr, -414 },
-        { "_LVOSameLock", code_ptr, -420 },
-        { "_LVOSetMode", code_ptr, -426 },
-        { "_LVOExAll", code_ptr, -432 },
-        { "_LVOReadLink", code_ptr, -438 },
-        { "_LVOMakeLink", code_ptr, -444 },
-        { "_LVOChangeMode", code_ptr, -450 },
-        { "_LVOSetFileSize", code_ptr, -456 },
-        { "_LVOSetIoErr", code_ptr, -462 },
-        { "_LVOFault", code_ptr, -468 },
-        { "_LVOPrintFault", code_ptr, -474 },
-        { "_LVOErrorReport", code_ptr, -480 },
-        { "_LVOCli", code_ptr, -492 },
-        { "_LVOCreateNewProc", code_ptr, -498 },
-        { "_LVORunCommand", code_ptr, -504 },
-        { "_LVOGetConsoleTask", code_ptr, -510 },
-        { "_LVOSetConsoleTask", code_ptr, -516 },
-        { "_LVOGetFileSysTask", code_ptr, -522 },
-        { "_LVOSetFileSysTask", code_ptr, -528 },
-        { "_LVOGetArgStr", code_ptr, -534 },
-        { "_LVOSetArgStr", code_ptr, -540 },
-        { "_LVOFindCliProc", code_ptr, -546 },
-        { "_LVOMaxCli", code_ptr, -552 },
-        { "_LVOSetCurrentDirName", code_ptr, -558 },
-        { "_LVOGetCurrentDirName", code_ptr, -564 },
-        { "_LVOSetProgramName", code_ptr, -570 },
-        { "_LVOGetProgramName", code_ptr, -576 },
-        { "_LVOSetPrompt", code_ptr, -582 },
-        { "_LVOGetPrompt", code_ptr, -588 },
-        { "_LVOSetProgramDir", code_ptr, -594 },
-        { "_LVOGetProgramDir", code_ptr, -600 },
-        { "_LVOSystemTagList", code_ptr, -606 },
-        { "_LVOAssignLock", code_ptr, -612 },
-        { "_LVOAssignLate", code_ptr, -618 },
-        { "_LVOAssignPath", code_ptr, -624 },
-        { "_LVOAssignAdd", code_ptr, -630 },
-        { "_LVORemAssignList", code_ptr, -636 },
-        { "_LVOGetDeviceProc", code_ptr, -642 },
-        { "_LVOFreeDeviceProc", code_ptr, -648 },
-        { "_LVOLockDosList", code_ptr, -654 },
-        { "_LVOUnLockDosList", code_ptr, -660 },
-        { "_LVOAttemptLockDosList", code_ptr, -666 },
-        { "_LVORemDosEntry", code_ptr, -672 },
-        { "_LVOAddDosEntry", code_ptr, -678 },
-        { "_LVOFindDosEntry", code_ptr, -684 },
-        { "_LVONextDosEntry", code_ptr, -690 },
-        { "_LVOMakeDosEntry", code_ptr, -696 },
-        { "_LVOFreeDosEntry", code_ptr, -702 },
-        { "_LVOIsFileSystem", code_ptr, -708 },
-        { "_LVOFormat", code_ptr, -714 },
-        { "_LVORelabel", code_ptr, -720 },
-        { "_LVOInhibit", code_ptr, -726 },
-        { "_LVOAddBuffers", code_ptr, -732 },
-        { "_LVOCompareDates", code_ptr, -738 },
-        { "_LVODateToStr", code_ptr, -744 },
-        { "_LVOStrToDate", code_ptr, -750 },
-        { "_LVOInternalLoadSeg", code_ptr, -756 },
-        { "_LVOInternalUnLoadSeg", code_ptr, -762 },
-        { "_LVONewLoadSeg", code_ptr, -768 },
-        { "_LVOAddSegment", code_ptr, -774 },
-        { "_LVOFindSegment", code_ptr, -780 },
-        { "_LVORemSegment", code_ptr, -786 },
-        { "_LVOCheckSignal", code_ptr, -792 },
-        { "_LVOReadArgs", code_ptr, -798 },
-        { "_LVOFindArg", code_ptr, -804 },
-        { "_LVOReadItem", code_ptr, -810 },
-        { "_LVOStrToLong", code_ptr, -816 },
-        { "_LVOMatchFirst", code_ptr, -822 },
-        { "_LVOMatchNext", code_ptr, -828 },
-        { "_LVOMatchEnd", code_ptr, -834 },
-        { "_LVOParsePattern", code_ptr, -840 },
-        { "_LVOMatchPattern", code_ptr, -846 },
-        { "_LVODosNameFromAnchor", code_ptr, -852 },
-        { "_LVOFreeArgs", code_ptr, -858 },
-        { "_LVOFilePart", code_ptr, -870 },
-        { "_LVOPathPart", code_ptr, -876 },
-        { "_LVOAddPart", code_ptr, -882 },
-        { "_LVOStartNotify", code_ptr, -888 },
-        { "_LVOEndNotify", code_ptr, -894 },
-        { "_LVOSetVar", code_ptr, -900 },
-        { "_LVOGetVar", code_ptr, -906 },
-        { "_LVODeleteVar", code_ptr, -912 },
-        { "_LVOFindVar", code_ptr, -918 },
-        { "_LVOCliInit", code_ptr, -924 },
-        { "_LVOCliInitNewCli", code_ptr, -930 },
-        { "_LVOCliInitRun", code_ptr, -936 },
-        { "_LVOWriteChars", code_ptr, -942 },
-        { "_LVOPutStr", code_ptr, -948 },
-        { "_LVOVPrintf", code_ptr, -954 },
-        { "_LVOParsePatternNoCase", code_ptr, -966 },
-        { "_LVOMatchPatternNoCase", code_ptr, -972 },
-        { "_LVODosGetString", code_ptr, -978 },
-        { "_LVOSameDevice", code_ptr, -984 },
-        { "_LVOExAllEnd", code_ptr, -990 },
-        { "_LVOSetOwner", code_ptr, -996 },
+        { "_LVOOpen", libvec_code, _LVOOpen },
+        { "_LVOClose", libvec_code, -36 },
+        { "_LVORead", libvec_code, -42 },
+        { "_LVOWrite", libvec_code, -48 },
+        { "_LVOInput", libvec_code, -54 },
+        { "_LVOOutput", libvec_code, -60 },
+        { "_LVOSeek", libvec_code, -66 },
+        { "_LVODeleteFile", libvec_code, -72 },
+        { "_LVORename", libvec_code, -78 },
+        { "_LVOLock", libvec_code, -84 },
+        { "_LVOUnLock", libvec_code, -90 },
+        { "_LVODupLock", libvec_code, -96 },
+        { "_LVOExamine", libvec_code, -102 },
+        { "_LVOExNext", libvec_code, -108 },
+        { "_LVOInfo", libvec_code, -114 },
+        { "_LVOCreateDir", libvec_code, -120 },
+        { "_LVOCurrentDir", libvec_code, -126 },
+        { "_LVOIoErr", libvec_code, -132 },
+        { "_LVOCreateProc", libvec_code, -138 },
+        { "_LVOExit", libvec_code, -144 },
+        { "_LVOLoadSeg", libvec_code, -150 },
+        { "_LVOUnLoadSeg", libvec_code, -156 },
+        { "_LVOGetPacket", libvec_code, -162 },
+        { "_LVOQueuePacket", libvec_code, -168 },
+        { "_LVODeviceProc", libvec_code, -174 },
+        { "_LVOSetComment", libvec_code, -180 },
+        { "_LVOSetProtection", libvec_code, -186 },
+        { "_LVODateStamp", libvec_code, -192 },
+        { "_LVODelay", libvec_code, -198 },
+        { "_LVOWaitForChar", libvec_code, -204 },
+        { "_LVOParentDir", libvec_code, -210 },
+        { "_LVOIsInteractive", libvec_code, -216 },
+        { "_LVOExecute", libvec_code, -222 },
+        { "_LVOAllocDosObject", libvec_code, -228 },
+        { "_LVOFreeDosObject", libvec_code, -234 },
+        { "_LVODoPkt", libvec_code, -240 },
+        { "_LVOSendPkt", libvec_code, -246 },
+        { "_LVOWaitPkt", libvec_code, -252 },
+        { "_LVOReplyPkt", libvec_code, -258 },
+        { "_LVOAbortPkt", libvec_code, -264 },
+        { "_LVOLockRecord", libvec_code, -270 },
+        { "_LVOLockRecords", libvec_code, -276 },
+        { "_LVOUnLockRecord", libvec_code, -282 },
+        { "_LVOUnLockRecords", libvec_code, -288 },
+        { "_LVOSelectInput", libvec_code, -294 },
+        { "_LVOSelectOutput", libvec_code, -300 },
+        { "_LVOFGetC", libvec_code, -306 },
+        { "_LVOFPutC", libvec_code, -312 },
+        { "_LVOUnGetC", libvec_code, -318 },
+        { "_LVOFRead", libvec_code, -324 },
+        { "_LVOFWrite", libvec_code, -330 },
+        { "_LVOFGets", libvec_code, -336 },
+        { "_LVOFPuts", libvec_code, -342 },
+        { "_LVOVFWritef", libvec_code, -348 },
+        { "_LVOVFPrintf", libvec_code, -354 },
+        { "_LVOFlush", libvec_code, -360 },
+        { "_LVOSetVBuf", libvec_code, -366 },
+        { "_LVODupLockFromFH", libvec_code, -372 },
+        { "_LVOOpenFromLock", libvec_code, -378 },
+        { "_LVOParentOffH", libvec_code, -384 },
+        { "_LVOExamineFH", libvec_code, -390 },
+        { "_LVOSetFileDate", libvec_code, -396 },
+        { "_LVONameFromLock", libvec_code, -402 },
+        { "_LVONameFromFH", libvec_code, -408 },
+        { "_LVOSplitName", libvec_code, -414 },
+        { "_LVOSameLock", libvec_code, -420 },
+        { "_LVOSetMode", libvec_code, -426 },
+        { "_LVOExAll", libvec_code, -432 },
+        { "_LVOReadLink", libvec_code, -438 },
+        { "_LVOMakeLink", libvec_code, -444 },
+        { "_LVOChangeMode", libvec_code, -450 },
+        { "_LVOSetFileSize", libvec_code, -456 },
+        { "_LVOSetIoErr", libvec_code, -462 },
+        { "_LVOFault", libvec_code, -468 },
+        { "_LVOPrintFault", libvec_code, -474 },
+        { "_LVOErrorReport", libvec_code, -480 },
+        { "_LVOCli", libvec_code, -492 },
+        { "_LVOCreateNewProc", libvec_code, -498 },
+        { "_LVORunCommand", libvec_code, -504 },
+        { "_LVOGetConsoleTask", libvec_code, -510 },
+        { "_LVOSetConsoleTask", libvec_code, -516 },
+        { "_LVOGetFileSysTask", libvec_code, -522 },
+        { "_LVOSetFileSysTask", libvec_code, -528 },
+        { "_LVOGetArgStr", libvec_code, -534 },
+        { "_LVOSetArgStr", libvec_code, -540 },
+        { "_LVOFindCliProc", libvec_code, -546 },
+        { "_LVOMaxCli", libvec_code, -552 },
+        { "_LVOSetCurrentDirName", libvec_code, -558 },
+        { "_LVOGetCurrentDirName", libvec_code, -564 },
+        { "_LVOSetProgramName", libvec_code, -570 },
+        { "_LVOGetProgramName", libvec_code, -576 },
+        { "_LVOSetPrompt", libvec_code, -582 },
+        { "_LVOGetPrompt", libvec_code, -588 },
+        { "_LVOSetProgramDir", libvec_code, -594 },
+        { "_LVOGetProgramDir", libvec_code, -600 },
+        { "_LVOSystemTagList", libvec_code, -606 },
+        { "_LVOAssignLock", libvec_code, -612 },
+        { "_LVOAssignLate", libvec_code, -618 },
+        { "_LVOAssignPath", libvec_code, -624 },
+        { "_LVOAssignAdd", libvec_code, -630 },
+        { "_LVORemAssignList", libvec_code, -636 },
+        { "_LVOGetDeviceProc", libvec_code, -642 },
+        { "_LVOFreeDeviceProc", libvec_code, -648 },
+        { "_LVOLockDosList", libvec_code, -654 },
+        { "_LVOUnLockDosList", libvec_code, -660 },
+        { "_LVOAttemptLockDosList", libvec_code, -666 },
+        { "_LVORemDosEntry", libvec_code, -672 },
+        { "_LVOAddDosEntry", libvec_code, -678 },
+        { "_LVOFindDosEntry", libvec_code, -684 },
+        { "_LVONextDosEntry", libvec_code, -690 },
+        { "_LVOMakeDosEntry", libvec_code, -696 },
+        { "_LVOFreeDosEntry", libvec_code, -702 },
+        { "_LVOIsFileSystem", libvec_code, -708 },
+        { "_LVOFormat", libvec_code, -714 },
+        { "_LVORelabel", libvec_code, -720 },
+        { "_LVOInhibit", libvec_code, -726 },
+        { "_LVOAddBuffers", libvec_code, -732 },
+        { "_LVOCompareDates", libvec_code, -738 },
+        { "_LVODateToStr", libvec_code, -744 },
+        { "_LVOStrToDate", libvec_code, -750 },
+        { "_LVOInternalLoadSeg", libvec_code, -756 },
+        { "_LVOInternalUnLoadSeg", libvec_code, -762 },
+        { "_LVONewLoadSeg", libvec_code, -768 },
+        { "_LVOAddSegment", libvec_code, -774 },
+        { "_LVOFindSegment", libvec_code, -780 },
+        { "_LVORemSegment", libvec_code, -786 },
+        { "_LVOCheckSignal", libvec_code, -792 },
+        { "_LVOReadArgs", libvec_code, -798 },
+        { "_LVOFindArg", libvec_code, -804 },
+        { "_LVOReadItem", libvec_code, -810 },
+        { "_LVOStrToLong", libvec_code, -816 },
+        { "_LVOMatchFirst", libvec_code, -822 },
+        { "_LVOMatchNext", libvec_code, -828 },
+        { "_LVOMatchEnd", libvec_code, -834 },
+        { "_LVOParsePattern", libvec_code, -840 },
+        { "_LVOMatchPattern", libvec_code, -846 },
+        { "_LVODosNameFromAnchor", libvec_code, -852 },
+        { "_LVOFreeArgs", libvec_code, -858 },
+        { "_LVOFilePart", libvec_code, -870 },
+        { "_LVOPathPart", libvec_code, -876 },
+        { "_LVOAddPart", libvec_code, -882 },
+        { "_LVOStartNotify", libvec_code, -888 },
+        { "_LVOEndNotify", libvec_code, -894 },
+        { "_LVOSetVar", libvec_code, -900 },
+        { "_LVOGetVar", libvec_code, -906 },
+        { "_LVODeleteVar", libvec_code, -912 },
+        { "_LVOFindVar", libvec_code, -918 },
+        { "_LVOCliInit", libvec_code, -924 },
+        { "_LVOCliInitNewCli", libvec_code, -930 },
+        { "_LVOCliInitRun", libvec_code, -936 },
+        { "_LVOWriteChars", libvec_code, -942 },
+        { "_LVOPutStr", libvec_code, -948 },
+        { "_LVOVPrintf", libvec_code, -954 },
+        { "_LVOParsePatternNoCase", libvec_code, -966 },
+        { "_LVOMatchPatternNoCase", libvec_code, -972 },
+        { "_LVODosGetString", libvec_code, -978 },
+        { "_LVOSameDevice", libvec_code, -984 },
+        { "_LVOExAllEnd", libvec_code, -990 },
+        { "_LVOSetOwner", libvec_code, -996 },
     }
 };
 
@@ -1686,6 +1691,24 @@ const structure_definition Process {
     }
 };
 
+// intution
+TEMP_STRUCT(Window);
+TEMP_STRUCT(Screen);
+const structure_definition IntuitionBase {
+    "IntuitionBase",
+    {
+        { "LibNode", make_struct_type(Library) },
+        { "ViewLord", make_struct_type(View) },
+        { "ActiveWindow", make_pointer_type(make_struct_type(Window)) },
+        { "ActiveScreen", make_pointer_type(make_struct_type(Screen)) },
+        { "FirstScreen", make_pointer_type(make_struct_type(Screen)) },
+        { "Flags", long_type },
+        { "MouseY,", word_type },
+        { "Seconds", long_type },
+        { "Micros", long_type },
+    }
+};
+
 class analyzer {
 public:
     explicit analyzer()
@@ -1699,6 +1722,17 @@ public:
     {
         assert(exec_base_);
         return exec_base_;
+    }
+
+    uint32_t alloc_fake_mem(uint32_t size)
+    {
+        size = (size + 3) & -4; // align
+        if (size < alloc_top_ && !written_[alloc_top_ - size]) {
+            alloc_top_ -= size;
+            std::fill(written_.begin() + alloc_top_, written_.begin() + alloc_top_ + size, true); // So assignments will be tracked and pointers are deemed OK
+            return alloc_top_;
+        }
+        return 0;
     }
 
     void read_info_file(const std::string& filename)
@@ -1730,6 +1764,16 @@ public:
             }
             if (parts.size() != 3)
                 throw std::runtime_error { "Error in " + filename + " line " + std::to_string(linenum) + ": " + line };
+
+            if (parts[0] == "IGNORE") {
+                const auto [ok1, ibeg] = from_hex(parts[1]);
+                const auto [ok2, iend] = from_hex(parts[2]);
+                if (!ok1 || !ok2)
+                    throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
+                insert_area(ignored_areas_, ibeg, iend);
+                continue;
+            }
+
             const auto [ok, addr] = from_hex(parts[0]);
             if (!ok)
                 throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
@@ -1773,7 +1817,7 @@ public:
         memcpy(&data_[addr], data, length);
         for (uint32_t i = 0; i < length; ++i)
             written_[i + addr] = true;
-        insert_area(addr, addr + length);
+        insert_area(areas_, addr, addr + length);
     }
 
     void add_root(uint32_t addr, const simregs& regs, bool force = false, bool is_func = true)
@@ -1894,9 +1938,12 @@ public:
         update_mem(opsize::l, exec_base_ + 0x114, simval { fake_process_ }); // ThisTask
 
         add_library("graphics.library", "GfxBase", GfxBase);
-        add_library("dos.library", "DosBase", DosBase);
+        const auto dos_base = add_library("dos.library", "DosBase", DosBase);
+        add_library("intuition.library", "IntuitionBase", IntuitionBase);
 
         // exec.library
+        auto add_int = [this]() { do_add_int(); };
+        auto open_library = [this]() { do_open_library(); };
         functions_.insert({ exec_base_ + _LVOSupervisor, function_description {
                                                              {},
                                                              { { regname::A5, "userFunc", &code_ptr } },
@@ -1911,12 +1958,9 @@ public:
                                                               [this]() {
                                                                   do_make_library();
                                                               } } });
-        functions_.insert({ exec_base_ + _LVOFindResident, function_description {
-                                                               {},
-                                                               { { regname::A1, "name", &char_ptr } },
-                                                           } });
 
-        auto add_int = [this]() { do_add_int(); };
+        functions_.insert({ exec_base_ + _LVOFindResident, function_description { {}, { { regname::A1, "name", &char_ptr } }, [this]() { do_find_resident();  } } });
+
         functions_.insert({ exec_base_ + _LVOSetIntVector, function_description {
                                                                {},
                                                                { { regname::D0, "intNum", &byte_type }, { regname::A1, "interrupt", &make_pointer_type(make_struct_type(Interrupt)) } },
@@ -1934,7 +1978,6 @@ public:
                                                                                  regs_.d[0] = simval { fake_process_ };
                                                                              } } });
         functions_.insert({ exec_base_ + _LVOAddLibrary, function_description { {}, { { regname::A1, "library", &make_pointer_type(make_struct_type(Library)) } } } });
-        auto open_library = [this]() { do_open_library(); };
         functions_.insert({ exec_base_ + _LVOOldOpenLibrary, function_description { {}, { { regname::A1, "libName", &char_ptr } }, open_library } });
         functions_.insert({ exec_base_ + _LVOOpenDevice, function_description { {}, {
                                                                                         { regname::A0, "devName", &char_ptr },
@@ -1951,8 +1994,13 @@ public:
                                                                                          { regname::A1, "libName", &char_ptr },
                                                                                          { regname::D0, "version", &long_type },
                                                                                      },
-                                                              open_library } });        
-
+                                                              open_library } });
+        // dos.library
+        //_LVOOpen
+        functions_.insert({ dos_base + _LVOOpen, function_description {
+                                                     {},
+                                                     { { regname::D1, "name", &char_ptr }, { regname::D2, "accessMode ", &long_type } },
+                                                 } });
     }
 
     void run()
@@ -1972,6 +2020,11 @@ public:
             uint32_t pos = area.beg;
 
             while (pos < area.end) {
+                if (auto ignored = find_area(ignored_areas_, pos)) {
+                    pos = ignored->end;
+                    continue;
+                }
+
                 auto it = visited_.find(pos);
                 if (it == visited_.end()) {
                     const auto next_visited = visited_.upper_bound(pos);
@@ -1987,6 +2040,34 @@ public:
                 read_instruction(iwords, pos);
                 const auto& inst = instructions[iwords[0]];
 
+                if (inst.type == inst_type::ILLEGAL && iwords[0] != illegal_instruction_num) {
+                    if (iwords[0] == movec_instruction_dr0_num || iwords[0] == movec_instruction_dr1_num) {
+                        // MOVEC special case
+                        const auto op = get_u16(&data_[pos + 2]);
+                        const auto regname = (op & 0x8000 ? "A" : "D") + std::to_string((op >> 12) & 7);
+                        std::string crname;                        
+                        static const std::map<uint32_t, std::string> crnames = {
+                            { 0x002, "CACR" }, // Cache Control Register
+                            { 0x801, "VBR" }, // Vector Base Register
+                        };
+                        if (auto crit = crnames.find(op & 0xfff); crit != crnames.end())
+                            crname = crit->second;
+                        else
+                            crname = "CR" + hexstring(op & 0xfff, 3);
+                        std::cout << "\tMOVEC\t";
+                        if (iwords[0] & 1)
+                            std::cout << regname << ", " << crname;
+                        else
+                            std::cout << crname << ", " << regname;
+                        std::cout << "\t ; " << hexfmt(iwords[0]) << " " << hexfmt(op) << "\n";
+                        pos += 4;
+                        continue;
+                    }
+                    std::cout << "\tDC.W\t$" << hexfmt(iwords[0]) << " ; ILLEGAL\n";
+                    pos += 2;
+                    continue;
+                }
+
                 std::ostringstream extra;
 
                 std::cout << "\t" << inst.name;
@@ -1994,36 +2075,53 @@ public:
                     const auto ea = inst.ea[i];
                     std::cout << (i ? ", " : "\t");
 
-                    auto do_known = [&](std::string lab = "") {
-                        if (!ea_val_[i].known())
+                    bool is_dest = false;
+                    // Supress printing known register value?
+                    if (i == 1 && (inst.type == inst_type::MOVE || inst.type == inst_type::MOVEA || inst.type == inst_type::MOVEQ || inst.type == inst_type::LEA))
+                        is_dest = true;
+
+                    auto do_known = [&](const simval& val) {
+                        if (is_dest)
                             return;
-                        if (lab.empty())
-                            lab = ea_string(ea);
-                        if (ea_val_[i].known()) {
-                            extra << "\t" << lab << "=$" << hexfmt(ea_val_[i].raw());
+                        if (val.known()) {
+                            extra << " " << ea_string(ea) << " = $" << hexfmt(val.raw());
                         }
                     };
+                    auto check_aind = [&]() {
+                        if (is_dest)
+                            return;
+                        const auto& areg = regs_.a[ea & ea_xn_mask];
+                        if (!areg.known())
+                            return;
+                        const auto a = areg.raw();
+                        if (auto lit = labels_.find(a); lit != labels_.end()) {
+                            extra << " A" << (ea & ea_xn_mask) << " = " << lit->second.name << " (" << *lit->second.t << ")";
+                        } else {
+                            extra << " A" << (ea & ea_xn_mask) << " = $" << hexfmt(a);
+                        }
+                    };
+
 
                     switch (ea >> ea_m_shift) {
                     case ea_m_Dn:
                         std::cout << "D" << (ea & ea_xn_mask);
-                        do_known();
+                        do_known(ea_val_[i]);
                         break;
                     case ea_m_An:
                         std::cout << "A" << (ea & ea_xn_mask);
-                        do_known();
+                        do_known(ea_val_[i]);
                         break;
                     case ea_m_A_ind:
                         std::cout << "(A" << (ea & ea_xn_mask) << ")";
-                        do_known("A" + std::to_string(ea & ea_xn_mask));
+                        check_aind();
                         break;
                     case ea_m_A_ind_post:
                         std::cout << "(A" << (ea & ea_xn_mask) << ")+";
-                        do_known("A" + std::to_string(ea & ea_xn_mask));
+                        check_aind();
                         break;
                     case ea_m_A_ind_pre:
                         std::cout << "-(A" << (ea & ea_xn_mask) << ")";
-                        do_known("A" + std::to_string(ea & ea_xn_mask));
+                        check_aind();
                         break;
                     case ea_m_A_ind_disp16: {
                         auto n = static_cast<int16_t>(ea_data_[i]);
@@ -2049,21 +2147,15 @@ public:
                                 break;
                             } else if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
                                 const auto& t = *lit->second.t;
-                                extra << "\t" << "A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
+                                extra << " A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
                                 if (t.struct_def()) {
-                                    #if 0
-                                    if (auto f = t.struct_def()->field_at(offset)) {
-                                        std::cout << f->name() <<  "(A" << (ea & 7) << ")";
-                                        break;
-                                    }
-                                    #endif
-                                    if (const auto [ok, name] = t.struct_def()->field_name(offset, inst.type == inst_type::LEA); ok) {
-                                        std::cout << name << "(A" << (ea & 7) << ")";
+                                    if (auto name = t.struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
+                                        std::cout << *name << "(A" << (ea & 7) << ")";
                                         break;
                                     }
                                 }
                             } else {
-                                extra << "\t" << desc.str() << " = $" << hexfmt(addr);
+                                extra << " " << desc.str() << " = $" << hexfmt(addr);
                             }
                         }
 
@@ -2085,6 +2177,7 @@ public:
                         desc << ")";
                         // TODO: Handle know values..
                         std::cout << desc.str();
+                        check_aind();
                         break;
                     }
                     case ea_m_Other:
@@ -2174,6 +2267,7 @@ private:
     simregs regs_;
     std::vector<area> areas_;
     std::vector<std::pair<uint32_t, label_info>> predef_info_;
+    std::vector<area> ignored_areas_;
     uint32_t exec_base_ = 0;
     std::map<std::string, uint32_t> library_bases_;
     uint32_t fake_process_ = 0;
@@ -2184,17 +2278,25 @@ private:
     std::map<uint32_t, uint32_t> saved_pointers_;
     uint32_t alloc_top_ = 0xa00000; // serve memory (from AllocMem) from here..
 
-    void insert_area(uint32_t beg, uint32_t end)
+    static const area* find_area(const std::vector<area>& areas, uint32_t addr)
     {
-        auto it = areas_.begin();
-        for (; it != areas_.end(); ++it) {
+        for (const auto& a : areas)
+            if (addr >= a.beg && addr < a.end)
+                return &a;
+        return nullptr;
+    }
+
+    static void insert_area(std::vector<area>& areas, uint32_t beg, uint32_t end)
+    {
+        auto it = areas.begin();
+        for (; it != areas.end(); ++it) {
             //return a0 <= b1 && b0 <= a1;
             if (beg <= it->end && it->beg <= end)
                 throw std::runtime_error { "Area overlap" };
             if (beg < it->beg)
                 break;
         }
-        areas_.insert(it, { beg, end });
+        areas.insert(it, { beg, end });
     }
 
     std::map<uint32_t, label_info>::const_iterator maybe_print_label(uint32_t pos) const
@@ -2369,6 +2471,14 @@ private:
     void handle_data_area(uint32_t pos, uint32_t end)
     {
         assert(pos < end && end <= max_mem);
+
+        for (const auto& a : ignored_areas_) {
+            if (pos <= a.end && a.beg <= end) {
+                end = a.beg;
+                break;
+            }
+        }
+
         if (labels_.find(pos) == labels_.end())
             std::cout << "; $" << hexfmt(pos) << "\n";
         while (pos < end) {
@@ -2490,12 +2600,13 @@ private:
                 break;
             case ea_m_A_ind_post:
                 ea_addr_[i] = regs_.a[ea & ea_xn_mask];
+                regs_.a[ea & ea_xn_mask] += simval { opsize_bytes(inst.size) };
                 ea_val_[i] = read_mem(ea_addr_[i]);
-                // TODO: increment
                 break;
             case ea_m_A_ind_pre:
-                // TODO: decrement
-                // TODO: ea_val_, ea_addr_
+                regs_.a[ea & ea_xn_mask] -= simval { opsize_bytes(inst.size) };
+                ea_addr_[i] = regs_.a[ea & ea_xn_mask];
+                ea_val_[i] = read_mem(ea_addr_[i]);
                 break;
             case ea_m_A_ind_disp16: {
                 assert(eaw < inst.ilen);
@@ -2609,14 +2720,14 @@ private:
         }
         std::cout << "\n";
     }
-
-    void do_open_library()
+    
+    std::optional<std::string> try_read_string_lower(const simval& addr)
     {
-        if (!regs_.a[1].known())
-            return;
-        auto ptr = regs_.a[1].raw();
-        if (!pointer_ok(ptr))
-            return;
+        if (!addr.known())
+            return {};
+        auto ptr = addr.raw();
+        if (ptr >= max_mem || !written_[ptr])
+            return {};
         std::string libname;
         while (ptr < max_mem && written_[ptr] && data_[ptr]) {
             auto c = data_[ptr++];
@@ -2624,22 +2735,33 @@ private:
                 c += 'a' - 'A';
             libname.push_back(c);
         }
-        if (auto it = library_bases_.find(libname); it != library_bases_.end()) {
+        return { libname };
+    }
+
+    void do_open_library()
+    {
+        auto libname = try_read_string_lower(regs_.a[1]);
+        regs_.d[0] = simval {};
+        if (!libname)
+            return;
+        if (auto it = library_bases_.find(*libname); it != library_bases_.end()) {
             regs_.d[0] = simval { it->second };
             return;
         }
-        throw std::runtime_error { "Library not found: \"" + libname + "\"" };
+        std::cerr << "Library not found: \"" << *libname << "\"\n";
     }
 
-    uint32_t alloc_fake_mem(uint32_t size)
+    void do_find_resident()
     {
-        size = (size + 3) & -4; // align
-        if (size < alloc_top_ && !written_[alloc_top_ - size]) {
-            alloc_top_ -= size;
-            std::fill(written_.begin() + alloc_top_, written_.begin() + alloc_top_ + size, true); // So assignments will be tracked and pointers are deemed OK
-            return alloc_top_;
+        auto resname = try_read_string_lower(regs_.a[1]);
+        regs_.d[0] = simval {};
+        if (!resname)
+            return;
+        if (auto it = library_bases_.find(*resname); it != library_bases_.end()) {
+            regs_.d[0] = simval { it->second };
+            return;
         }
-        return 0;
+        std::cerr << "Resident not found: \"" << *resname << "\"\n";
     }
 
     void do_alloc_mem()
@@ -2828,9 +2950,10 @@ private:
 
     void do_add_int()
     {
-        const auto data = read_mem(regs_.a[1] + simval { 0x0e });
-        const auto code = read_mem(regs_.a[1] + simval { 0x12 });
-        std::cerr << "do_add_int A1=" << regs_.a[1] << " code=" << code << " data=" << data << "\n";
+        if (!regs_.a[1].known())
+            return;
+        const auto data = read_mem(simval{regs_.a[1].raw() + 0x0e });
+        const auto code = read_mem(simval{regs_.a[1].raw() + 0x12 });
         if (code.known()) {
             simregs r {};
             #if 0
@@ -2864,27 +2987,25 @@ private:
         //std::cerr << "Found function at $" << hexfmt(addr) << "\n";
         const auto& fd = it->second;
         for (const auto& i : fd.input()) {
-            if (i.reg >= regname::A0 && i.reg < regname::A7) {
-                const auto& areg = regs_.a[static_cast<uint8_t>(i.reg) - static_cast<uint8_t>(regname::A0)];
-                //std::cout << i.reg << " = " << areg << " -> type " << *i.t << "\n";
-                if (auto pt = i.t->ptr()) {
-                    if (areg.known()) {
-                        if (pt == &code_type) {
-                            add_root(areg.raw(), regs_);
-                        } else if (pt == &char_type) {
-                            maybe_find_string_at(areg.raw());
-                        } else if (pt->struct_def()) {
-                            //handle_struct_at(areg.raw(), *pt->struct_def());
-                            if (auto lit = labels_.find(areg.raw()); lit != labels_.end()) {
-                                if (!lit->second.t->ptr() && !lit->second.t->struct_def()) {
-                                    std::cerr << "Warning: Overriding type of " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
-                                    lit->second.t = pt;
-                                } else {
-                                    std::cerr << "Warning: Type conflict for " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
-                                }
+            const auto& reg = (i.reg >= regname::A0 ? regs_.a : regs_.d)[static_cast<uint8_t>(i.reg) & 7];
+            //std::cout << i.reg << " = " << reg << " -> type " << *i.t << "\n";
+            if (auto pt = i.t->ptr()) {
+                if (reg.known()) {
+                    if (pt == &code_type) {
+                        add_root(reg.raw(), regs_);
+                    } else if (pt == &char_type) {
+                        maybe_find_string_at(reg.raw());
+                    } else if (pt->struct_def()) {
+                        //handle_struct_at(reg.raw(), *pt->struct_def());
+                        if (auto lit = labels_.find(reg.raw()); lit != labels_.end()) {
+                            if (!lit->second.t->ptr() && !lit->second.t->struct_def()) {
+                                std::cerr << "Warning: Overriding type of " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
+                                lit->second.t = pt;
                             } else {
-                                add_auto_label(areg.raw(), *pt, pt->struct_def()->name());
+                                std::cerr << "Warning: Type conflict for " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
                             }
+                        } else {
+                            add_auto_label(reg.raw(), *pt, pt->struct_def()->name());
                         }
                     }
                 }
@@ -2917,7 +3038,7 @@ private:
             addr += 2 * inst.ilen;
 
             #if 0
-            if (start >= 0x00fe9174 && start <= 0x00fe9272) {
+            if (1 /*start >= 0x00fe9174 && start <= 0x00fe9272*/) {
                 print_sim_regs();
                 disasm(std::cout, start, iwords, inst.ilen);
                 std::cout << "\n";
@@ -2956,6 +3077,12 @@ private:
                 break;
 
             case inst_type::ILLEGAL:
+                // Support skipping MOVEC
+                if (iwords[0] == movec_instruction_dr0_num || iwords[0] == movec_instruction_dr1_num) {
+                    addr += 2;
+                    continue;
+                }
+                [[fallthrough]];
             case inst_type::RTS:
             case inst_type::RTE:
             case inst_type::RTR:
@@ -3036,6 +3163,9 @@ private:
         if (size == opsize::l && !(addr & 1) && addr < 0xa00000) {
             //std::cerr << "Saving at $" << hexfmt(addr) << ": $" << hexfmt(rv) << "\n";
             saved_pointers_.insert({ addr, rv });
+            if (auto lit = labels_.find(addr); lit != labels_.end() && lit->second.t == &code_ptr) {
+                throw std::runtime_error { "TODO: CodePtr at " + hexstring(addr) + " updated to " + hexstring(val.raw()) };
+            }
         }
 
         //throw std::runtime_error { "TODO" };
@@ -3058,8 +3188,25 @@ private:
         case ea_m_A_ind_post:
         case ea_m_A_ind_disp16:
         case ea_m_A_ind_index:
-            if (ea_addr_[idx].known())
+            if (ea_addr_[idx].known()) {
                 update_mem(size, ea_addr_[idx].raw(), val);
+                if (size == opsize::l && val.known()) {
+                    const auto a = regs_.a[ea & ea_xn_mask].raw();
+                    if (auto lit = labels_.find(a); lit != labels_.end() && lit->second.t->struct_def()) {
+                        const int32_t struct_offset = ea_addr_[idx].raw() - a;
+                        if (const auto [field, field_offset] = lit->second.t->struct_def()->field_at(struct_offset); field) {
+                            if (field_offset == 0 && &field->t() == &code_ptr) {
+                                //std::cerr << "code_ptr updated for " << lit->second.name << " " << *lit->second.t->struct_def()->field_name(struct_offset, false) << " to $" << hexfmt(val.raw()) << "\n";
+                                add_root(val.raw(), simregs {});
+                            } else if (struct_offset < 0 && field_offset == 2) {
+                                // Patching library vector
+                                //std::cerr << "code_ptr updated for library vector " << lit->second.name << " " << *lit->second.t->struct_def()->field_name(struct_offset, false) << " to $" << hexfmt(val.raw()) << "\n";
+                                add_root(val.raw(), simregs {});
+                            }
+                        }
+                    }
+                }
+            }
             break;
         //case ea_m_A_ind_pre:
             // TODO
@@ -3526,7 +3673,7 @@ void hunk_file::read_hunk_exe()
         }
 
         if (!is_initial_hunk(hunk_type))
-            throw std::runtime_error { "Expected CODE, DATA or BSS hunk for hunk " + std::to_string(hunk_num) + " got " + hunk_type_string(hunk_type) };
+            throw std::runtime_error { "Expected libvec_code, DATA or BSS hunk for hunk " + std::to_string(hunk_num) + " got " + hunk_type_string(hunk_type) };
         const uint32_t hunk_longs = read_u32();
         const uint32_t hunk_bytes = hunk_longs << 2;
         std::cout << "\tHUNK_" << (hunk_type == HUNK_CODE ? "CODE" : hunk_type == HUNK_DATA ? "DATA" : "BSS ") << " size = $" << hexfmt(hunk_bytes) << "\n";
@@ -3865,6 +4012,19 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
     a->run();
 }
 
+bool validate_bootchecksum(const std::vector<uint8_t>& data)
+{
+    assert(data.size() >= 1024);
+    uint32_t csum = 0;
+    for (uint32_t i = 0; i < 1024; i += 4) {
+        const auto before = csum;
+        csum += get_u32(&data[i]);
+        if (csum < before) // carry?
+            ++csum;
+    }
+    return csum == 0xffffffff;
+}
+
 void usage()
 {
     std::cerr << "Usage: m68kdisasm [-a] [-i info] file [options...]\n";
@@ -3919,6 +4079,28 @@ int main(int argc, char* argv[])
             if (argc > 2)
                 throw std::runtime_error { "Too many arguments" };
             handle_rom(data, a.get());
+        } else if (a && data.size() >= 1024 && data[0] == 'D' && data[1] == 'O' && data[2] == 'S' && validate_bootchecksum(data)) {
+            // Bootblock (analyzed)
+            const auto base = 0x200000;
+            a->write_data(base, data.data(), 1024);
+            a->add_fakes();
+            simregs regs {};
+            regs.a[6] = simval { a->fake_exec_base() };
+
+            // A1 points to an IORequest ready
+            const auto ireq_ptr = a->alloc_fake_mem(IOStdReq.size());
+            if (ireq_ptr) {
+                a->add_label(ireq_ptr, "BootIORequest", make_struct_type(IOStdReq));
+                regs.a[1] = simval { ireq_ptr };
+            }
+            a->add_label(base, "bootsig", make_array_type(char_type, 4));
+            a->add_label(base + 0x4, "checksum", long_type);
+            a->add_label(base + 0x8, "rootblock", long_type);
+            a->add_label(base + 0xc, "$$entry", code_type);
+
+            a->add_root(base + 0x0c, regs);
+            a->run();
+
         } else {
             if (a) {
                 if (argc <= 2)
