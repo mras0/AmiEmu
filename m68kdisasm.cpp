@@ -2,6 +2,10 @@
 #include <iostream>
 #include <fstream>
 #include <optional>
+#include <sstream>
+#include <map>
+#include <iomanip>
+#include <algorithm>
 
 #include "disasm.h"
 #include "ioutil.h"
@@ -314,12 +318,6 @@ constexpr const char* const custom_regname[0x100] = {
     "FMODE",
     "CUSTOM_NOOP",
 };
-
-
-#include <queue>
-#include <sstream>
-#include <map>
-#include <iomanip>
 
 class simval {
 public:
@@ -698,7 +696,7 @@ std::ostream& operator<<(std::ostream& os, regname r)
 
 struct argument_description {
     regname reg;
-    const char* name;
+    std::string name;
     const type* t;
 };
 
@@ -783,6 +781,37 @@ uint32_t sizeof_type(const type& t)
     std::ostringstream oss;
     oss << "Unhandled type in sizeof_type: " << t;
     throw std::runtime_error { oss.str() };
+}
+
+const type* parse_type(const std::string& str)
+{
+    std::string basetype;
+    size_t p = 0;
+    while (p < str.length() && str[p] != '*' && str[p] != '[')
+        basetype.push_back(str[p++]);
+
+    const type* t = nullptr;
+    if (auto it = typenames.find(basetype); it != typenames.end())
+        t = it->second;
+    if (!t)
+        return nullptr;
+
+    for (; p < str.length(); ++p) {
+        if (str[p] == '*') {
+            t = &make_pointer_type(*t);
+        } else if (str[p] == '[' && ++p < str.length()) {
+            uint32_t len = 0;
+            while (p < str.length() && isdigit(str[p]))
+                len = len * 10 + (str[p++] - '0');
+            if (p >= str.length() || str[p] != ']')
+                return nullptr;
+            ++p;
+            t = &make_array_type(*t, len);
+        } else {
+            return nullptr;
+        }
+    }
+    return t;
 }
 
 const type& libvec_code = make_array_type(word_type, 3);
@@ -992,6 +1021,9 @@ constexpr int32_t _LVOSetIntVector = -162;
 constexpr int32_t _LVOAddIntServer = -168;
 constexpr int32_t _LVOAllocMem = -198;
 constexpr int32_t _LVOFindTask = -294;
+constexpr int32_t _LVOPutMsg = -366;
+constexpr int32_t _LVOGetMsg = -372;
+constexpr int32_t _LVOReplyMsg = -378;
 constexpr int32_t _LVOAddLibrary = -396;
 constexpr int32_t _LVOOldOpenLibrary = -408;
 constexpr int32_t _LVOOpenDevice = -444;
@@ -1117,9 +1149,9 @@ const structure_definition ExecBase {
         { "_LVOFreeTrap", libvec_code, -348 },
         { "_LVOAddPort", libvec_code, -354 },
         { "_LVORemPort", libvec_code, -360 },
-        { "_LVOPutMsg", libvec_code, -366 },
-        { "_LVOGetMsg", libvec_code, -372 },
-        { "_LVOReplyMsg", libvec_code, -378 },
+        { "_LVOPutMsg", libvec_code, _LVOPutMsg },
+        { "_LVOGetMsg", libvec_code, _LVOGetMsg },
+        { "_LVOReplyMsg", libvec_code, _LVOReplyMsg },
         { "_LVOWaitPort", libvec_code, -384 },
         { "_LVOFindPort", libvec_code, -390 },
         { "_LVOAddLibrary", libvec_code, _LVOAddLibrary },
@@ -1718,6 +1750,11 @@ public:
     {
     }
 
+    struct label_info {
+        std::string name;
+        const type* t;
+    };
+
     uint32_t fake_exec_base() const
     {
         assert(exec_base_);
@@ -1756,12 +1793,39 @@ public:
                 --end;
             if (start >= end)
                 continue;
-            std::vector<std::string> parts;
-            std::istringstream iss { line.substr(start, end - start) };
-            for (std::string part; std::getline(iss, part, ' ');) {
-                if (!part.empty())
-                    parts.push_back(part);
+
+            auto split = [](const std::string& s, char delim) {
+                std::vector<std::string> parts;
+                std::istringstream iss { s };
+                for (std::string part; std::getline(iss, part, delim);) {
+                    if (!part.empty())
+                        parts.push_back(part);
+                }
+                return parts;
+            };
+
+            auto get_reg_and_equal = [](const std::string& s) -> std::optional<regname> {
+                if (s.length() < 4 || s[2] != '=')
+                    return {};
+                if ((s[0] != 'A' && s[0] != 'D') || s[1] < '0' || s[1] > '7')
+                    return {};
+                return static_cast<regname>(s[1] - '0' + (s[0] == 'A' ? 8 : 0));
+            };
+
+            std::vector<std::string> parts = split(line.substr(start, end - start), ' ');
+
+            if (parts.size() == 2) {
+                const auto [ok, addr] = from_hex(parts[0]);
+                const auto rn = get_reg_and_equal(parts[1]);
+                if (ok && rn) {
+                    const auto [ok2, val] = from_hex(parts[1].c_str() + 3);
+                    if (ok2) {
+                        forced_values_.insert({ addr, { *rn, val } });
+                        continue;
+                    }
+                }
             }
+
             if (parts.size() != 3)
                 throw std::runtime_error { "Error in " + filename + " line " + std::to_string(linenum) + ": " + line };
 
@@ -1778,35 +1842,37 @@ public:
             if (!ok)
                 throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
 
-            std::string basetype;
-            size_t p = 0;
-            while (p < parts[1].length() && parts[1][p] != '*' && parts[1][p] != '[')
-                basetype.push_back(parts[1][p++]);
-
-            const type* t = nullptr;
-            if (auto it = typenames.find(basetype); it != typenames.end())
-                t = it->second;
+            const auto t = parse_type(parts[1]);
             if (!t)
-                throw std::runtime_error { "Invalid base type in " + filename + " line " + std::to_string(linenum) + ": " + line + " \"" + basetype + "\"" };
+                throw std::runtime_error { "Invalid type in " + filename + " line " + std::to_string(linenum) + ": " + line };
+            auto lab = parts[2];
+            if (lab == "?") {
+                lab = (t == &code_type ? "func_" : "dat_") + hexstring(addr);
+            } else if (t == &code_type) {
+                auto pos = lab.find_first_of('(');
+                if (pos != std::string::npos) {
+                    if (lab.back() != ')')
+                        throw std::runtime_error { "Invalid function declaration in " + filename + " line " + std::to_string(linenum) + ": " + line };
 
-            for (; p < parts[1].length(); ++p) {
-                if (parts[1][p] == '*')
-                    t = &make_pointer_type(*t);
-                else if (parts[1][p] == '[' && ++p < parts[1].length()) {
-                    uint32_t len = 0;
-                    while (p < parts[1].length() && isdigit(parts[1][p]))
-                        len = len * 10 + (parts[1][p++] - '0');
-                    if (p >= parts[1].length() || parts[1][p] != ']')
-                        goto typeerr;
-                    ++p;
-                    t = &make_array_type(*t, len);
-                } else {
-                typeerr:
-                    throw std::runtime_error { "Unsupported type in " + filename + " line " + std::to_string(linenum) + ": " + line + " \"" + parts[1] + "\"" };
+                    std::vector<argument_description> input;
+                    for (const auto& arg : split(lab.substr(pos + 1, lab.length() - 1 - (pos + 1)), ',')) {
+                        auto name_and_type = split(arg, ':');
+                        if (name_and_type.size() == 1 || name_and_type.size() == 2) {
+                            if (const auto rn = get_reg_and_equal(name_and_type.back()); rn) {
+                                if (const auto at = parse_type(name_and_type.back().substr(3)); at) {
+                                    input.push_back(argument_description { *rn, name_and_type.size() == 2 ? name_and_type[0] : "arg_" + std::to_string(input.size()), at });
+                                    continue;
+                                }
+                            }
+                        }
+                        throw std::runtime_error { "Invalid function argument " + arg + " in " + filename + " line " + std::to_string(linenum) + ": " + line };
+                    }
+                    // TODO outputs..
+                    functions_.insert({ addr, function_description { {}, input } });
                 }
+                lab.erase(pos);
             }
-
-            predef_info_.push_back({ addr, { parts[2], t } });
+            predef_info_.push_back({ addr, { lab, t } });
         }
     }
 
@@ -1830,7 +1896,7 @@ public:
             return;
 
         if (visited_.find(addr) == visited_.end()) {
-            roots_.push({ addr, regs });
+            roots_.push_back({ addr, regs });
             visited_[addr] = regs; // Mark visitied now to avoid re-insertion
         }
         add_auto_label(addr, code_type, is_func ? "func" : "lab");
@@ -1838,17 +1904,59 @@ public:
 
     void add_label(uint32_t addr, const std::string& name, const type& t)
     {
-        auto it = labels_.find(addr);
-        if (it == labels_.end())
-            labels_[addr] = { name, &t };
-        else if (it->second.t != &t) {
-            if (it->second.t == &unknown_type || t.struct_def() || (t.ptr() && t.len())) {
-                it->second.name = name;
-                it->second.t = &t;
-            } else if (&t != &unknown_type) {
-                std::cerr << "Type conflict for " << name << " was " << *it->second.t << " now " << t << "\n";
-            }
+        auto [li, offset] = find_label(addr);
+        if (!li) {
+            labels_.insert({ addr, { name, &t } });
+            return;
         }
+
+        // Exact match and type is same or we already know a better one
+        if (li->t == &t || &t == &unknown_type)
+            return;
+
+        //std::cerr << "Warning: Label " << name << " $" << hexfmt(addr) << " " << t << " overlaps " << li->name << " " << *li->t << " offset $" << hexfmt(offset) << "\n";
+
+        // Part or a structure/array, ignore
+        if (li->t->struct_def() || (li->t->ptr() && li->t->len()))
+            return;
+
+        // Always update unkown type if we know a better one (and prefer code)
+        if (li->t == &unknown_type || &t == &code_type) {
+            li->name = name;
+            li->t = &t;
+            return;
+        }
+
+        // Update for larger size, e.g. WORD->LONG
+        if (li->t != & code_type && sizeof_type(t) > sizeof_type(*li->t)) {
+            li->t = &t;
+        }
+    }
+
+    std::pair<label_info*, int32_t> find_label(uint32_t addr)
+    {
+        if (addr >= max_mem || labels_.empty())
+            return { nullptr, 0 };
+        auto it = labels_.lower_bound(addr);
+        if (it != labels_.end()) {
+            const int32_t offset = addr - it->first;
+            assert(offset <= 0);
+            if (!offset)
+                return { &it->second, 0 }; // Exact match
+            if (it->second.t->struct_def() && it->second.t->struct_def()->negsize() >= static_cast<uint32_t>(-offset))
+                return { &it->second, offset };
+        }
+        // At this point it can't be an exact match, and can't be part of a structures negative area
+        if (it == labels_.begin())
+            return { nullptr, 0 }; // Before any labels
+        --it;
+        const int32_t offset = addr - it->first;
+        assert(offset > 0);
+        if (it->second.t == &code_type || it->second.t == &unknown_type)
+            return { nullptr, 0 };
+        if (static_cast<uint32_t>(offset) < sizeof_type(*it->second.t))
+            return { &it->second, offset };
+        return { nullptr, 0 };
     }
 
     void add_auto_label(uint32_t addr, const type& t, const std::string& prefix = "dat")
@@ -1977,6 +2085,9 @@ public:
         functions_.insert({ exec_base_ + _LVOFindTask, function_description { {}, { { regname::A1, "name", &char_ptr } }, [this]() {
                                                                                  regs_.d[0] = simval { fake_process_ };
                                                                              } } });
+        functions_.insert({ exec_base_ + _LVOPutMsg, function_description { {}, { { regname::A0, "port", &make_pointer_type(make_struct_type(MsgPort)) }, { regname::A1, "message", &make_pointer_type(make_struct_type(Message)) } } } });
+        functions_.insert({ exec_base_ + _LVOGetMsg, function_description { {}, { { regname::A0, "port", &make_pointer_type(make_struct_type(MsgPort)) }, } } });
+        functions_.insert({ exec_base_ + _LVOReplyMsg, function_description { {}, { { regname::A1, "message", &make_pointer_type(make_struct_type(Message)) }, } } });
         functions_.insert({ exec_base_ + _LVOAddLibrary, function_description { {}, { { regname::A1, "library", &make_pointer_type(make_struct_type(Library)) } } } });
         functions_.insert({ exec_base_ + _LVOOldOpenLibrary, function_description { {}, { { regname::A1, "libName", &char_ptr } }, open_library } });
         functions_.insert({ exec_base_ + _LVOOpenDevice, function_description { {}, {
@@ -2009,12 +2120,13 @@ public:
         if (!exec_base_)
             add_fakes();
 
-        while (!roots_.empty()) {
-            const auto r = roots_.front();
-            roots_.pop();
-            regs_ = r.second;
-            trace(r.first);
+        process_roots();
+        // Now add any predefined roots that were not automatically inferred
+        for (const auto& pi : predef_info_) {
+            if (pi.second.t == &code_type && visited_.find(pi.first) == visited_.end())
+                add_root(pi.first, simregs {});
         }
+        process_roots();
 
         for (const auto& area : areas_) {
             uint32_t pos = area.beg;
@@ -2194,12 +2306,17 @@ public:
                             const auto extw = ea_data_[i];
                             // Note: 68000 ignores scale in bits 9/10 and full extension word bit (8)
                             auto disp = static_cast<int8_t>(extw & 255);
+                            #if 0
                             std::cout << "$";
                             if (disp < 0) {
                                 std::cout << "-";
                                 disp = -disp;
                             }
-                            std::cout << hexfmt(static_cast<uint8_t>(disp)) << "(PC,";
+                            std::cout << hexfmt(static_cast<uint8_t>(disp));
+                            #else
+                            print_addr(pos + 2 + disp);
+                            #endif
+                            std::cout << "(PC,";
                             std::cout << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
                             std::cout << ")";
                             // TODO: Handle know values..
@@ -2254,13 +2371,9 @@ private:
         uint32_t beg;
         uint32_t end;
     };
-    struct label_info {
-        std::string name;
-        const type* t;
-    };
     std::vector<bool> written_;
     std::vector<uint8_t> data_;
-    std::queue<std::pair<uint32_t, simregs>> roots_;
+    std::vector<std::pair<uint32_t, simregs>> roots_;
     std::map<uint32_t, simregs> visited_;
     std::map<uint32_t, label_info> labels_;
     std::map<uint32_t, function_description> functions_;
@@ -2268,6 +2381,7 @@ private:
     std::vector<area> areas_;
     std::vector<std::pair<uint32_t, label_info>> predef_info_;
     std::vector<area> ignored_areas_;
+    std::multimap<uint32_t, std::pair<regname, uint32_t>> forced_values_; 
     uint32_t exec_base_ = 0;
     std::map<std::string, uint32_t> library_bases_;
     uint32_t fake_process_ = 0;
@@ -2297,6 +2411,16 @@ private:
                 break;
         }
         areas.insert(it, { beg, end });
+    }
+
+    void process_roots()
+    {
+        while (!roots_.empty()) {
+            const auto r = roots_.back();
+            roots_.pop_back();
+            regs_ = r.second;
+            trace(r.first);
+        }
     }
 
     std::map<uint32_t, label_info>::const_iterator maybe_print_label(uint32_t pos) const
@@ -2501,10 +2625,25 @@ private:
 
     bool print_addr_maybe(uint32_t addr)
     {
-        if (auto it = labels_.find(addr); it != labels_.end()) {
-            std::cout << it->second.name;
+        if (auto [lp, offset] = find_label(addr); lp) {
+            std::cout << lp->name;
+            if (offset) {
+                if (offset < 0) {
+                    std::cout << "-";
+                    offset = -offset;
+                    assert(!"TODO: Check this");
+                } else {
+                    std::cout << "+";
+                }
+                std::cout << "$" << hexfmt(offset, offset < 0x10000 ? offset < 0x100 ? 2 :  4 : 8);                
+            }
             return true;
         }
+
+        //if (auto it = labels_.find(addr); it != labels_.end()) {
+        //    std::cout << it->second.name;
+        //    return true;
+        //}
 
         if (addr == 4) {
             std::cout << "AbsExecBase";
@@ -2649,8 +2788,11 @@ private:
                 }
                 case ea_other_pc_index: {
                     assert(eaw < inst.ilen);
+                    assert(eaw == 1); // Will be printed wrong since we don't know the address
                     const auto extw = iwords[eaw++];
+                    const auto disp = static_cast<int8_t>(extw & 0xff);
                     ea_data_[i] = static_cast<uint32_t>(extw);
+                    add_auto_label(addr + (eaw - 1) * 2 + disp, unknown_type);
                     // TODO: ea_val_
                     // TODO: ea_addr_
                     break;
@@ -2971,6 +3113,12 @@ private:
         }
     }
 
+    auto& reg_from_name(regname reg)
+    {
+        assert(static_cast<uint32_t>(reg) < 16);
+        return (reg >= regname::A0 ? regs_.a : regs_.d)[static_cast<uint8_t>(reg) & 7];
+    }
+
     void do_branch(uint32_t addr, bool is_func)
     {
         auto it = functions_.find(addr);
@@ -2987,8 +3135,8 @@ private:
         //std::cerr << "Found function at $" << hexfmt(addr) << "\n";
         const auto& fd = it->second;
         for (const auto& i : fd.input()) {
-            const auto& reg = (i.reg >= regname::A0 ? regs_.a : regs_.d)[static_cast<uint8_t>(i.reg) & 7];
-            //std::cout << i.reg << " = " << reg << " -> type " << *i.t << "\n";
+            const auto& reg = reg_from_name(i.reg);
+            //std::cerr << i.reg << " = " << reg << " -> type " << *i.t << "\n";
             if (auto pt = i.t->ptr()) {
                 if (reg.known()) {
                     if (pt == &code_type) {
@@ -3036,6 +3184,11 @@ private:
             read_instruction(iwords, addr);
             const auto& inst = instructions[iwords[0]];
             addr += 2 * inst.ilen;
+
+            auto forced = forced_values_.equal_range(start);
+            for (auto fit = forced.first; fit != forced.second; ++fit) {
+                reg_from_name(fit->second.first) = simval { fit->second.second };
+            }
 
             #if 0
             if (1 /*start >= 0x00fe9174 && start <= 0x00fe9272*/) {
@@ -3087,6 +3240,15 @@ private:
             case inst_type::RTE:
             case inst_type::RTR:
                 return;
+
+            case inst_type::EXG: {
+                auto get_reg = [&](uint8_t ea) -> simval& {
+                    assert(ea < 16);
+                    return (ea < 8 ? regs_.d : regs_.a)[ea & 7];
+                };
+                std::swap(get_reg(inst.ea[0]), get_reg(inst.ea[1]));
+            }
+            break;
 
             default:
                 for (int i = 0; i < inst.nea; ++i) {
@@ -3398,9 +3560,10 @@ void analyzer::handle_predef_info()
     for (const auto& i : predef_info_) {
         const auto& t = *i.second.t;
         add_label(i.first, i.second.name, t);
-        handle_data_at(i.first, t);
+        // Don't add root here in case better register values can be inferred
+        if (&t != &code_type)
+            handle_data_at(i.first, t);
     }
-    predef_info_.clear();
 }
 
 
@@ -3586,8 +3749,8 @@ private:
         if (size < 8)
             throw std::runtime_error { "Invalid HUNK_DEBUG size " + std::to_string(size) };
 
-        std::cout << "HUNK_DEBUG ";
-        hexdump(std::cout, &data_[pos_], 8);
+        std::cerr << "HUNK_DEBUG ";
+        hexdump(std::cerr, &data_[pos_], 8);
 
         pos_ += size;
     }
@@ -3658,7 +3821,7 @@ void hunk_file::read_hunk_exe()
                 throw std::runtime_error { "Out of fast mem" };
         }
         hunks[i].data.resize(size);
-        std::cout << "Hunk " << i << " $" << hexfmt(size) << " " << (flags == 1 ? "CHIP" : flags == 2 ? "FAST" : "    ") << " @ " << hexfmt(hunks[i].addr) << "\n";
+        std::cerr << "Hunk " << i << " $" << hexfmt(size) << " " << (flags == 1 ? "CHIP" : flags == 2 ? "FAST" : "    ") << " @ " << hexfmt(hunks[i].addr) << "\n";
     }
 
     uint32_t table_index = 0;
@@ -3676,7 +3839,7 @@ void hunk_file::read_hunk_exe()
             throw std::runtime_error { "Expected libvec_code, DATA or BSS hunk for hunk " + std::to_string(hunk_num) + " got " + hunk_type_string(hunk_type) };
         const uint32_t hunk_longs = read_u32();
         const uint32_t hunk_bytes = hunk_longs << 2;
-        std::cout << "\tHUNK_" << (hunk_type == HUNK_CODE ? "CODE" : hunk_type == HUNK_DATA ? "DATA" : "BSS ") << " size = $" << hexfmt(hunk_bytes) << "\n";
+        std::cerr << "\tHUNK_" << (hunk_type == HUNK_CODE ? "CODE" : hunk_type == HUNK_DATA ? "DATA" : "BSS ") << " size = $" << hexfmt(hunk_bytes) << "\n";
 
         hunks[hunk_num].type = hunk_type;
         hunks[hunk_num].loaded_size = hunk_bytes;
@@ -3693,13 +3856,13 @@ void hunk_file::read_hunk_exe()
 
         while (pos_ <= data_.size() - 4 && !is_initial_hunk(get_u32(&data_[pos_]))) {
             const auto ht = read_u32();
-            std::cout << "\t\t" << hunk_type_string(ht) << "\n";
+            std::cerr << "\t\t" << hunk_type_string(ht) << "\n";
             switch (ht) {
             case HUNK_SYMBOL: {
                 auto syms = read_hunk_symbol();
                 for (auto& s : syms) {
                     symbols.push_back({ std::move(s.name), hunks[hunk_num].addr + s.addr });
-                    std::cout << "\t\t\t$" << hexfmt(symbols.back().addr) << "\t" << symbols.back().name << "\n"; 
+                    std::cerr << "\t\t\t$" << hexfmt(symbols.back().addr) << "\t" << symbols.back().name << "\n"; 
                 }
                 break;
             }
@@ -3722,9 +3885,9 @@ void hunk_file::read_hunk_exe()
                 // HACK: Just skip everything after HUNK_OVERLAY for now...
                 // See http://aminet.net/package/docs/misc/Overlay for more info
                 const auto overlay_table_size = read_u32() + 1;
-                std::cout << "\t\t\tTable size " << overlay_table_size << "\n";
+                std::cerr << "\t\t\tTable size " << overlay_table_size << "\n";
                 check_pos(overlay_table_size << 2);
-                hexdump(std::cout, &data_[pos_], overlay_table_size << 2);
+                hexdump(std::cerr, &data_[pos_], overlay_table_size << 2);
                 table_index = table_size - 1;
                 pos_ = static_cast<uint32_t>(data_.size()); // Skip to end
                 break;
@@ -3773,7 +3936,7 @@ void hunk_file::read_hunk_unit()
         throw std::runtime_error { "Analyze not supported for HUNK_UNIT" };
 
     const auto unit_name = read_string();
-    std::cout << "HUNK_UNIT '" << unit_name << "'\n";
+    std::cerr << "HUNK_UNIT '" << unit_name << "'\n";
 
     std::vector<std::vector<uint8_t>> code_hunks;
 
@@ -3784,14 +3947,14 @@ void hunk_file::read_hunk_unit()
         switch (hunk_type) {
         case HUNK_NAME: {
             const auto name = read_string();
-            std::cout << "\tHUNK_NAME " << name << "\n";
+            std::cerr << "\tHUNK_NAME " << name << "\n";
             break;
         }
         case HUNK_CODE:
         case HUNK_DATA: {
             const auto size = read_u32() << 2;
             check_pos(size);
-            std::cout << "\t" << hunk_type_string(hunk_type) << " size=$" << hexfmt(size) << " flags=" << (flags>>1) << "\n";
+            std::cerr << "\t" << hunk_type_string(hunk_type) << " size=$" << hexfmt(size) << " flags=" << (flags>>1) << "\n";
             if (hunk_type == HUNK_CODE)
                 code_hunks.push_back(std::vector<uint8_t>(&data_[pos_], &data_[pos_ + size]));
             pos_ += size;
@@ -3799,23 +3962,23 @@ void hunk_file::read_hunk_unit()
         }
         case HUNK_BSS: {
             const auto size = read_u32() << 2;
-            std::cout << "\t" << hunk_type_string(hunk_type) << " size=$" << hexfmt(size) << " flags=" << (flags >> 1) << "\n";
+            std::cerr << "\t" << hunk_type_string(hunk_type) << " size=$" << hexfmt(size) << " flags=" << (flags >> 1) << "\n";
             break;
         }
         case HUNK_RELOC32:
-            std::cout << "\t" << hunk_type_string(hunk_type) << "\n";
+            std::cerr << "\t" << hunk_type_string(hunk_type) << "\n";
             read_hunk_reloc32();
             break;
         case HUNK_EXT: {
-            std::cout << "\t" << hunk_type_string(hunk_type) << "\n";
+            std::cerr << "\t" << hunk_type_string(hunk_type) << "\n";
             while (const auto ext = read_u32()) {
                 const auto sym_type = static_cast<uint8_t>(ext >> 24);
                 const auto name     = read_string_size(ext & 0xffffff);
-                std::cout << "\t\t" << ext_type_string(sym_type) << "\t" << name << "\n";
+                std::cerr << "\t\t" << ext_type_string(sym_type) << "\t" << name << "\n";
                 switch (sym_type) {
                 case EXT_DEF: {
                     const auto offset = read_u32();
-                    std::cout << "\t\t\t$" << hexfmt(offset) << "\n";
+                    std::cerr << "\t\t\t$" << hexfmt(offset) << "\n";
                     break;
                 }
                 case EXT_REF8:
@@ -3824,7 +3987,7 @@ void hunk_file::read_hunk_unit()
                     const auto nref = read_u32();
                     for (uint32_t i = 0; i < nref; ++i) {
                         const auto offset = read_u32();
-                        std::cout << "\t\t\t$" << hexfmt(offset) << "\n";
+                        std::cerr << "\t\t\t$" << hexfmt(offset) << "\n";
                     }
                     break;
                 }
@@ -3835,15 +3998,15 @@ void hunk_file::read_hunk_unit()
             break;
         }
         case HUNK_SYMBOL: {
-            std::cout << "\t" << hunk_type_string(hunk_type) << "\n";
+            std::cerr << "\t" << hunk_type_string(hunk_type) << "\n";
             const auto syms = read_hunk_symbol();
             for (const auto& s : syms) {
-                std::cout << "\t\t$" << hexfmt(s.addr) << "\t" << s.name << "\n";
+                std::cerr << "\t\t$" << hexfmt(s.addr) << "\t" << s.name << "\n";
             }
             break;
         }
         case HUNK_END:
-            std::cout << "\t" << hunk_type_string(hunk_type) << "\n";
+            std::cerr << "\t" << hunk_type_string(hunk_type) << "\n";
             break;
         default:
             throw std::runtime_error { "Unsupported HUNK type " + hunk_type_string(hunk_type) + " in unit" };
@@ -4105,8 +4268,13 @@ int main(int argc, char* argv[])
             if (a) {
                 if (argc <= 2)
                     throw std::runtime_error { "Missing start PC" };
-                a->write_data(0, data.data(), static_cast<uint32_t>(data.size()));
-                a->add_root(hex_or_die(argv[2]), simregs {});
+                uint32_t load_base = 0;
+                if (argc > 3)
+                    load_base = hex_or_die(argv[3]);
+                a->write_data(load_base, data.data(), static_cast<uint32_t>(data.size()));
+                const auto start = hex_or_die(argv[2]);
+                a->add_label(start, "Start", code_type);
+                a->add_root(start, simregs {});
                 a->run();
             } else {
                 if (argc > 4)
