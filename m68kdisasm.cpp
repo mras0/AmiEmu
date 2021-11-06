@@ -59,6 +59,38 @@ constexpr const char* const cia_regname[16] = {
     "crb"
 };
 
+constexpr const char* const ciaapra_bitnames[8] = {
+    "OVL",
+    "/LED",
+    "/CHNG",
+    "/WPRO",
+    "/TK0",
+    "/RDY",
+    "/FIR0",
+    "/FIR1",
+};
+
+constexpr const char* const ciabpra_bitnames[8] = {
+    "BUSY",
+    "POUT",
+    "SEL",
+    "/DSR",
+    "/CTS",
+    "/CD",
+    "/RTS",
+    "/DTS",
+};
+
+constexpr const char* const ciabprb_bitnames[8] = {
+    "/STEP",
+    "DIR",
+    "/SIDE",
+    "/SEL0",
+    "/SEL1",
+    "/SEL2",
+    "/SEL3",
+    "/MTR",
+};
 
 constexpr const char* const custom_regname[0x100] = {
     "BLTDDAT",
@@ -319,6 +351,62 @@ constexpr const char* const custom_regname[0x100] = {
     "CUSTOM_NOOP",
 };
 
+constexpr const char* const dmacon_bitnames[16] = {
+    "AUD0EN",
+    "AUD1EN",
+    "AUD2EN",
+    "AUD3EN",
+    "DSKEN",
+    "SPREN",
+    "BLTEN",
+    "COPEN",
+    "BPLEN",
+    "DMAEN",
+    "BLTPRI",
+    "BIT11",
+    "BIT12",
+    "BZERO",
+    "BBUSY",
+    "SET/CLR",
+};
+
+std::string interrupt_name(uint8_t vec)
+{
+    switch (vec) {
+    case 2:
+        return "BusError";
+    case 3:
+        return "BusError";
+    case 4:
+        return "IllegalInstruction";
+    case 5:
+        return "ZeroDivide";
+    case 6:
+        return "ChkException";
+    case 7:
+        return "TrapVException";
+    case 8:
+        return "PrivililegeViolation";
+    case 9:
+        return "TraceException";
+    case 10:
+        return "Line1010Exception";
+    case 11:
+        return "Line1111Exception";
+    case 25:
+    case 26:
+    case 27:
+    case 28:
+    case 29:
+    case 30:
+    case 31:
+        return "Level" + std::to_string(vec - 24);
+    }
+    if (vec >= 32 && vec < 48)
+        return "Trap" + hexstring(vec - 32, 1);
+    return "Interrupt" + hexstring(vec, 2);
+}
+
 class simval {
 public:
     simval()
@@ -410,6 +498,7 @@ enum class base_data_type {
     word_,
     long_,
     code_,
+    copper_code_,
     ptr_,
     struct_,
 };
@@ -474,12 +563,14 @@ const type byte_type { base_data_type::byte_ };
 const type word_type { base_data_type::word_ };
 const type long_type { base_data_type::long_ };
 const type code_type { base_data_type::code_ };
+const type copper_code_type { base_data_type::copper_code_ };
 const type unknown_ptr { unknown_type, 0 };
 const type char_ptr { char_type, 0 };
 const type byte_ptr { byte_type, 0 };
 const type word_ptr { word_type, 0 };
 const type long_ptr { long_type, 0 };
 const type code_ptr { code_type, 0 };
+const type copper_code_ptr { copper_code_type, 0 };
 // For now just alias these to long
 const type& bptr_type = long_type;
 const type& bstr_type = long_type;
@@ -491,6 +582,7 @@ std::unordered_map<std::string, const type*> typenames {
     { "WORD", &word_type },
     { "LONG", &long_type },
     { "CODE", &code_type },
+    { "COPPER", &copper_code_type },
 };
 
 uint32_t sizeof_type(const type& t);
@@ -753,6 +845,8 @@ std::ostream& operator<<(std::ostream& os, const type& t)
         return os << "LONG";
     case base_data_type::code_:
         return os << "CODE";
+    case base_data_type::copper_code_:
+        return os << "COPPER";
     case base_data_type::struct_:
         return os << "struct " << t.struct_def()->name();
     }
@@ -770,6 +864,7 @@ uint32_t sizeof_type(const type& t)
     case base_data_type::byte_:
         return 1;
     case base_data_type::word_:
+    case base_data_type::copper_code_:
         return 2;
     case base_data_type::long_:
         return 4;
@@ -1741,6 +1836,54 @@ const structure_definition IntuitionBase {
     }
 };
 
+
+void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simval& aval)
+{
+    if (!aval.known())
+        return;
+    const auto addr = aval.raw();
+    if (addr >= 0xA00000 && addr < 0xC00000) {
+        const char* name = "";
+        const auto reg = (addr >> 8) & 0xf;
+        assert(bitnum < 8);
+        switch ((addr >> 12) & 3) {
+        case 0: // Both!
+        case 3: // Niether!
+            return;
+        case 1: // CIAB
+            name = "ciab";
+            if (reg == 0 || reg == 2) {
+                extra << " bit " << static_cast<int>(bitnum) << " = " << ciabpra_bitnames[bitnum];
+                return;
+            }
+            if (reg == 1 || reg == 3) {
+                extra << " bit " << static_cast<int>(bitnum) << " = " << ciabprb_bitnames[bitnum];
+                return;
+            }
+            break;
+        case 2: // CIAA
+            name = "ciaa";
+            if (reg == 0 || reg == 2) {
+                extra << " bit " << static_cast<int>(bitnum) << " = " << ciaapra_bitnames[bitnum];
+                return;
+            }
+            break;
+        }
+        std::cerr << "TODO: Add bitnum info for " << name << " register " << cia_regname[reg] << "\n";
+        return;
+    } else if (addr >= 0xDE0000 && addr < 0xE00000) {
+        const auto reg = (addr & 0x1fe);
+        if (!(addr & 1))
+            bitnum += 8;
+        if (reg == 0x02 || reg == 0x96) {
+            // DMACON(R)
+            extra << " bit " << static_cast<int>(bitnum) << " = " << dmacon_bitnames[bitnum];
+            return;
+        }
+        std::cerr << "TODO: Add bitnum info for custom register " << custom_regname[reg >> 1] << "\n";
+    }    
+}
+
 class analyzer {
 public:
     explicit analyzer()
@@ -1829,18 +1972,17 @@ public:
             if (parts.size() != 3)
                 throw std::runtime_error { "Error in " + filename + " line " + std::to_string(linenum) + ": " + line };
 
-            if (parts[0] == "IGNORE") {
-                const auto [ok1, ibeg] = from_hex(parts[1]);
-                const auto [ok2, iend] = from_hex(parts[2]);
-                if (!ok1 || !ok2)
-                    throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
-                insert_area(ignored_areas_, ibeg, iend);
-                continue;
-            }
-
             const auto [ok, addr] = from_hex(parts[0]);
             if (!ok)
                 throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
+
+            if (parts[1] == "IGNORE") {
+                const auto [ok2, iend] = from_hex(parts[2]);
+                if (!ok2)
+                    throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
+                insert_area(ignored_areas_, addr, iend);
+                continue;
+            }
 
             const auto t = parse_type(parts[1]);
             if (!t)
@@ -1869,8 +2011,8 @@ public:
                     }
                     // TODO outputs..
                     functions_.insert({ addr, function_description { {}, input } });
+                    lab.erase(pos);
                 }
-                lab.erase(pos);
             }
             predef_info_.push_back({ addr, { lab, t } });
         }
@@ -1886,13 +2028,46 @@ public:
         insert_area(areas_, addr, addr + length);
     }
 
+    void add_start_root(uint32_t start)
+    {
+        // Only add if not supplied in info file
+        auto it = std::find_if(predef_info_.begin(), predef_info_.end(), [start](const auto& pi) { return pi.first == start; });
+        if (it == predef_info_.end()) {
+            add_label(start, "Start", code_type);
+            add_root(start, simregs {}, true);
+        } else if (it->second.t != &code_type) {
+            std::cerr << "Warning: " << it->second.name << " should be CODE type since it's supplied as start root\n";
+        }
+    }
+
+    void add_int_vectors()
+    {
+        // Add roots for all defined interrupt vectors up to and including traps
+        for (uint8_t i = 2; i < 48; ++i) {
+            if (!written_[i * 4])
+                continue;
+            auto ptr = get_u32(&data_[i * 4]);
+            if (!pointer_ok(ptr))
+                continue;
+            // Only add if not supplied in info file
+            auto it = std::find_if(predef_info_.begin(), predef_info_.end(), [ptr](const auto& pi) { return pi.first == ptr; });
+            if (it == predef_info_.end()) {
+                add_label(ptr, interrupt_name(i) + "Handler", code_type);
+                add_root(ptr, simregs {}, true);
+            } else if (it->second.t != &code_type) {
+                std::cerr << "Warning: " << it->second.name << " should be CODE type since it's an interrupt handler for " << interrupt_name(i) << "\n";
+            }
+            add_auto_label(i * 4, code_ptr);
+        }
+    }
+
     void add_root(uint32_t addr, const simregs& regs, bool force = false, bool is_func = true)
     {
         if (addr >= max_mem || (addr & 1))
             return;
 
         // Don't visit non-written areas
-        if (!force && (!written_[addr] || addr < 0x400))
+        if (!force && (!written_[addr] || addr < 32*4))
             return;
 
         if (visited_.find(addr) == visited_.end()) {
@@ -1961,58 +2136,17 @@ public:
 
     void add_auto_label(uint32_t addr, const type& t, const std::string& prefix = "dat")
     {
-        if (addr < 0x400 && (addr & 3) == 0) {
+        if (addr < 0x400 && (addr & 3) == 0 && &t != &code_type) {
             // Interrupt vector
-            const auto vec = addr >> 2;
-            std::string lab = "Interrupt" + hexstring(vec, 2) + "Vec";
+            const auto vec = static_cast<uint8_t>(addr >> 2);
             switch (vec) {
             case 0: // Reset ssp
             case 1: // Reset PC
-                return;
-            case 2:
-                lab = "BusErrorVec";
-                break;
-            case 3:
-                lab = "BusErrorVec";
-                break;
-            case 4:
-                lab = "IllegalInstructionVec";
-                break;
-            case 5:
-                lab = "ZeroDivideVec";
-                break;
-            case 6:
-                lab = "ChkExceptionVec";
-                break;
-            case 7:
-                lab = "TrapVExceptionVec";
-                break;
-            case 8:
-                lab = "PrivililegeViolationVec";
-                break;
-            case 9:
-                lab = "TraceExceptionVec";
-                break;
-            case 10:
-                lab = "Line1010ExceptionVec";
-                break;
-            case 11:
-                lab = "Line1111ExceptionVec";
-                break;
-            case 25:
-            case 26:
-            case 27:
-            case 28:
-            case 29:
-            case 30:
-            case 31:
-                lab = "Level" + std::to_string(vec - 24) + "Vec";
                 break;
             default:
-                if (vec >= 32 && vec < 48)
-                    lab = "Trap" + hexstring(vec - 32, 1) + "Vec";
+                add_label(addr, interrupt_name(vec) + "Vec", code_ptr);
+                break;
             }
-            add_label(addr, lab, code_ptr);
             return;
         }
 
@@ -2124,7 +2258,7 @@ public:
         // Now add any predefined roots that were not automatically inferred
         for (const auto& pi : predef_info_) {
             if (pi.second.t == &code_type && visited_.find(pi.first) == visited_.end())
-                add_root(pi.first, simregs {});
+                add_root(pi.first, simregs {}, true);
         }
         process_roots();
 
@@ -2343,6 +2477,8 @@ public:
                             std::cout << reg_list_string(static_cast<uint16_t>(ea_data_[i]), i == 0 && (inst.ea[1] >> 3) == ea_m_A_ind_pre);
                         } else if (ea == ea_bitnum) {
                             std::cout << "#" << ea_data_[i];
+                            assert(i == 0 && inst.nea == 2);
+                            maybe_add_bitnum_info(extra, static_cast<uint8_t>(ea_data_[i]), ea_addr_[1]);
                         } else if (ea == ea_disp) {
                             print_addr(ea_addr_[i].raw());
                         } else {
@@ -2432,8 +2568,9 @@ private:
         return it;
     }
 
-    void handle_array_range(uint32_t& pos, uint32_t end, uint32_t elemsize)
+    void handle_array_range(uint32_t& pos, uint32_t end, uint32_t elemsize, bool is_ptr = false)
     {
+        assert(!is_ptr || elemsize == 4);
         const uint32_t startpos = pos;
         assert(elemsize == 1 || elemsize == 2 || elemsize == 4);
         assert((end - startpos) % elemsize == 0);
@@ -2453,8 +2590,12 @@ private:
 
             if (runlen > elem_per_line || (runlen > 1 && pos == startpos && runend == end)) {
                 const uint32_t val = elemsize == 1 ? data_[pos] : elemsize == 2 ? get_u16(&data_[pos]) : get_u32(&data_[pos]);
-                std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8)
-                          << ", $" << hexfmt(val, 2 * elemsize) << "\n";
+                std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8) << ", ";
+                if (is_ptr)
+                    print_addr(val);
+                else
+                    std::cout << "$" << hexfmt(val, 2 * elemsize);
+                std::cout << "\n";
                 pos += runlen * elemsize;
                 continue;
             }
@@ -2463,13 +2604,14 @@ private:
             for (uint32_t i = 0; i < here && pos < end; ++i) {
                 if (i)
                     std::cout << ", ";
-                std::cout << "$";
                 if (elemsize == 1)
-                    std::cout << hexfmt(data_[pos]);
+                    std::cout << "$" << hexfmt(data_[pos]);
                 else if (elemsize == 2)
-                    std::cout << hexfmt(get_u16(&data_[pos]));
+                    std::cout << "$" << hexfmt(get_u16(&data_[pos]));
+                else if (is_ptr)
+                    print_addr(get_u32(&data_[pos]));
                 else
-                    std::cout << hexfmt(get_u32(&data_[pos]));
+                    std::cout << "$" << hexfmt(get_u32(&data_[pos]));
                 pos += elemsize;
             }
             std::cout << "\n";
@@ -2527,6 +2669,33 @@ private:
             std::cout << "\n";
     }
 
+    void handle_copper_code(uint32_t& pos, uint32_t next_pos, uint32_t len)
+    {
+        assert(len % 2 == 0);
+        assert(pos + len * 2 <= next_pos);
+        while (pos < next_pos && len) {
+            const auto ir1 = get_u16(&data_[pos]);
+            const auto ir2 = get_u16(&data_[pos + 2]);
+            pos += 4;
+            len -= 2;
+            if (ir1 & 1) {
+                // Wait/skip
+                std::cout << "\tdc.w\t$" << hexfmt(ir1) << ", $" << hexfmt(ir2) << "\t; ";
+                if (ir1 == 0xffff && ir2 == 0xfffe) {
+                    std::cout << "End of copperlist\n";
+                } else {
+                    const auto vp = (ir1 >> 8) & 0xff;
+                    const auto hp = ir1 & 0xfe;
+                    const auto ve = 0x80 | ((ir2 >> 8) & 0x7f);
+                    const auto he = ir2 & 0xfe;
+                    std::cout << (ir2 & 1 ? "Skip if" : "Wait for") << " vpos >= $" << hexfmt(vp & ve, 2) << " and hpos >= $" << hexfmt(hp & he, 2) << " BFD " << !!(ir2 & 0x8000) << "\n";
+                }
+            } else {
+                std::cout << "\tdc.w\t" << custom_regname[(ir1 >> 1) & 0xff] << ", $" << hexfmt(ir2) << "\n"; 
+            }
+        }
+    }
+
     bool handle_typed_data(uint32_t& pos, uint32_t next_pos, const type& t, std::string name="")
     {
         switch (t.base()) {
@@ -2550,13 +2719,15 @@ private:
             if (t.len()) {
                 if (t.ptr()->base() == base_data_type::char_) {
                     handle_char_array(pos, next_pos, t.len());
+                } else if (t.ptr()->base() == base_data_type::copper_code_) {
+                    handle_copper_code(pos, next_pos, t.len());
                 } else {
                     const auto elem_size = sizeof_type(*t.ptr());
                     if (elem_size > 4) {
                         assert(false);
                         throw std::runtime_error { "TODO: Handle array of something other than elementary types" };
                     }
-                    handle_array_range(pos, std::min(pos + elem_size * t.len(), next_pos), elem_size);
+                    handle_array_range(pos, std::min(pos + elem_size * t.len(), next_pos), elem_size, t.ptr()->ptr() != nullptr);
                 }
             } else {
                 std::cout << "\tdc.l\t";
@@ -2596,28 +2767,42 @@ private:
     {
         assert(pos < end && end <= max_mem);
 
-        for (const auto& a : ignored_areas_) {
-            if (pos <= a.end && a.beg <= end) {
-                end = a.beg;
-                break;
+        while (pos < end) {
+            auto actual_end = end;
+            auto next_pos = end;
+            for (const auto& a : ignored_areas_) {
+                if (pos <= a.end && a.beg <= end) {
+                    actual_end = a.beg;
+                    next_pos = a.end + 2;
+                    break;
+                }
             }
+            handle_data_area_checked(pos, actual_end);
+            if (next_pos != end)
+                std::cout << "; Ignored area: $" << hexfmt(actual_end) << "-$" << hexfmt(next_pos-2) << "\n";
+            pos = next_pos;
         }
+    }
 
-        if (labels_.find(pos) == labels_.end())
-            std::cout << "; $" << hexfmt(pos) << "\n";
+    void handle_data_area_checked(uint32_t pos, uint32_t end)
+    {
         while (pos < end) {
             const auto next_label = labels_.upper_bound(pos);
             const auto next_pos = std::min(end, next_label == labels_.end() ? ~0U : next_label->first);
 
-            if (auto it = maybe_print_label(pos); it != labels_.end() && handle_typed_data(pos, next_pos, *it->second.t, it->second.name))
-                continue;
+            if (auto it = maybe_print_label(pos); it != labels_.end()) {
+                if (handle_typed_data(pos, next_pos, *it->second.t, it->second.name))
+                    continue;
+            } else {
+                std::cout << "; $" << hexfmt(pos) << "\n";
+            }
 
             // ALIGN
             if ((pos & 1) || next_pos == pos + 1) {
                 std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
                 if (++pos == next_pos)
                     continue;
-            }
+            }                
 
             handle_array_range(pos, next_pos & ~1, 2);
         }
@@ -2697,7 +2882,7 @@ private:
 
     uint16_t read_iword(uint32_t addr)
     {
-        if ((addr & 1) || addr < 0x400 || addr > max_mem - 2)
+        if ((addr & 1) || addr < 0x80 || addr > max_mem - 2)
             throw std::runtime_error { "Reading instruction word from invalid address $" + hexstring(addr) };
         return get_u16(&data_[addr]);
     }
@@ -3322,6 +3507,12 @@ private:
             return;
         }
 
+        // COP1LCH/COP2LCH (only handle normal addresses for now, not mirrored ones)
+        if (size == opsize::l && (addr == 0xDFF080 || addr == 0xDFF084)) {
+            maybe_find_copper_list_at(rv);
+            return;
+        }
+
         if (size == opsize::l && !(addr & 1) && addr < 0xa00000) {
             //std::cerr << "Saving at $" << hexfmt(addr) << ": $" << hexfmt(rv) << "\n";
             saved_pointers_.insert({ addr, rv });
@@ -3457,6 +3648,7 @@ private:
 
     void handle_struct_at(uint32_t addr, const structure_definition& s);
     void maybe_find_string_at(uint32_t addr);
+    void maybe_find_copper_list_at(uint32_t addr);
     void handle_data_at(uint32_t addr, const type& t);
     void handle_predef_info();
 };
@@ -3508,6 +3700,38 @@ void analyzer::maybe_find_string_at(uint32_t addr)
     add_label(start_addr, "text_" + hexstring(start_addr), make_array_type(char_type, len));
 }
 
+void analyzer::maybe_find_copper_list_at(uint32_t addr)
+{
+    addr &= ~1;
+    if (addr + 3 >= max_mem || !written_[addr])
+        return;
+    const auto start_addr = addr;
+    // Arbitrary limits
+    constexpr uint32_t max_len = 4096;
+    uint32_t len = 0;
+    while (addr + 3 < max_mem && written_[addr] && written_[addr+2] && len < max_len) {
+        const auto ir1 = get_u16(&data_[addr]);
+        const auto ir2 = get_u16(&data_[addr + 2]);
+
+        // Delete any automatic word labels here
+        if (auto it = labels_.find(addr); it != labels_.end() && it->second.name.find("dat_", 0) != std::string::npos) {
+            labels_.erase(it);
+        }
+        if (auto it = labels_.find(addr + 2); it != labels_.end() && it->second.name.find("dat_", 0) != std::string::npos) {
+            labels_.erase(it);
+        }
+
+        addr += 4;
+        ++len;
+        if (ir1 == 0xffff && ir2 == 0xfffe)
+            break;
+        // Copper jump?
+        if (ir1 == 0x88 || ir1 == 0x8a)
+            break;
+    }
+    add_label(start_addr, "copperlist_" + hexstring(start_addr), make_array_type(copper_code_type, len * 2));
+}
+
 void analyzer::handle_data_at(uint32_t addr, const type& t)
 {
     if (!pointer_ok(addr) || !written_[addr])
@@ -3541,6 +3765,10 @@ void analyzer::handle_data_at(uint32_t addr, const type& t)
                 return;
             } else if (t.ptr()->base() == base_data_type::struct_) {
                 std::cerr << "TODO: Pointer to struct at $" << hexfmt(p) << "!\n";
+                assert(0);
+                return;
+            } else if (t.ptr()->base() == base_data_type::copper_code_) {
+                std::cerr << "TODO: Pointer to copper at $" << hexfmt(p) << "!\n";
                 assert(0);
                 return;
             } else if (t.ptr() == &char_type) {
@@ -4266,15 +4494,17 @@ int main(int argc, char* argv[])
 
         } else {
             if (a) {
-                if (argc <= 2)
-                    throw std::runtime_error { "Missing start PC" };
+                uint32_t start = 0;
                 uint32_t load_base = 0;
+                if (argc > 2)
+                    start = hex_or_die(argv[2]);
                 if (argc > 3)
                     load_base = hex_or_die(argv[3]);
                 a->write_data(load_base, data.data(), static_cast<uint32_t>(data.size()));
-                const auto start = hex_or_die(argv[2]);
-                a->add_label(start, "Start", code_type);
-                a->add_root(start, simregs {});
+                if (start)
+                    a->add_start_root(hex_or_die(argv[2]));
+                if (!load_base)
+                    a->add_int_vectors();
                 a->run();
             } else {
                 if (argc > 4)
