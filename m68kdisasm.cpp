@@ -698,6 +698,8 @@ public:
         // handle auto offset
         int32_t offset = 0;
         for (auto& f : fields_) {
+            assert(sizeof_type(f.t()) != 0); // Must not use undefined structures etc. (pointers to structs are fine)
+            assert(!strchr(f.name_, ',') && !strchr(f.name_, '*')); // Check for some errors
             if (f.offset_ == struct_field::auto_offset)
                 f.offset_ = offset;
             offset = f.end_offset();
@@ -706,6 +708,7 @@ public:
         std::sort(fields_.begin(), fields_.end(), [](const struct_field& l, const struct_field& r) { return l.offset() < r.offset(); });
 
         if (!typenames.insert({ name_, &make_struct_type(*this) }).second) {
+            assert(false);
             throw std::runtime_error { "Redefinition of struct " + std::string { name_ } };
         }
     }
@@ -1321,14 +1324,34 @@ const structure_definition ExecBase {
 
 // TODO:
 #define TEMP_STRUCT(n) const structure_definition n { #n, {} }
-TEMP_STRUCT(View);
-TEMP_STRUCT(copinit);
 TEMP_STRUCT(bltnode);
 TEMP_STRUCT(TextFont);
 TEMP_STRUCT(SimpleSprite);
 TEMP_STRUCT(SignalSemaphore);
 TEMP_STRUCT(MonitorSpec);
-TEMP_STRUCT(AnalogSignalInterval);
+TEMP_STRUCT(ViewPort);
+TEMP_STRUCT(copinit);
+TEMP_STRUCT(cprlist);
+
+const structure_definition AnalogSignalInterval {
+    "AnalogSignalInterval",
+    {
+        { "asi_Start", word_type },
+        { "asi_Stop", word_type },
+    }
+};
+
+const structure_definition View {
+    "View",
+    {
+        { "ViewPort", make_pointer_type(make_struct_type(ViewPort)) },
+        { "LOFCprList", make_pointer_type(make_struct_type(cprlist)) },
+        { "SHFCprList", make_pointer_type(make_struct_type(cprlist)) },
+        { "DyOffset", word_type },
+        { "DxOffset", word_type },
+        { "Modes", word_type },
+    }
+};
 
 const structure_definition GfxBase {
     "GfxBase",
@@ -1340,9 +1363,13 @@ const structure_definition GfxBase {
         { "blitter", long_ptr },
         { "LOFlist", word_ptr },
         { "SHFlist", word_ptr },
-        { "blthd,*blttl", make_pointer_type(make_struct_type(bltnode)) },
-        { "bsblthd,*bsblttl", make_pointer_type(make_struct_type(bltnode)) },
-        { "vbsrv,timsrv,bltsrv", make_struct_type(Interrupt) },
+        { "blthd", make_pointer_type(make_struct_type(bltnode)) },
+        { "blttl", make_pointer_type(make_struct_type(bltnode)) },
+        { "bsblthd", make_pointer_type(make_struct_type(bltnode)) },
+        { "bsblttl", make_pointer_type(make_struct_type(bltnode)) },
+        { "vbsrv", make_struct_type(Interrupt) },
+        { "timsrv", make_struct_type(Interrupt) },
+        { "bltsrv", make_struct_type(Interrupt) },
         { "TextFonts", make_struct_type(List) },
         { "DefaultFont", make_pointer_type(make_struct_type(TextFont)) },
         { "Modes", word_type },
@@ -1359,7 +1386,7 @@ const structure_definition GfxBase {
         { "BlitOwner", make_pointer_type(make_struct_type(Task)) },
         { "TOF_WaitQ", make_struct_type(List) },
         { "DisplayFlags", word_type },
-        { "*SimpleSprites", make_pointer_type(make_struct_type(SimpleSprite)) },
+        { "SimpleSprites", make_pointer_type(make_pointer_type(make_struct_type(SimpleSprite))) },
         { "MaxDisplayRow", word_type },
         { "MaxDisplayColumn", word_type },
         { "NormalDisplayRows", word_type },
@@ -1830,9 +1857,139 @@ const structure_definition IntuitionBase {
         { "ActiveScreen", make_pointer_type(make_struct_type(Screen)) },
         { "FirstScreen", make_pointer_type(make_struct_type(Screen)) },
         { "Flags", long_type },
-        { "MouseY,", word_type },
+        { "MouseY", word_type },
+        { "MouseX", word_type },
         { "Seconds", long_type },
         { "Micros", long_type },
+
+        { "_LVOOpenIntuition", libvec_code, -30 },
+        { "_LVOIntuition", libvec_code, -36 },
+        { "_LVOAddGadget", libvec_code, -42 },
+        { "_LVOClearDMRequest", libvec_code, -48 },
+        { "_LVOClearMenuStrip", libvec_code, -54 },
+        { "_LVOClearPointer", libvec_code, -60 },
+        { "_LVOCloseScreen", libvec_code, -66 },
+        { "_LVOCloseWindow", libvec_code, -72 },
+        { "_LVOCloseWorkBench", libvec_code, -78 },
+        { "_LVOCurrentTime", libvec_code, -84 },
+        { "_LVODisplayAlert", libvec_code, -90 },
+        { "_LVODisplayBeep", libvec_code, -96 },
+        { "_LVODoubleClick", libvec_code, -102 },
+        { "_LVODrawBorder", libvec_code, -108 },
+        { "_LVODrawImage", libvec_code, -114 },
+        { "_LVOEndRequest", libvec_code, -120 },
+        { "_LVOGetDefPrefs", libvec_code, -126 },
+        { "_LVOGetPrefs", libvec_code, -132 },
+        { "_LVOInitRequester", libvec_code, -138 },
+        { "_LVOItemAddress", libvec_code, -144 },
+        { "_LVOModifyIDCMP", libvec_code, -150 },
+        { "_LVOModifyProp", libvec_code, -156 },
+        { "_LVOMoveScreen", libvec_code, -162 },
+        { "_LVOMoveWindow", libvec_code, -168 },
+        { "_LVOOffGadget", libvec_code, -174 },
+        { "_LVOOffMenu", libvec_code, -180 },
+        { "_LVOOnGadget", libvec_code, -186 },
+        { "_LVOOnMenu", libvec_code, -192 },
+        { "_LVOOpenScreen", libvec_code, -198 },
+        { "_LVOOpenWindow", libvec_code, -204 },
+        { "_LVOOpenWorkBench", libvec_code, -210 },
+        { "_LVOPrintIText", libvec_code, -216 },
+        { "_LVORefreshGadgets", libvec_code, -222 },
+        { "_LVORemoveGadget", libvec_code, -228 },
+        { "_LVOReportMouse", libvec_code, -234 },
+        { "_LVORequest", libvec_code, -240 },
+        { "_LVOScreenToBack", libvec_code, -246 },
+        { "_LVOScreenToFront", libvec_code, -252 },
+        { "_LVOSetDMRequest", libvec_code, -258 },
+        { "_LVOSetMenuStrip", libvec_code, -264 },
+        { "_LVOSetPointer", libvec_code, -270 },
+        { "_LVOSetWindowTitles", libvec_code, -276 },
+        { "_LVOShowTitle", libvec_code, -282 },
+        { "_LVOSizeWindow", libvec_code, -288 },
+        { "_LVOViewAddress", libvec_code, -294 },
+        { "_LVOViewPortAddress", libvec_code, -300 },
+        { "_LVOWindowToBack", libvec_code, -306 },
+        { "_LVOWindowToFront", libvec_code, -312 },
+        { "_LVOWindowLimits", libvec_code, -318 },
+        { "_LVOSetPrefs", libvec_code, -324 },
+        { "_LVOIntuiTextLength", libvec_code, -330 },
+        { "_LVOWBenchToBack", libvec_code, -336 },
+        { "_LVOWBenchToFront", libvec_code, -342 },
+        { "_LVOAutoRequest", libvec_code, -348 },
+        { "_LVOBeginRefresh", libvec_code, -354 },
+        { "_LVOBuildSysRequest", libvec_code, -360 },
+        { "_LVOEndRefresh", libvec_code, -366 },
+        { "_LVOFreeSysRequest", libvec_code, -372 },
+        { "_LVOMakeScreen", libvec_code, -378 },
+        { "_LVORemakeDisplay", libvec_code, -384 },
+        { "_LVORethinkDisplay", libvec_code, -390 },
+        { "_LVOAllocRemember", libvec_code, -396 },
+        { "_LVOAlohaWorkbench", libvec_code, -402 },
+        { "_LVOFreeRemember", libvec_code, -408 },
+        { "_LVOLockIBase", libvec_code, -414 },
+        { "_LVOUnlockIBase", libvec_code, -420 },
+        { "_LVOGetScreenData", libvec_code, -426 },
+        { "_LVORefreshGList", libvec_code, -432 },
+        { "_LVOAddGList", libvec_code, -438 },
+        { "_LVORemoveGList", libvec_code, -444 },
+        { "_LVOActivateWindow", libvec_code, -450 },
+        { "_LVORefreshWindowFrame", libvec_code, -456 },
+        { "_LVOActivateGadget", libvec_code, -462 },
+        { "_LVONewModifyProp", libvec_code, -468 },
+        { "_LVOQueryOverscan", libvec_code, -474 },
+        { "_LVOMoveWindowInFrontOf", libvec_code, -480 },
+        { "_LVOChangeWindowBox", libvec_code, -486 },
+        { "_LVOSetEditHook", libvec_code, -492 },
+        { "_LVOSetMouseQueue", libvec_code, -498 },
+        { "_LVOZipWindow", libvec_code, -504 },
+        { "_LVOLockPubScreen", libvec_code, -510 },
+        { "_LVOUnlockPubScreen", libvec_code, -516 },
+        { "_LVOLockPubScreenList", libvec_code, -522 },
+        { "_LVOUnlockPubScreenList", libvec_code, -528 },
+        { "_LVONextPubScreen", libvec_code, -534 },
+        { "_LVOSetDefaultPubScreen", libvec_code, -540 },
+        { "_LVOSetPubScreenModes", libvec_code, -546 },
+        { "_LVOPubScreenStatus", libvec_code, -552 },
+        { "_LVOObtainGIRPort", libvec_code, -558 },
+        { "_LVOReleaseGIRPort", libvec_code, -564 },
+        { "_LVOGadgetMouse", libvec_code, -570 },
+        { "_LVOSetIPrefs", libvec_code, -576 },
+        { "_LVOGetDefaultPubScreen", libvec_code, -582 },
+        { "_LVOEasyRequestArgs", libvec_code, -588 },
+        { "_LVOBuildEasyRequestArgs", libvec_code, -594 },
+        { "_LVOSysReqHandler", libvec_code, -600 },
+        { "_LVOOpenWindowTagList", libvec_code, -606 },
+        { "_LVOOpenScreenTagList", libvec_code, -612 },
+        { "_LVODrawImageState", libvec_code, -618 },
+        { "_LVOPointInImage", libvec_code, -624 },
+        { "_LVOEraseImage", libvec_code, -630 },
+        { "_LVONewObjectA", libvec_code, -636 },
+        { "_LVODisposeObject", libvec_code, -642 },
+        { "_LVOSetAttrsA", libvec_code, -648 },
+        { "_LVOGetAttr", libvec_code, -654 },
+        { "_LVOSetGadgetAttrsA", libvec_code, -660 },
+        { "_LVONextObject", libvec_code, -666 },
+        { "_LVOFindClass", libvec_code, -672 },
+        { "_LVOMakeClass", libvec_code, -678 },
+        { "_LVOAddClass", libvec_code, -684 },
+        { "_LVOGetScreenDrawInfo", libvec_code, -690 },
+        { "_LVOFreeScreenDrawInfo", libvec_code, -696 },
+        { "_LVOResetMenuStrip", libvec_code, -702 },
+        { "_LVORemoveClass", libvec_code, -708 },
+        { "_LVOFreeClass", libvec_code, -714 },
+        { "_LVOlockPubClass", libvec_code, -720 },
+        { "_LVOunlockPubClass", libvec_code, -726 },
+        { "_LVOAllocScreenBuffer", libvec_code, -768 },
+        { "_LVOFreeScreenBuffer", libvec_code, -774 },
+        { "_LVOChangeScreenBuffer", libvec_code, -780 },
+        { "_LVOScreenDepth", libvec_code, -786 },
+        { "_LVOScreenPosition", libvec_code, -792 },
+        { "_LVOScrollWindowRaster", libvec_code, -798 },
+        { "_LVOLendMenus", libvec_code, -804 },
+        { "_LVODoGadgetMethodA", libvec_code, -810 },
+        { "_LVOSetWindowPointerA", libvec_code, -816 },
+        { "_LVOTimedDisplayAlert", libvec_code, -822 },
+        { "_LVOHelpControl", libvec_code, -828 },
     }
 };
 
