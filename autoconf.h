@@ -34,7 +34,7 @@ private:
 
     friend class autoconf_handler;
 
-    static const uint8_t board_size(uint32_t size);
+    static uint8_t board_size(uint32_t size);
     uint8_t read_config_byte(uint8_t offset) const;
     void write_config_byte(uint8_t offset, uint8_t val);
     void shutup();

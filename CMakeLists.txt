@@ -16,11 +16,13 @@ if (MSVC)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DEBUG")
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
     add_definitions("-D_CRT_SECURE_NO_WARNINGS")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++2a -Wall -Wextra -pedantic")
 endif()
 
 
 if (WIN32)
-    add_definitions("-DWIN32 -D_WIN32 -DUNICODE -D_UNICODE")
+    add_definitions("-DWIN32 -D_WIN32 -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x600")
 endif()
 
 add_library(utils ioutil.cpp ioutil.h color_util.h)
@@ -84,5 +86,8 @@ add_executable(amiemu
     )
 set_source_files_properties(exprom.asm PROPERTIES HEADER_FILE_ONLY TRUE)
 target_link_libraries(amiemu PRIVATE utils m68k)
+if (WIN32)
+    target_link_libraries(amiemu PRIVATE winmm)
+endif()
 target_include_directories(amiemu PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(amiemu PRIVATE EXPROM_BASE=0x${EXPROM_BASE})

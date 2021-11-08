@@ -7,6 +7,8 @@
 
 #include <cassert>
 #include <utility>
+#include <cstring>
+#include <climits>
 #include <iostream>
 
 #define TODO_ASSERT(expr) do { if (!(expr)) throw std::runtime_error{("TODO: " #expr " in ") + std::string{__FILE__} + " line " + std::to_string(__LINE__) }; } while (0)
@@ -224,7 +226,7 @@ enum regnum {
 #undef REG_NUM
 };
 
-constexpr uint16_t DMAB_SETCLR   = 15; // Set/clear control bit. Determines if bits written with a 1 get set or cleared.Bits written with a zero are unchanged.
+//constexpr uint16_t DMAB_SETCLR   = 15; // Set/clear control bit. Determines if bits written with a 1 get set or cleared.Bits written with a zero are unchanged.
 constexpr uint16_t DMAB_BLTBUSY  = 14; // Blitter busy status bit (read only)
 constexpr uint16_t DMAB_BLTNZERO = 13; // Blitter logic zero status bit  (read only).
 constexpr uint16_t DMAB_BLITHOG  = 10; // Blitter DMA priority (over CPU micro) 
@@ -234,12 +236,12 @@ constexpr uint16_t DMAB_COPPER   =  7; // Copper DMA enable
 constexpr uint16_t DMAB_BLITTER  =  6; // Blitter DMA enable
 constexpr uint16_t DMAB_SPRITE   =  5; // Sprite DMA enable
 constexpr uint16_t DMAB_DISK     =  4; // Disk DMA enable
-constexpr uint16_t DMAB_AUD3     =  3; // Audio channel 3 DMA enable
-constexpr uint16_t DMAB_AUD2     =  2; // Audio channel 2 DMA enable
-constexpr uint16_t DMAB_AUD1     =  1; // Audio channel 1 DMA enable
+//constexpr uint16_t DMAB_AUD3     =  3; // Audio channel 3 DMA enable
+//constexpr uint16_t DMAB_AUD2     =  2; // Audio channel 2 DMA enable
+//constexpr uint16_t DMAB_AUD1     =  1; // Audio channel 1 DMA enable
 constexpr uint16_t DMAB_AUD0     =  0; // Audio channel 0 DMA enable
 
-constexpr uint16_t DMAF_SETCLR   = 1 << DMAB_SETCLR;
+//constexpr uint16_t DMAF_SETCLR   = 1 << DMAB_SETCLR;
 constexpr uint16_t DMAF_BLTBUSY  = 1 << DMAB_BLTBUSY;
 constexpr uint16_t DMAF_BLTNZERO = 1 << DMAB_BLTNZERO;
 constexpr uint16_t DMAF_BLITHOG  = 1 << DMAB_BLITHOG;
@@ -249,45 +251,45 @@ constexpr uint16_t DMAF_COPPER   = 1 << DMAB_COPPER;
 constexpr uint16_t DMAF_BLITTER  = 1 << DMAB_BLITTER;
 constexpr uint16_t DMAF_SPRITE   = 1 << DMAB_SPRITE;
 constexpr uint16_t DMAF_DISK     = 1 << DMAB_DISK;
-constexpr uint16_t DMAF_AUD3     = 1 << DMAB_AUD3;
-constexpr uint16_t DMAF_AUD2     = 1 << DMAB_AUD2;
-constexpr uint16_t DMAF_AUD1     = 1 << DMAB_AUD1;
-constexpr uint16_t DMAF_AUD0     = 1 << DMAB_AUD0;
+//constexpr uint16_t DMAF_AUD3     = 1 << DMAB_AUD3;
+//constexpr uint16_t DMAF_AUD2     = 1 << DMAB_AUD2;
+//constexpr uint16_t DMAF_AUD1     = 1 << DMAB_AUD1;
+//constexpr uint16_t DMAF_AUD0     = 1 << DMAB_AUD0;
 
 
 constexpr uint16_t INTB_SETCLR  = 15; // Set/Clear control bit. Determines if bits written with a 1 get set or cleared. Bits written with a zero are allways unchanged
 constexpr uint16_t INTB_INTEN   = 14; // Master interrupt (enable only)
 constexpr uint16_t INTB_EXTER   = 13; // External interrupt
 constexpr uint16_t INTB_DSKSYNC = 12; // Disk re-SYNChronized
-constexpr uint16_t INTB_RBF     = 11; // serial port Receive Buffer Full
-constexpr uint16_t INTB_AUD3    = 10; // Audio channel 3 block finished
-constexpr uint16_t INTB_AUD2    =  9; // Audio channel 2 block finished
-constexpr uint16_t INTB_AUD1    =  8; // Audio channel 1 block finished
+//constexpr uint16_t INTB_RBF     = 11; // serial port Receive Buffer Full
+//constexpr uint16_t INTB_AUD3    = 10; // Audio channel 3 block finished
+//constexpr uint16_t INTB_AUD2    =  9; // Audio channel 2 block finished
+//constexpr uint16_t INTB_AUD1    =  8; // Audio channel 1 block finished
 constexpr uint16_t INTB_AUD0    =  7; // Audio channel 0 block finished
 constexpr uint16_t INTB_BLIT    =  6; // Blitter finished
 constexpr uint16_t INTB_VERTB   =  5; // start of Vertical Blank
-constexpr uint16_t INTB_COPER   =  4; // Coprocessor
+//constexpr uint16_t INTB_COPER   =  4; // Coprocessor
 constexpr uint16_t INTB_PORTS   =  3; // I/O Ports and timers
-constexpr uint16_t INTB_SOFTINT =  2; // software interrupt request
+//constexpr uint16_t INTB_SOFTINT =  2; // software interrupt request
 constexpr uint16_t INTB_DSKBLK  =  1; // Disk Block done
-constexpr uint16_t INTB_TBE     =  0; // serial port Transmit Buffer Empty
+//constexpr uint16_t INTB_TBE     =  0; // serial port Transmit Buffer Empty
 
 constexpr uint16_t INTF_SETCLR  = 1 << INTB_SETCLR;
 constexpr uint16_t INTF_INTEN   = 1 << INTB_INTEN;
 constexpr uint16_t INTF_EXTER   = 1 << INTB_EXTER;
 constexpr uint16_t INTF_DSKSYNC = 1 << INTB_DSKSYNC;
-constexpr uint16_t INTF_RBF     = 1 << INTB_RBF;
-constexpr uint16_t INTF_AUD3    = 1 << INTB_AUD3;
-constexpr uint16_t INTF_AUD2    = 1 << INTB_AUD2;
-constexpr uint16_t INTF_AUD1    = 1 << INTB_AUD1;
-constexpr uint16_t INTF_AUD0    = 1 << INTB_AUD0;
+//constexpr uint16_t INTF_RBF     = 1 << INTB_RBF;
+//constexpr uint16_t INTF_AUD3    = 1 << INTB_AUD3;
+//constexpr uint16_t INTF_AUD2    = 1 << INTB_AUD2;
+//constexpr uint16_t INTF_AUD1    = 1 << INTB_AUD1;
+//constexpr uint16_t INTF_AUD0    = 1 << INTB_AUD0;
 constexpr uint16_t INTF_BLIT    = 1 << INTB_BLIT;
 constexpr uint16_t INTF_VERTB   = 1 << INTB_VERTB;
-constexpr uint16_t INTF_COPER   = 1 << INTB_COPER;
+//constexpr uint16_t INTF_COPER   = 1 << INTB_COPER;
 constexpr uint16_t INTF_PORTS   = 1 << INTB_PORTS;
-constexpr uint16_t INTF_SOFTINT = 1 << INTB_SOFTINT;
+//constexpr uint16_t INTF_SOFTINT = 1 << INTB_SOFTINT;
 constexpr uint16_t INTF_DSKBLK  = 1 << INTB_DSKBLK;
-constexpr uint16_t INTF_TBE     = 1 << INTB_TBE;
+//constexpr uint16_t INTF_TBE     = 1 << INTB_TBE;
 
 /*
                  BIT#     BPLCON0    BPLCON1    BPLCON2
@@ -309,14 +311,14 @@ constexpr uint16_t INTF_TBE     = 1 << INTB_TBE;
                  01       ERSY       PF1H1      PF1P1
                  00        X         PF1H0      PF1P0 */
 constexpr uint16_t BPLCON0B_HIRES = 15; // High-resolution (70 ns pixels)
-constexpr uint16_t BPLCON0B_BPU2  = 14; // Bitplane use code 000-110 (NONE through 6 inclusive)
-constexpr uint16_t BPLCON0B_BPU1  = 13; // 
+//constexpr uint16_t BPLCON0B_BPU2  = 14; // Bitplane use code 000-110 (NONE through 6 inclusive)
+//constexpr uint16_t BPLCON0B_BPU1  = 13; // 
 constexpr uint16_t BPLCON0B_BPU0  = 12; // 
 constexpr uint16_t BPLCON0B_HOMOD = 11; // Hold-and-modify mode (1 = Hold-and-modify mode (HAM); 0 = Extra Half Brite (EHB) if HAM=0 and BPU=6 and DBLPF=0 then bitplane 6 controls an intensity reduction in the other five bitplanes)
 constexpr uint16_t BPLCON0B_DBLPF = 10; // Double playfield (PF1=odd PF2=even bitplanes)
-constexpr uint16_t BPLCON0B_COLOR =  9; // Composite video COLOR enable
-constexpr uint16_t BPLCON0B_GUAD  =  8; // Genlock audio enable (muxed on BKGND pin during vertical blanking
-constexpr uint16_t BPLCON0B_LPEN  =  3; // Light pen enable (reset on power up)
+//constexpr uint16_t BPLCON0B_COLOR =  9; // Composite video COLOR enable
+//constexpr uint16_t BPLCON0B_GUAD  =  8; // Genlock audio enable (muxed on BKGND pin during vertical blanking
+//constexpr uint16_t BPLCON0B_LPEN  =  3; // Light pen enable (reset on power up)
 constexpr uint16_t BPLCON0B_LACE  =  2; // Interlace enable (reset on power up)
 constexpr uint16_t BPLCON0B_ERSY  =  1; // External resync (HSYNC, VSYNC pads become inputs) (reset on power up)
 
@@ -324,9 +326,9 @@ constexpr uint16_t BPLCON0F_HIRES = 1 << BPLCON0B_HIRES;
 constexpr uint16_t BPLCON0F_BPU   = 7 << BPLCON0B_BPU0;
 constexpr uint16_t BPLCON0F_HOMOD = 1 << BPLCON0B_HOMOD;
 constexpr uint16_t BPLCON0F_DBLPF = 1 << BPLCON0B_DBLPF;
-constexpr uint16_t BPLCON0F_COLOR = 1 << BPLCON0B_COLOR;
-constexpr uint16_t BPLCON0F_GUAD  = 1 << BPLCON0B_GUAD;
-constexpr uint16_t BPLCON0F_LPEN  = 1 << BPLCON0B_LPEN;
+//constexpr uint16_t BPLCON0F_COLOR = 1 << BPLCON0B_COLOR;
+//constexpr uint16_t BPLCON0F_GUAD  = 1 << BPLCON0B_GUAD;
+//constexpr uint16_t BPLCON0F_LPEN  = 1 << BPLCON0B_LPEN;
 constexpr uint16_t BPLCON0F_LACE  = 1 << BPLCON0B_LACE;
 constexpr uint16_t BPLCON0F_ERSY  = 1 << BPLCON0B_ERSY;
 
@@ -352,7 +354,7 @@ constexpr uint16_t BC1F_FILL_CARRYIN = 0x0004; // Fill carry input
 constexpr uint16_t BC1F_BLITREVERSE  = 0x0002; // Descending (dec address)
 
 constexpr uint16_t BC1F_SIGNFLAG     = 0x0040; // Sign flag (Line mode)
-constexpr uint16_t BC1F_OVFLAG       = 0x0020; // Line/draw r/l word overflow flag (Line mode)
+//constexpr uint16_t BC1F_OVFLAG       = 0x0020; // Line/draw r/l word overflow flag (Line mode)
 constexpr uint16_t BC1F_SUD          = 0x0010; // Sometimes up or down (=AUD) (Line mode)
 constexpr uint16_t BC1F_SUL          = 0x0008; // Sometimes up or left (Line mode)
 constexpr uint16_t BC1F_AUL          = 0x0004; // Always up or left (Line mode)
@@ -712,13 +714,13 @@ constexpr uint16_t blitter_func(uint8_t minterm, uint16_t a, uint16_t b, uint16_
     return val;
 }
 
-template<std::integral T>
+template<typename T>
 constexpr T rol(T val, unsigned amt)
 {
     return val << amt | val >> (sizeof(T) * CHAR_BIT - amt);
 }
 
-template <std::integral T>
+template<typename T>
 constexpr T ror(T val, unsigned amt)
 {
     return val >> amt | val << (sizeof(T) * CHAR_BIT - amt);
@@ -726,10 +728,10 @@ constexpr T ror(T val, unsigned amt)
 
 constexpr float pi = 3.1415926535897932385f;
 
-template <float cutoff_frequeny>
-class simple_lowpass_filter {
+//template <float cutoff_frequeny>
+struct simple_lowpass_filter {
 public:
-    simple_lowpass_filter() { }
+    static constexpr float cutoff_frequeny = 4400.0f;
 
     float operator()(const float in)
     {
@@ -741,7 +743,7 @@ public:
 private:
     static constexpr float x_ = 2.0f * pi * cutoff_frequeny / audio_sample_rate;
     static constexpr float alpha_ = x_ / (x_ + 1);
-    float last_ = 0;
+    float last_/* = 0*/;
 };
 
 enum class ddfstate {
@@ -900,7 +902,7 @@ struct custom_state {
         //A600: 3900 pF, 1.5k Ohm -> 27 kHz
         //A1200 r1: 3900pF, 1.5kOhm -> 27 kHz
         //A1200 r2: 6800pF, 680 Ohm -> 34 kHz
-        simple_lowpass_filter<4400.0f> filter;
+        simple_lowpass_filter/*<4400.0f>*/ filter;
         int32_t output;
 
         void load_per()
@@ -987,7 +989,7 @@ struct custom_state {
 
 }
 
-class custom_handler::impl : public memory_area_handler {
+class custom_handler::impl final : public memory_area_handler {
 public:
     explicit impl(memory_handler& mem_handler, cia_handler& cia, uint32_t slow_end, uint32_t floppy_speed)
         : mem_ { mem_handler }
@@ -1006,10 +1008,10 @@ public:
 
     void reset() override
     {
-        memset(gfx_buf_, 0, sizeof(gfx_buf_));
-        memset(audio_buf_, 0, sizeof(audio_buf_));
-        memset(&s_, 0, sizeof(s_));
-        memset(col32_, 0, sizeof(col32_));
+        std::memset(gfx_buf_, 0, sizeof(gfx_buf_));
+        std::memset(audio_buf_, 0, sizeof(audio_buf_));
+        std::memset(&s_, 0, sizeof(s_));
+        std::memset(col32_, 0, sizeof(col32_));
         s_.long_frame = true;
         s_.copstate = copper_state::halted;
     }
@@ -1789,6 +1791,8 @@ public:
                     ch.percnt--; // period 0 => period 65536
                 }
                 break;
+            default:
+                break;
             }
 
             int16_t dat = 0;
@@ -2045,11 +2049,10 @@ public:
         const bool vert_disp = display_vpos >= s_.diwstrt >> 8 && display_vpos < ((~s_.diwstop & 0x8000) >> 7 | s_.diwstop >> 8); // VSTOP MSB is complemented and used as the 9th bit
         const uint16_t colclock = s_.hpos >> 1;
 
-        step_result res {
-            .frame = gfx_buf_,
-            .audio = audio_buf_,
-            .bus = bus_use::none,
-        };
+        step_result res{};
+        res.frame = gfx_buf_;
+        res.audio = audio_buf_;
+        res.bus = bus_use::none;
 
         current_pc_ = current_pc;
 
@@ -2204,9 +2207,7 @@ public:
                 }
 
                 // Display
-                const uint16_t act_ddfstop = std::min<uint16_t>(0xD8, s_.ddfstop);
                 const bool bpl_dma_active = (s_.dmacon & DMAF_RASTER) && vert_disp && (s_.bplcon0 & BPLCON0F_BPU);
-
                 static int num_bpl1_writes = 0;
 
                 if (bpl_dma_active) {
@@ -2353,7 +2354,7 @@ public:
         }
 
         // Delayed interrupts
-        for (int i = 0; i < sizeof(s_.int_delay) / sizeof(*s_.int_delay); ++i) {
+        for (int i = 0; i < static_cast<int>(sizeof(s_.int_delay) / sizeof(*s_.int_delay)); ++i) {
             if (s_.int_delay[i] && --s_.int_delay[i] == 0) {
                 if (debug_flags)
                     DBGOUT << "Triggering interrupt " << i << "\n";
@@ -3197,6 +3198,8 @@ uint16_t custom_handler::impl::internal_read(uint16_t reg)
         case 3:
             return s_.sprdatb[reg / 8];
         }
+        assert(0);
+        return 0;
     case COLOR00:
     case COLOR01:
     case COLOR02:

@@ -4,6 +4,7 @@
 #include "state_file.h"
 #include "debug.h"
 #include <cassert>
+#include <cstring>
 #include <iostream>
 
 //#define KEYBOARD_DEBUG
@@ -66,11 +67,11 @@ constexpr uint8_t CIAICRB_IR     = 7; // Reading
 constexpr uint8_t CIAICRB_SETCLR = 7; // Writing
 
 // interrupt control register masks
-constexpr uint8_t CIAICRF_TA     = 1 << CIAICRB_TA;
-constexpr uint8_t CIAICRF_TB     = 1 << CIAICRB_TB;
-constexpr uint8_t CIAICRF_ALRM   = 1 << CIAICRB_ALRM;
-constexpr uint8_t CIAICRF_SP     = 1 << CIAICRB_SP;
-constexpr uint8_t CIAICRF_FLG    = 1 << CIAICRB_FLG;
+//constexpr uint8_t CIAICRF_TA     = 1 << CIAICRB_TA;
+//constexpr uint8_t CIAICRF_TB     = 1 << CIAICRB_TB;
+//constexpr uint8_t CIAICRF_ALRM   = 1 << CIAICRB_ALRM;
+//constexpr uint8_t CIAICRF_SP     = 1 << CIAICRB_SP;
+//constexpr uint8_t CIAICRF_FLG    = 1 << CIAICRB_FLG;
 constexpr uint8_t CIAICRF_IR     = 1 << CIAICRB_IR;
 constexpr uint8_t CIAICRF_SETCLR = 1 << CIAICRB_SETCLR;
 
@@ -83,7 +84,7 @@ constexpr uint8_t CIACRAB_RUNMODE = 3; // 1 = one-shot mode, 0 = continuous mode
 constexpr uint8_t CIACRAB_LOAD    = 4; // 1 = force load (this ia a strobe input, there ia no data storage; bit 4 will always read back a zero and writing a 0 has no effect.)
 constexpr uint8_t CIACRAB_INMODE  = 5; // 1 = Timer A count positive CNT tranition, 0 = Timer A counts 02 pules.
 constexpr uint8_t CIACRAB_SPMODE  = 6; // 1 = Serial port=output (CNT is the source of the shift clock)
-constexpr uint8_t CIACRAB_TODIN   = 7; // 
+//constexpr uint8_t CIACRAB_TODIN   = 7; // 
 
 // control register A register masks
 
@@ -94,14 +95,14 @@ constexpr uint8_t CIACRAF_RUNMODE = 1 << CIACRAB_RUNMODE;
 constexpr uint8_t CIACRAF_LOAD    = 1 << CIACRAB_LOAD;
 constexpr uint8_t CIACRAF_INMODE  = 1 << CIACRAB_INMODE;
 constexpr uint8_t CIACRAF_SPMODE  = 1 << CIACRAB_SPMODE;
-constexpr uint8_t CIACRAF_TODIN   = 1 << CIACRAB_TODIN;
+//constexpr uint8_t CIACRAF_TODIN   = 1 << CIACRAB_TODIN;
 
 // control register B bit numbers
 constexpr uint8_t CIACRBB_START   = 0;
 constexpr uint8_t CIACRBB_PBON    = 1;
 constexpr uint8_t CIACRBB_OUTMODE = 2;
 constexpr uint8_t CIACRBB_RUNMODE = 3;
-constexpr uint8_t CIACRBB_LOAD    = 4;
+//constexpr uint8_t CIACRBB_LOAD    = 4;
 constexpr uint8_t CIACRBB_INMODE0 = 5;
 constexpr uint8_t CIACRBB_INMODE1 = 6;
 constexpr uint8_t CIACRBB_ALARM   = 7;
@@ -111,51 +112,48 @@ constexpr uint8_t CIACRBF_START   = 1 << CIACRBB_START;
 constexpr uint8_t CIACRBF_PBON    = 1 << CIACRBB_PBON;
 constexpr uint8_t CIACRBF_OUTMODE = 1 << CIACRBB_OUTMODE;
 constexpr uint8_t CIACRBF_RUNMODE = 1 << CIACRBB_RUNMODE;
-constexpr uint8_t CIACRBF_LOAD    = 1 << CIACRBB_LOAD;
+//constexpr uint8_t CIACRBF_LOAD    = 1 << CIACRBB_LOAD;
 constexpr uint8_t CIACRBF_INMODE0 = 1 << CIACRBB_INMODE0;
 constexpr uint8_t CIACRBF_INMODE1 = 1 << CIACRBB_INMODE1;
 constexpr uint8_t CIACRBF_ALARM   = 1 << CIACRBB_ALARM;
 
 // ciaa port A (0xbfe001)
-constexpr uint8_t CIAB_GAMEPORT1 = 7; // gameport 1, pin 6 (fire button*)
+//constexpr uint8_t CIAB_GAMEPORT1 = 7; // gameport 1, pin 6 (fire button*)
 constexpr uint8_t CIAB_GAMEPORT0 = 6; // gameport 0, pin 6 (fire button*)
-constexpr uint8_t CIAB_DSKRDY    = 5; // disk ready*
-constexpr uint8_t CIAB_DSKTRACK0 = 4; // disk on track 00*
-constexpr uint8_t CIAB_DSKPROT   = 3; // disk write protect*
+//constexpr uint8_t CIAB_DSKRDY    = 5; // disk ready*
+//constexpr uint8_t CIAB_DSKTRACK0 = 4; // disk on track 00*
+//constexpr uint8_t CIAB_DSKPROT   = 3; // disk write protect*
 constexpr uint8_t CIAB_DSKCHANGE = 2; // disk change*
 constexpr uint8_t CIAB_LED       = 1; // led light control (0==>bright)
 constexpr uint8_t CIAB_OVERLAY   = 0; // memory overlay bit
 
-constexpr uint8_t CIAF_GAMEPORT1 = 1 << CIAB_GAMEPORT1;
-constexpr uint8_t CIAF_GAMEPORT0 = 1 << CIAB_GAMEPORT0;
-constexpr uint8_t CIAF_DSKRDY    = 1 << CIAB_DSKRDY;
-constexpr uint8_t CIAF_DSKTRACK0 = 1 << CIAB_DSKTRACK0;
-constexpr uint8_t CIAF_DSKPROT   = 1 << CIAB_DSKPROT;
-constexpr uint8_t CIAF_DSKCHANGE = 1 << CIAB_DSKCHANGE;
+//constexpr uint8_t CIAF_GAMEPORT1 = 1 << CIAB_GAMEPORT1;
+//constexpr uint8_t CIAF_GAMEPORT0 = 1 << CIAB_GAMEPORT0;
+//constexpr uint8_t CIAF_DSKRDY    = 1 << CIAB_DSKRDY;
+//constexpr uint8_t CIAF_DSKTRACK0 = 1 << CIAB_DSKTRACK0;
+//constexpr uint8_t CIAF_DSKPROT   = 1 << CIAB_DSKPROT;
+//constexpr uint8_t CIAF_DSKCHANGE = 1 << CIAB_DSKCHANGE;
 constexpr uint8_t CIAF_LED       = 1 << CIAB_LED;
 constexpr uint8_t CIAF_OVERLAY   = 1 << CIAB_OVERLAY;
 
 // ciab port B (0xbfd100) -- disk control
 constexpr uint8_t CIAB_DSKMOTOR = 7;  // disk motor*
-constexpr uint8_t CIAB_DSKSEL3  = 6;  // disk select unit 3*
-constexpr uint8_t CIAB_DSKSEL2  = 5;  // disk select unit 2*
-constexpr uint8_t CIAB_DSKSEL1  = 4;  // disk select unit 1*
+//constexpr uint8_t CIAB_DSKSEL3  = 6;  // disk select unit 3*
+//constexpr uint8_t CIAB_DSKSEL2  = 5;  // disk select unit 2*
+//constexpr uint8_t CIAB_DSKSEL1  = 4;  // disk select unit 1*
 constexpr uint8_t CIAB_DSKSEL0  = 3;  // disk select unit 0*
 constexpr uint8_t CIAB_DSKSIDE  = 2;  // disk side select*
 constexpr uint8_t CIAB_DSKDIREC = 1;  // disk direction of seek*
 constexpr uint8_t CIAB_DSKSTEP  = 0;  // disk step heads*
 
 constexpr uint8_t CIAF_DSKMOTOR = 1 << CIAB_DSKMOTOR;
-constexpr uint8_t CIAF_DSKSEL3  = 1 << CIAB_DSKSEL3;
-constexpr uint8_t CIAF_DSKSEL2  = 1 << CIAB_DSKSEL2;
-constexpr uint8_t CIAF_DSKSEL1  = 1 << CIAB_DSKSEL1;
-constexpr uint8_t CIAF_DSKSEL0  = 1 << CIAB_DSKSEL0;
+//constexpr uint8_t CIAF_DSKSEL3  = 1 << CIAB_DSKSEL3;
+//constexpr uint8_t CIAF_DSKSEL2  = 1 << CIAB_DSKSEL2;
+//constexpr uint8_t CIAF_DSKSEL1  = 1 << CIAB_DSKSEL1;
+//constexpr uint8_t CIAF_DSKSEL0  = 1 << CIAB_DSKSEL0;
 constexpr uint8_t CIAF_DSKSIDE  = 1 << CIAB_DSKSIDE;
 constexpr uint8_t CIAF_DSKDIREC = 1 << CIAB_DSKDIREC;
 constexpr uint8_t CIAF_DSKSTEP  = 1 << CIAB_DSKSTEP;
-
-
-constexpr uint8_t CIAF_ALL_DSKSEL = CIAF_DSKSEL0 | CIAF_DSKSEL1 | CIAF_DSKSEL2 | CIAF_DSKSEL3;
 
 // Two clocks after bit 0 in the CRA has been set to 1, the timer will start counting from its current value back to zero
 constexpr uint8_t cia_start_delay = 2;
@@ -202,7 +200,7 @@ constexpr uint8_t cia_start_delay = 2;
 
 // Handles both MOS Technology 8520 Complex Interface Adapter chips
 // CIAA can generate INT2, CIAB can generate INT6
-class cia_handler::impl : public memory_area_handler {
+class cia_handler::impl final : public memory_area_handler {
 public:
     explicit impl(memory_handler& mem_handler, rom_area_handler& rom_handler, disk_drive* dfs[max_drives])
         : mem_handler_ { mem_handler }
@@ -469,7 +467,7 @@ private:
 
     void reset() override
     {
-        memset(s_, 0, sizeof(s_));
+        std::memset(s_, 0, sizeof(s_));
         // Set output pin values to high (since they're connected to pull-ups)
         s_[0].port_input[0] = 0xFF;
         s_[1].port_input[1] = 0xFF;

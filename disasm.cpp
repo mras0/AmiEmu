@@ -3,6 +3,7 @@
 #include <string>
 #include <ostream>
 #include <cassert>
+#include <cstring>
 #include <iomanip>
 
 #include "instruction.h"
@@ -113,7 +114,7 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
 {
     uint16_t iwords_copy[max_instruction_words] = { 0 };
     if (iwords && num_iwords)
-        memcpy(iwords_copy, iwords, std::min<size_t>(max_instruction_words, num_iwords) * 2);
+        std::memcpy(iwords_copy, iwords, std::min<size_t>(max_instruction_words, num_iwords) * 2);
     iwords = iwords_copy;
 
     const auto& inst = instructions[iwords[0]];

@@ -7,11 +7,10 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
-#pragma comment(lib, "winmm.lib")
 
 using waveout = std::unique_ptr<HWAVEOUT__, decltype(&::waveOutClose)>;
 
-constexpr unsigned buffer_count = 3; // 2 buffers of 20ms is not enough (callback ends up being called only every 25ms)
+constexpr int buffer_count = 3; // 2 buffers of 20ms is not enough (callback ends up being called only every 25ms)
 
 class wavedev::impl {
 public:
@@ -65,7 +64,7 @@ private:
 
     waveout create_waveout() {
         HWAVEOUT hwo = nullptr;
-        WAVEFORMATEX wfx ={0,};
+        WAVEFORMATEX wfx{};
         wfx.wFormatTag = WAVE_FORMAT_PCM;
         wfx.nChannels = 2;
         wfx.nSamplesPerSec = sample_rate_;

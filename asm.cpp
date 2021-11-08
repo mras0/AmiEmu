@@ -163,7 +163,7 @@ public:
         : pc_ { start_pc }
         , input_ { text }
     {
-        for (const auto [name, val] : predefines) {
+        for (const auto& [name, val] : predefines) {
             auto tt = make_identifier(name);
             if (tt < token_type::identifier_start)
                 ASSEMBLER_ERROR("Invalid predefined identifier " << name);
@@ -544,8 +544,8 @@ private:
 
     struct ea_result {
         uint8_t type;
-        uint32_t val;
-        identifier_info_type* fixup;
+        uint32_t val = 0;
+        identifier_info_type* fixup = nullptr;
     };
 
     ea_result process_number(bool neg = false)

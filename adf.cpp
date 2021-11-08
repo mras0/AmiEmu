@@ -7,6 +7,7 @@
 #include <iostream>
 #include <cstring>
 #include <queue>
+#include <climits>
 
 #define EXPECT_BINOP(a, op, b)                                                                                                                 \
     do {                                                                                                                                       \
@@ -36,7 +37,7 @@ constexpr uint32_t disk_size           = bytes_per_sector * sectors_per_disk;
 constexpr uint32_t T_HEADER     = 2;
 constexpr uint32_t T_DATA       = 8;
 constexpr uint32_t T_LIST       = 16;
-constexpr uint32_t T_DIRCACHE   = 33;
+//constexpr uint32_t T_DIRCACHE   = 33;
 
 enum second_type : uint32_t {
     ST_UNKNOWN   = 0,
@@ -74,7 +75,7 @@ enum block_offsets : uint32_t {
     boff_2nd_type       = bytes_per_sector-0x04, // Block secondary type
 };
 
-constexpr uint32_t boot_block_sector = 0;
+//constexpr uint32_t boot_block_sector = 0;
 constexpr uint32_t root_block_sector = 880;
 
 constexpr uint32_t ofs_header_size = 24;
@@ -110,7 +111,7 @@ bool is_ffs(const uint8_t* sector0)
 uint32_t bootblock_checksum(const uint8_t* bb)
 {
     uint32_t csum = get_u32(bb + 0);
-    for (int offset = 8; offset < bytes_per_sector * 2; offset += 4) {
+    for (uint32_t offset = 8; offset < bytes_per_sector * 2; offset += 4) {
         const auto l = get_u32(bb + offset);
         if (ULONG_MAX - csum < l) {
             ++csum;
@@ -125,6 +126,7 @@ bool bootblock_valid(const uint8_t* sector0)
     return sector0[0] == 'D' && sector0[1] == 'O' && sector0[2] == 'S' && get_u32(sector0 + 8) == root_block_sector && bootblock_checksum(sector0) == get_u32(sector0 + 4);
 }
 
+#if 0
 uint32_t convert_time(uint32_t days_since_1978, uint32_t mins, uint32_t ticks)
 {
     EXPECT_LT(mins, 60 * 24);
@@ -138,6 +140,7 @@ uint32_t convert_time(const uint8_t* d)
 {
     return convert_time(get_u32(d + 0), get_u32(d + 4), get_u32(d + 8));
 }
+#endif
 
 uint32_t block_checksum(const uint8_t* d, uint32_t skip_offset)
 {
@@ -253,6 +256,7 @@ uint32_t find_name(const std::vector<uint8_t>& disk, const char* name)
     return 0;
 }
 
+#if 0
 const char* protect_string(uint32_t p)
 {
     enum protect_flags : uint32_t {
@@ -274,6 +278,7 @@ const char* protect_string(uint32_t p)
     assert((p & 0xffffff00) == 0);
     return buffer;
 }
+#endif
 
 uint32_t bm_page_mask(uint32_t index)
 {

@@ -2,6 +2,7 @@
 #include "ioutil.h"
 #include "memory.h"
 #include <stdexcept>
+#include <cstring>
 
 //#define DMS_TRACE
 #ifdef DMS_TRACE
@@ -331,7 +332,7 @@ public:
 
     void reset()
     {
-        memset(text_, 0, sizeof(text_));
+        std::memset(text_, 0, sizeof(text_));
         heavy_text_loc_ = 0;
         //quick_text_loc = 251;
         medium_text_loc_ = 0x3fbe;

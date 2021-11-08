@@ -3,6 +3,7 @@
 #include "state_file.h"
 #include <cassert>
 #include <stdexcept>
+#include <cstring>
 #include <iostream>
 
 autoconf_device::autoconf_device(memory_handler& mem_handler, memory_area_handler& area_handler, const board_config& config)
@@ -11,7 +12,7 @@ autoconf_device::autoconf_device(memory_handler& mem_handler, memory_area_handle
     , config_ { config }
     , base_ { 0 }
 {
-    memset(conf_data_, 0, sizeof(conf_data_));
+    std::memset(conf_data_, 0, sizeof(conf_data_));
     assert((config.type & 0xc7) == 0);
     /* $00/$02 */ conf_data_[0] = ERT_ZORROII | config.type | board_size(config.size);
     /* $04/$06 */ conf_data_[1] = config.product_number;
@@ -76,7 +77,7 @@ std::string autoconf_device::desc() const
     return hexstring(config_.product_number) + "/" + hexstring(config_.hw_manufacturer) + "/" + hexstring(config_.serial_no);
 }
 
-const uint8_t autoconf_device::board_size(uint32_t size)
+uint8_t autoconf_device::board_size(uint32_t size)
 {
     switch (size) {
     case 64 << 10:

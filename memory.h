@@ -71,6 +71,7 @@ public:
 class ram_handler : public memory_area_handler {
 public:
     explicit ram_handler(uint32_t size);
+    virtual ~ram_handler() = default;
     std::vector<uint8_t>& ram()
     {
         return ram_;

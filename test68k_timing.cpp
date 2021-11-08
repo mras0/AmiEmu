@@ -4,6 +4,7 @@
 #include <sstream>
 #include <vector>
 #include <cassert>
+#include <cstring>
 
 #include "ioutil.h"
 #include "cpu.h"
@@ -894,8 +895,8 @@ struct tester {
                         return false;
                     }
 
-                    memset(&ram[0], 0, ram.size());
-                    memcpy(&ram[code_pos], &code[0], code.size());
+                    std::memset(&ram[0], 0, ram.size());
+                    std::memcpy(&ram[code_pos], &code[0], code.size());
 
                     cpu_state input_state {};
                     input_state.sr = 0x2000;

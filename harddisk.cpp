@@ -13,7 +13,7 @@ namespace {
 
 }
 
-class harddisk::impl : public memory_area_handler, public autoconf_device {
+class harddisk::impl final : public memory_area_handler, public autoconf_device {
 public:
     explicit impl(memory_handler& mem, bool& cpu_active, const std::string& hdfilename)
         : autoconf_device { mem, *this, config }
@@ -132,11 +132,11 @@ private:
     void handle_disk_cmd()
     {
         constexpr int8_t IOERR_NOCMD      = -3;
-        constexpr int8_t IOERR_BADLENGTH  = -4;
+        //constexpr int8_t IOERR_BADLENGTH  = -4;
         constexpr int8_t IOERR_BADADDRESS = -5;
 
         // Standard commands
-        constexpr uint16_t CMD_INVALID     = 0;
+        //constexpr uint16_t CMD_INVALID     = 0;
         constexpr uint16_t CMD_RESET       = 1;
         constexpr uint16_t CMD_READ        = 2;
         constexpr uint16_t CMD_WRITE       = 3;
@@ -153,13 +153,12 @@ private:
         constexpr uint16_t TD_CHANGENUM    = CMD_NONSTD + 4;  // 0D 
         constexpr uint16_t TD_CHANGESTATE  = CMD_NONSTD + 5;  // 0E 
         constexpr uint16_t TD_PROTSTATUS   = CMD_NONSTD + 6;  // 0F 
-        constexpr uint16_t TD_RAWREAD      = CMD_NONSTD + 7;  // 10
-        constexpr uint16_t TD_RAWWRITE     = CMD_NONSTD + 8;  // 11
-        constexpr uint16_t TD_GETDRIVETYPE = CMD_NONSTD + 9;  // 12
-        constexpr uint16_t TD_GETNUMTRACKS = CMD_NONSTD + 10; // 13
+        //constexpr uint16_t TD_RAWREAD      = CMD_NONSTD + 7;  // 10
+        //constexpr uint16_t TD_RAWWRITE     = CMD_NONSTD + 8;  // 11
+        //constexpr uint16_t TD_GETDRIVETYPE = CMD_NONSTD + 9;  // 12
+        //constexpr uint16_t TD_GETNUMTRACKS = CMD_NONSTD + 10; // 13
         constexpr uint16_t TD_ADDCHANGEINT = CMD_NONSTD + 11; // 14
         constexpr uint16_t TD_REMCHANGEINT = CMD_NONSTD + 12; // 15
-
 
         constexpr uint32_t IO_COMMAND = 0x1C;
         constexpr uint32_t IO_ERROR   = 0x1F;

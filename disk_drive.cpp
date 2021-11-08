@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <cassert>
 #include <ostream>
+#include <cstring>
 #include "ioutil.h"
 #include "memory.h"
 #include "debug.h"
@@ -24,7 +25,6 @@ constexpr uint32_t MOTOR_ON_CNT   = ECLOCK_FREQ / 20; // 50ms
 
 static_assert(DISK_SIZE == 901120); // 880K
 
-constexpr uint16_t sync = 0x4489;
 constexpr uint32_t fill = 0xaaaaaaaa; // MFM encoded 0
 
 void put_split_long(uint8_t* dest, uint32_t l)
@@ -192,8 +192,8 @@ public:
         for (uint8_t sec = 0; sec < NUMSECS; ++sec) {
             const uint8_t* raw_data = &data_[(tracknum * NUMSECS + sec) * TD_SECTOR];
             put_u32(&dest[0], fill); // Preamble
-            put_u16(&dest[4], sync);
-            put_u16(&dest[6], sync);
+            put_u16(&dest[4], MFM_SYNC);
+            put_u16(&dest[6], MFM_SYNC);
             put_split_long(&dest[8], 0xffU<<24 | tracknum << 16 | sec << 8 | (11 - sec));
             // sector label
             for (uint32_t i = 16; i < 48; i += 4)
@@ -210,7 +210,7 @@ public:
             dest += MFM_SECTOR_SIZE_WORDS*2;
         }
         // gap
-        memset(dest, 0xaa, MFM_GAP_SIZE_WORDS * 2);
+        std::memset(dest, 0xaa, MFM_GAP_SIZE_WORDS * 2);
     }
 
     void set_disk_activity_handler(const disk_activity_handler& handler)

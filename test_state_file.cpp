@@ -1,4 +1,5 @@
 #include <iostream>
+#include <cstring>
 #include "state_file.h"
 #include "ioutil.h"
 
@@ -34,7 +35,7 @@ bool test_state_file()
         test_state1 dst;
         dst.handle_state(sf);
 
-        if (dst.str != src_state1.str || dst.data != src_state1.data || memcmp(&src_state1.blob, &dst.blob, sizeof(dst.blob)) || dst.num != src_state1.num)
+        if (dst.str != src_state1.str || dst.data != src_state1.data || std::memcmp(&src_state1.blob, &dst.blob, sizeof(dst.blob)) || dst.num != src_state1.num)
             throw std::runtime_error { "Test state 1 failed" };
     }
 

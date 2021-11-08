@@ -9,7 +9,9 @@
 #include "memory.h"
 #include "state_file.h"
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <commdlg.h>
@@ -272,7 +274,7 @@ private:
     #define MAKE_DETECTOR(name)                                                                         \
     template<typename T, typename = void> struct has_##name##_t : std::false_type { };                  \
     template<typename T> struct has_##name##_t<T, std::void_t<decltype(&T::name)>> : std::true_type {}; \
-    template<typename T = Derived> static constexpr bool has_##name = has_##name##_t<T>::value;
+    template<typename T = Derived> static constexpr bool has_##name = has_##name##_t<T>::value
 
     MAKE_DETECTOR(on_create);
     MAKE_DETECTOR(on_destroy);
@@ -536,7 +538,7 @@ public:
         EnableWindow(parent, FALSE);
         wnd->do_create(L"Edit palette", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
 
-        MSG msg = { 0 };
+        MSG msg{};
         while (!done && GetMessage(&msg, nullptr, 0, 0)) {
             if (!IsDialogMessage(wnd->handle(), &msg)) {
                 TranslateMessage(&msg);
@@ -930,7 +932,7 @@ private:
         GetWindowTextA(field_combo_[f], buf, sizeof(buf));
         int val;
         if (buf[0] == '$') {
-            if (!sscanf(buf + 1, "%X", &val)) {
+            if (!sscanf(buf + 1, "%X", reinterpret_cast<unsigned*>(&val))) {
                 throw std::runtime_error("Could not convert \"" + std::string(buf) + "\" to value (hex)");
             }
         } else {
@@ -1099,7 +1101,7 @@ public:
         EnableWindow(parent, FALSE);
         wnd->do_create(L"Configuration", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 800, 400, parent);
 
-        MSG msg = { 0 };
+        MSG msg{};
         while (!done && GetMessage(&msg, nullptr, 0, 0)) {
             if (!IsDialogMessage(wnd->handle(), &msg)) {
                 TranslateMessage(&msg);
@@ -1269,7 +1271,7 @@ public:
         events_.clear();
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) {
-                return { event { event_type::quit } };
+                return { event { event_type::quit, {} } };
             }
             handle_message(msg);
         }
@@ -1429,9 +1431,9 @@ private:
         }
         if (pressed && (key == 0x63 || key == 0x66 || key == 0x67)) {
             if (GetKeyState(VK_LCONTROL) < 0 && GetKeyState(VK_HOME) < 0 && GetKeyState(VK_INSERT) < 0)
-                events_.push_back({ event_type::reset });
+                events_.push_back({ event_type::reset, {} });
         }
-        events_.push_back({ event_type::keyboard, keyboard_event { pressed, key } });
+        events_.push_back({ event_type::keyboard, { keyboard_event { pressed, key } } });
     }
 
     void enqueue_keyboard_event(bool pressed, WPARAM wParam, LPARAM lParam)
@@ -1650,7 +1652,8 @@ private:
         auto bh = height_ * gfx_scale;
 
         if (style & WS_OVERLAPPEDWINDOW) {
-            MONITORINFO mi = { sizeof(mi) };
+            MONITORINFO mi {};
+            mi.cbSize = sizeof(MONITORINFO);
             if (GetWindowPlacement(handle(), &old_placement_) && GetMonitorInfo(MonitorFromWindow(handle(), MONITOR_DEFAULTTOPRIMARY), &mi)) {
                 const auto mw = mi.rcMonitor.right - mi.rcMonitor.left;
                 const auto mh = mi.rcMonitor.bottom - mi.rcMonitor.top;

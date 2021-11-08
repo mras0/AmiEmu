@@ -4,8 +4,18 @@
 #include "state_file.h"
 #include <chrono>
 #include <iostream>
+#include <ctime>
 
-class real_time_clock::impl : public memory_area_handler {
+#ifndef WIN32
+/*errno_t*/void localtime_s(
+    struct tm* const tmDest,
+    time_t const* const sourceTime)
+{
+    localtime_r(sourceTime, tmDest);
+}
+#endif
+
+class real_time_clock::impl final : public memory_area_handler {
 public:
     explicit impl(memory_handler& mem)
     {

@@ -2,6 +2,7 @@
 #include <string>
 #include <cassert>
 #include <fstream>
+#include <cstring>
 #include "asm.h"
 #include "ioutil.h"
 
@@ -36,7 +37,7 @@ int main(int argc, char* argv[])
     uint32_t org = 0;
 
     for (int i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "-ofmt")) {
+        if (!std::strcmp(argv[i], "-ofmt")) {
             ++i;
             if (i == argc)
                 usage("Argument missing to -ofmt");

@@ -7,31 +7,9 @@
 
 #include <sstream>
 #include <stdexcept>
+#include <cstring>
 
 // TODO: Prefetch before write for some MOVE operations
-
-namespace {
-
-const char* const conditional_strings[16] = {
-    "t",
-    "f",
-    "hi",
-    "ls",
-    "cc",
-    "cs",
-    "ne",
-    "eq",
-    "vc",
-    "vs",
-    "pl",
-    "mi",
-    "ge",
-    "lt",
-    "gt",
-    "le",
-};
-
-}
 
 std::string ccr_string(uint16_t sr)
 {
@@ -92,7 +70,7 @@ public:
 
     void reset()
     {
-        memset(&state_, 0, sizeof(state_));
+        std::memset(&state_, 0, sizeof(state_));
         state_.sr = srm_s | srm_ipl; // 0x2700
         state_.ssp = mem_.read_u32(0);
         state_.pc = mem_.read_u32(4);
@@ -514,6 +492,8 @@ private:
     uint32_t read_reg(uint32_t val)
     {
         switch (inst_->size) {
+        case opsize::none:
+            break;
         case opsize::b:
             return val & 0xff;
         case opsize::w:
@@ -527,6 +507,8 @@ private:
     uint32_t read_mem(uint32_t addr)
     {
         switch (inst_->size) {
+        case opsize::none:
+            break;
         case opsize::b:
             return mem_read8(addr);
         case opsize::w:
@@ -646,6 +628,9 @@ private:
             }
             case ea_other_imm:
                 switch (inst_->size) {
+                case opsize::none:
+                    assert(0);
+                    break;
                 case opsize::b:
                     res = read_iword() & 0xff;
                     return;
@@ -750,6 +735,8 @@ private:
     void write_mem(uint32_t addr, uint32_t val)
     {
         switch (inst_->size) {
+        case opsize::none:
+            break;
         case opsize::b:
             mem_write8(addr, static_cast<uint8_t>(val));
             return;

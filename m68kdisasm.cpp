@@ -6,6 +6,7 @@
 #include <map>
 #include <iomanip>
 #include <algorithm>
+#include <cstring>
 
 #include "disasm.h"
 #include "ioutil.h"
@@ -699,7 +700,7 @@ public:
         int32_t offset = 0;
         for (auto& f : fields_) {
             assert(sizeof_type(f.t()) != 0); // Must not use undefined structures etc. (pointers to structs are fine)
-            assert(!strchr(f.name_, ',') && !strchr(f.name_, '*')); // Check for some errors
+            assert(!std::strchr(f.name_, ',') && !std::strchr(f.name_, '*')); // Check for some errors
             if (f.offset_ == struct_field::auto_offset)
                 f.offset_ = offset;
             offset = f.end_offset();
@@ -852,8 +853,10 @@ std::ostream& operator<<(std::ostream& os, const type& t)
         return os << "COPPER";
     case base_data_type::struct_:
         return os << "struct " << t.struct_def()->name();
+    default:
+        assert(false);
+        break;
     }
-    assert(false);
     return os;
 }
 
@@ -875,6 +878,8 @@ uint32_t sizeof_type(const type& t)
     //case base_data_type::ptr_:
     case base_data_type::struct_:
         return t.struct_def()->size();
+    default:
+        assert(false);
     }
     std::ostringstream oss;
     oss << "Unhandled type in sizeof_type: " << t;
@@ -2544,7 +2549,6 @@ public:
                             const auto addr = aval.raw() + offset;
                             // Custom reg
                             if (addr >= 0xDE0000 && addr < 0xE00000) {
-                                const auto ra = addr & ~0x1ff;
                                 std::cout << custom_regname[(addr >> 1) & 0xff];
                                 if (int ofs = (addr & 1) - (aval.raw() & 0x1ff); ofs != 0)
                                     std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
@@ -2660,12 +2664,7 @@ public:
                         } else if (ea == ea_disp) {
                             print_addr(ea_addr_[i].raw());
                         } else {
-                            if (inst.size == opsize::l && inst.data > 0x400 && labels_.find(inst.data) != labels_.end()) {
-                                std::cout << "#";
-                                print_addr(inst.data);
-                            } else {
-                                std::cout << "#$" << hexfmt(inst.data);
-                            }
+                            std::cout << "#$" << hexfmt(inst.data);
                         }
                         break;
                     }
@@ -3461,14 +3460,14 @@ private:
         const auto code = read_mem(simval{regs_.a[1].raw() + 0x12 });
         if (code.known()) {
             simregs r {};
-            #if 0
+            /*
             D0 - scratch
             D1 - scratch (on entry: active interrupts -> equals INTENA & INTREQ)
             A0 - scratch (on entry: pointer to base of custom chips for fast indexing)
             A1 - scratch (on entry: Interrupt's IS_DATA pointer)
             A5 - jump vector register (scratch on call)
             A6 - Exec library base pointer (scratch on call)
-            #endif
+            */
             r.a[0] = simval { 0xdff000 };
             r.a[1] = data; 
             r.a[6] = simval { exec_base_ };
@@ -3639,7 +3638,7 @@ private:
                         case ea_other_abs_w:
                         case ea_other_abs_l:
                         case ea_other_pc_disp16:
-                        case ea_other_pc_index:                            
+                        case ea_other_pc_index:
                             add_auto_label(ea_addr, t);
                             break;
                         case ea_other_imm:
@@ -3647,6 +3646,7 @@ private:
                         default:
                             throw std::runtime_error { "Unsupported EA " + ea_string(inst.ea[i]) };
                         }
+                        [[fallthrough]];
                     default:
                         if (inst.ea[i] == ea_disp)
                             throw std::runtime_error { "Unexpected EA " + ea_string(inst.ea[i]) + " for " + inst.name };
@@ -3807,6 +3807,8 @@ private:
                     break;
                 }
             }
+            break;
+        default:
             break;
         }
     }
@@ -4479,6 +4481,7 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
             .name_addr = get_u32(&data[offset + 14]),
             .id_addr = get_u32(&data[offset + 18]),
             .init_addr = get_u32(&data[offset + 22]),
+            .name = "",
         };
 
         uint32_t end_offset = tag.endskip - rom_base;

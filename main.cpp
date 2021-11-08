@@ -7,6 +7,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <signal.h>
+#include <cstring>
+#include <iomanip>
 
 #include "ioutil.h"
 #include "instruction.h"
@@ -438,16 +440,16 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_number_arg("cpuscale", args.cpu_scale, 255))
                 continue;
-            else if (!strcmp(&argv[i][1], "help"))
+            else if (!std::strcmp(&argv[i][1], "help"))
                 usage("");
-            else if (!strcmp(&argv[i][1], "testmode")) {
+            else if (!std::strcmp(&argv[i][1], "testmode")) {
                 args.test_mode = true;
                 args.nosound = true;
                 continue;
-            } else if (!strcmp(&argv[i][1], "nosound")) {
+            } else if (!std::strcmp(&argv[i][1], "nosound")) {
                 args.nosound = true;
                 continue;
-            } else if (!strcmp(&argv[i][1], "debug")) {
+            } else if (!std::strcmp(&argv[i][1], "debug")) {
                 args.debug = true;
                 continue;
             } else if (get_string_arg("debugscript", args.debug_script)) {
@@ -640,7 +642,6 @@ int main(int argc, char* argv[])
         std::vector<uint8_t> pending_disk;
         uint8_t pending_disk_drive = 0xff;
         uint32_t disk_chosen_countdown = 0;
-        constexpr uint32_t invalid_pc = ~0U;
         enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_rtx, wait_non_rom_pc, wait_vpos, wait_frames } wait_mode = wait_none;
         uint32_t wait_arg = 0;
         uint32_t chip_cycles_count = 0, cpu_cycles_count = 0;

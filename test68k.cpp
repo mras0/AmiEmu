@@ -1,6 +1,7 @@
 #include "test68k.h"
 #include <iostream>
 #include <filesystem>
+#include <cstring>
 #include "ioutil.h"
 #include "cpu.h"
 #include "memory.h"
@@ -20,7 +21,7 @@ void run_test_case(const std::string& filename)
     const auto signature_len = sizeof(signature) - 1;
     const auto data = read_file(filename);
     const auto size = data.size();
-    if (size < signature_len + 4 || !memcmp(&data[0], signature, signature_len)) {
+    if (size < signature_len + 4 || !std::memcmp(&data[0], signature, signature_len)) {
         throw std::runtime_error { filename + " has unexpected format" };
     }
 
@@ -417,16 +418,16 @@ winuae_test_header read_winuae_test_header(const fs::path& dir)
 }
 
 
-const uint8_t CT_FPREG          = 0;
-const uint8_t CT_DREG           = 0;
+//const uint8_t CT_FPREG          = 0;
+//const uint8_t CT_DREG           = 0;
 const uint8_t CT_AREG           = 8;
 const uint8_t CT_SSP            = 16;
 const uint8_t CT_MSP            = 17;
 const uint8_t CT_SR             = 18;
 const uint8_t CT_PC             = 19;
 const uint8_t CT_FPIAR          = 20;
-const uint8_t CT_FPSR           = 21;
-const uint8_t CT_FPCR           = 22;
+//const uint8_t CT_FPSR           = 21;
+//const uint8_t CT_FPCR           = 22;
 const uint8_t CT_CYCLES         = 25;
 const uint8_t CT_ENDPC          = 26;
 const uint8_t CT_BRANCHTARGET   = 27;
@@ -441,7 +442,7 @@ const uint8_t CT_EXCEPTION_MASK = 63;
 const uint8_t CT_SIZE_BYTE      = 0 << 5;
 const uint8_t CT_SIZE_WORD      = 1 << 5;
 const uint8_t CT_SIZE_LONG      = 2 << 5;
-const uint8_t CT_SIZE_FPU       = 3 << 5; // CT_DREG -> CT_FPREG
+//const uint8_t CT_SIZE_FPU       = 3 << 5; // CT_DREG -> CT_FPREG
 const uint8_t CT_SIZE_MASK      = 3 << 5;
 
 // if MEMWRITE or PC
@@ -457,8 +458,8 @@ const uint8_t CT_END            = 0x80;
 const uint8_t CT_END_FINISH     = 0xff;
 const uint8_t CT_END_INIT       = 0x80 | 0x40;
 const uint8_t CT_END_SKIP       = 0x80 | 0x40 | 0x01;
-const uint8_t CT_SKIP_REGS      = 0x80 | 0x40 | 0x02;
-const uint8_t CT_EMPTY          = CT_END_INIT;
+//const uint8_t CT_SKIP_REGS      = 0x80 | 0x40 | 0x02;
+//const uint8_t CT_EMPTY          = CT_END_INIT;
 const uint8_t CT_OVERRIDE_REG   = 0x80 | 0x40 | 0x10;
 const uint8_t CT_BRANCHED       = 0x40;
 
@@ -836,7 +837,7 @@ bool run_winuae_mnemonic_test(const fs::path& dir)
         winuae_test_file test_file { dir / filename };
         const auto version = test_file.read_u32();
         const auto starttimeid = test_file.read_u32();
-        const auto flags = test_file.read_u32();
+        /*const auto flags = */test_file.read_u32();
         if (version != expected_version) {
             throw std::runtime_error { test_file.path().string() + " has invalid version " + std::to_string(version) };
         }

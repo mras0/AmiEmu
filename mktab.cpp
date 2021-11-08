@@ -8,7 +8,10 @@
 #include <iomanip>
 #include <fstream>
 #include <memory>
+#include <cstring>
 #include "ioutil.h"
+
+using std::strncmp;
 
 #define INSTS(X)    \
     X(ILLEGAL)	    \
@@ -138,7 +141,7 @@ struct inst_desc {
     const char* imm;
     uint8_t cycle;
     uint32_t block = block_An; // By default block An
-    uint16_t fixed_ea;
+    uint16_t fixed_ea = 0;
 };
 
 enum class opsize {
@@ -614,6 +617,9 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
         if (ai.osize != opsize::none) {
             assert(nea > 0);
             switch (ai.osize) {
+            case opsize::none:
+                assert(false);
+                break;
             case opsize::b:
                 assert(strchr(desc.sizes, 'B'));
                 name += ".B";
@@ -708,7 +714,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                     ++ai.ea_words;
 
                 // Hacks for MOVE to/from SR
-                if (ai.ea[i] == ea_sr || ai.ea[i] == ea_ccr)
+                if (ai.ea[i] == ea_sr || ai.ea[i] == ea_ccr) {
                     if (i == 1) {
                         ai.base_cycles += 8;
                     } else {
@@ -717,6 +723,7 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                         else
                             ai.memory_accesses += 1; // ??? why ???
                     }
+                }
                 memacc = false; // Don't count reglist here...
                 break;
             }
