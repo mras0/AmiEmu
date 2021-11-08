@@ -2403,6 +2403,8 @@ public:
                                                      {},
                                                      { { regname::D1, "name", &char_ptr }, { regname::D2, "accessMode ", &long_type } },
                                                  } });
+
+        //std::cerr << "Fake execbase: $" << hexfmt(exec_base_) << "\n";
     }
 
     void run()
@@ -2548,14 +2550,33 @@ public:
                                     std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
                                 std::cout << "(A" << (ea & 7) << ")";
                                 break;
-                            } else if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
-                                const auto& t = *lit->second.t;
-                                extra << " A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
-                                if (t.struct_def()) {
-                                    if (auto name = t.struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
-                                        std::cout << *name << "(A" << (ea & 7) << ")";
-                                        break;
+                            } else if (auto [li, lofs] = find_label(addr); li) {
+                                if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
+                                    const auto& t = *lit->second.t;
+                                    extra << " A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
+                                    if (t.struct_def()) {
+                                        if (auto name = t.struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
+                                            std::cout << *name << "(A" << (ea & 7) << ")";
+                                            break;
+                                        }
                                     }
+                                    extra << " " << desc.str() << " -> " << li->name;
+                                    if (lofs)
+                                        extra << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
+                                    extra << " (" << t << ")";
+                                    //std::cout << li->name;
+                                    //if (lofs)
+                                    //    std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
+                                    //std::cout << "-" << lit->second.name << "(A" << (ea & 7) << ")";
+                                    //break;
+                                } else {
+                                    //std::cout << li->name;
+                                    //lofs -= aval.raw();
+                                    //if (lofs)
+                                    //    std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs);
+                                    //std::cout << "(A" << (ea & 7) << ")";
+                                    extra << " A" << (ea & 7) << " = $" << hexfmt(aval.raw());
+                                    //break;
                                 }
                             } else {
                                 extra << " " << desc.str() << " = $" << hexfmt(addr);
@@ -2800,7 +2821,7 @@ private:
                 in = false;
             }
             const uint8_t c = data_[pos];
-            if (c >= ' ' && c < 128) {
+            if (c >= ' ' && c < 128 && c != '\'') {
                 if (!in) {
                     maybe_sep();
                     std::cout << '\'';
