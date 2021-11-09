@@ -17,7 +17,7 @@ if (MSVC)
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
     add_definitions("-D_CRT_SECURE_NO_WARNINGS")
 else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++2a -Wall -Wextra -pedantic")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++2a -Wall -Wextra -pedantic -g")
 endif()
 
 
@@ -68,14 +68,21 @@ add_custom_command(
   DEPENDS m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm
   )
 
+if (WIN32)
+    set(DRIVER win32)
+else()
+    set(DRIVER null)
+    message(WARNING "Using null driver")
+endif()
+
 add_executable(amiemu
     main.cpp
     cia.cpp cia.h
     custom.cpp custom.h
     disk_drive.cpp disk_drive.h
-    gui_win32.cpp gui.h
+    gui_${DRIVER}.cpp gui.h
     debug.cpp debug.h
-    wavedev_win32.cpp wavedev.h
+    wavedev_${DRIVER}.cpp wavedev.h
     exprom.asm
     rtc.cpp rtc.h
     autoconf.cpp autoconf.h

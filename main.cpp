@@ -615,8 +615,9 @@ int main(int argc, char* argv[])
         std::unique_ptr<gui> g;
         if (!cmdline_args.test_mode)
             g = std::make_unique<gui>(graphics_width, graphics_height, std::array<std::string, 4>{ cmdline_args.df0, cmdline_args.df1, "", "" });
-        else
-            signal(SIGINT, &ctrl_c_handler);
+
+        signal(SIGINT, &ctrl_c_handler);
+
         auto serdata_flush = [&g, &serdata]() {
             if (!serdata.empty()) {
                 if (g)
@@ -780,7 +781,7 @@ int main(int argc, char* argv[])
             }
         };
 
-        if (!cmdline_args.nosound) {
+        if (!cmdline_args.nosound && !wavedev::is_null()) {
             audio = std::make_unique<wavedev>(audio_sample_rate, audio_buffer_size, [&](int16_t* buf, size_t sz) {
                 static_assert(2 * audio_samples_per_frame == audio_buffer_size);
                 assert(sz == audio_samples_per_frame);
@@ -1531,15 +1532,16 @@ check_breakpoint:
                 update:
                     serdata_flush();
                     steps_to_update = steps_per_update;
+                    if (ctrl_c) {
+                        ctrl_c = false;
+                        signal(SIGINT, &ctrl_c_handler);
+                        active_debugger();
+                    }
                     if (g) {
                         g->update_image(custom_step.frame);
                         g->led_state(cias.power_led_on());
                         auto new_events = g->update();
                         events.insert(events.end(), new_events.begin(), new_events.end());
-                    } else if (ctrl_c) {
-                        ctrl_c = false;
-                        signal(SIGINT, &ctrl_c_handler);
-                        active_debugger();
                     }
                 }
             } catch (const std::exception& e) {

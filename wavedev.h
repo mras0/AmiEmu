@@ -17,6 +17,8 @@ public:
 
     void set_paused(bool pause);
 
+    static bool is_null();
+
 private:
     class impl;
     std::unique_ptr<impl> impl_;

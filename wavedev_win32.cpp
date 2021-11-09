@@ -150,3 +150,8 @@ void wavedev::set_paused(bool pause)
 {
     impl_->set_paused(pause);
 }
+
+bool wavedev::is_null()
+{
+    return false;
+}
