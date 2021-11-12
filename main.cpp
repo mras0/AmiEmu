@@ -298,6 +298,8 @@ void write_bmp(const std::string& filename, const uint32_t* data, uint32_t w, ui
         throw std::runtime_error { "Error writing to " + filename };
 }
 
+constexpr int default_disk_insertion_delay = 2 * 50;
+
 } // unnamed namespace
 
 struct memwatch {
@@ -734,6 +736,8 @@ int main(int argc, char* argv[])
             ++chip_cycles_count;
 
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
+                if (wait_arg == 0)
+                    new_frame = true;
                 active_debugger();
                 wait_mode = wait_none;
             } else if (!(custom_step.vpos | custom_step.hpos)) {
@@ -916,6 +920,39 @@ int main(int argc, char* argv[])
         if (cmdline_args.debug)
             active_debugger();
 
+        auto insert_disk = [&](uint8_t drive, const char* filename, int delay = default_disk_insertion_delay) {
+            assert(drive < max_drives && drives[drive]);
+
+            std::vector<uint8_t> file;
+            if (*filename) {
+                std::cout << "Reading " << filename << "\n";
+                try {
+                    file = read_file(filename);
+                } catch (const std::exception& e) {
+                    std::cerr << "Failed to read " << filename << ": " << e.what() << "\n";
+                    return;
+                }
+            }
+            std::cout << drives[drive]->name() << " Ejecting\n";
+            drives[drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
+            if (delay) {
+                assert(pending_disk.empty());
+                disk_chosen_countdown = delay; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
+                pending_disk = std::move(file);
+                pending_disk_drive = drive;
+            } else {
+                std::cout << drives[drive]->name() << " Inserting disk (" << filename << ")\n";
+                drives[drive]->insert_disk(std::move(file));
+            }
+            // Hack overwrite cmdline args for disk file
+            if (drive == 0) {
+                cmdline_args.df0 = filename;
+            } else {
+                assert(drive == 1);
+                cmdline_args.df1 = filename;
+            }
+        };
+
         for (bool quit = false; !quit;) {
             try {
                 if (!events.empty()) {
@@ -942,21 +979,7 @@ int main(int argc, char* argv[])
                         break;
                     case gui::event_type::disk_inserted:
                         assert(evt.disk_inserted.drive < max_drives && drives[evt.disk_inserted.drive]);
-                        std::cout << drives[evt.disk_inserted.drive]->name() << " Ejecting\n";
-                        drives[evt.disk_inserted.drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
-                        if (evt.disk_inserted.filename[0]) {
-                            disk_chosen_countdown = 25; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
-                            std::cout << "Reading " << evt.disk_inserted.filename << "\n";
-                            pending_disk = read_file(evt.disk_inserted.filename);
-                            pending_disk_drive = evt.disk_inserted.drive;
-                        }
-                        // Hack overwrite cmdline args for disk file
-                        if (evt.disk_inserted.drive == 0) {
-                            cmdline_args.df0 = evt.disk_inserted.filename;
-                        } else {
-                            assert(evt.disk_inserted.drive == 1);
-                            cmdline_args.df1 = evt.disk_inserted.filename;
-                        }
+                        insert_disk(evt.disk_inserted.drive, evt.disk_inserted.filename);
                         break;
                     case gui::event_type::debug_mode:
                         debug_mode = true;
@@ -1081,6 +1104,28 @@ int main(int argc, char* argv[])
                             }
                         } else if (args[0] == "g") {
                             break;
+                        } else if (args[0] == "insert_disk") {
+                            if (args.size() >= 2) {
+                                const int drive = args[1].length() == 1 && isdigit(args[1][0]) ? args[1][0] - '0' : -1;
+                                if (drive >= 0 && drive < max_drives && drives[drive]) {
+                                    int delay = default_disk_insertion_delay;
+                                    if (args.size() >= 4) {
+                                        auto d = get_simple_expr(args[3]);
+                                        if (d.first)
+                                            delay = d.second;
+                                        else
+                                            delay = -1;
+                                    }
+                                    if (delay >= 0)
+                                        insert_disk(static_cast<uint8_t>(drive), args.size() >= 3 ? args[2].c_str() : "", delay);
+                                    else
+                                        std::cerr << "Invalid delay";
+                                } else {
+                                    std::cerr << "Invalid drive";
+                                }
+                            } else {
+                                std::cerr << "Drive missing\n";
+                            }
                         } else if (args[0] == "m") {
                             auto [valid, addr, lines] = get_addr_and_lines(args, hexdump_addr, 20);
                             addr &= ~1;
@@ -1115,7 +1160,7 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "t") {
                             wait_arg = ~0U;
                             if (args.size() > 1) {
-                                auto fh = from_hex(args[1]);
+                                auto fh = get_simple_expr(args[1]);
                                 if (fh.first && fh.second > 0) {
                                     wait_arg = fh.second - 1;
                                 } else {
@@ -1147,7 +1192,7 @@ int main(int argc, char* argv[])
                             }
                         } else if (args[0] == "trace_flags") {
                             if (args.size() > 1) {
-                                auto fh = from_hex(args[1]);
+                                auto fh = get_simple_expr(args[1]);
                                 if (fh.first) {
                                     debug_flags = fh.second;
                                 } else {
@@ -1178,12 +1223,12 @@ int main(int argc, char* argv[])
                         } else if (args[0] == "v") {
                             uint32_t v = 0, h = 0;
                             if (args.size() > 1) {
-                                auto vh = from_hex(args[1]);
+                                auto vh = get_simple_expr(args[1]);
                                 if (!vh.first || vh.second >= vpos_per_field)
                                     goto vcmdinvalidargs;
                                 v = vh.second;
                                 if (args.size() > 2) {
-                                    auto hh = from_hex(args[2]);
+                                    auto hh = get_simple_expr(args[2]);
                                     if (!hh.first || hh.second >= hpos_per_line / 2)
                                         goto vcmdinvalidargs;
                                     h = hh.second;
