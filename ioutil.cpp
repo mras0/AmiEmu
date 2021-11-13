@@ -33,7 +33,7 @@ std::vector<uint8_t> read_file(const std::string& path)
     }
 
     in.seekg(0, std::ifstream::end);
-    const auto len = in.tellg();
+    const auto len = static_cast<unsigned>(in.tellg());
     in.seekg(0, std::ifstream::beg);
 
     std::vector<uint8_t> buf(len);

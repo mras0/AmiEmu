@@ -27,6 +27,7 @@
 #include "rtc.h"
 #include "state_file.h"
 #include "adf.h"
+#include "dms.h"
 
 namespace {
 
@@ -298,6 +299,33 @@ void write_bmp(const std::string& filename, const uint32_t* data, uint32_t w, ui
         throw std::runtime_error { "Error writing to " + filename };
 }
 
+std::vector<uint8_t> make_exe_disk(const std::string& filename, const std::vector<uint8_t>& data)
+{
+    std::string fname = filename;
+    if (auto pos = fname.find_last_of("/\\"); pos != std::string::npos)
+        fname = fname.substr(pos + 1);
+    auto disk = adf::new_disk(fname);
+    auto ss = "\":" + fname + "\"";
+    disk.make_dir("S");
+    disk.write_file("s/startup-sequence", std::vector<uint8_t>(ss.begin(), ss.end()));
+    disk.write_file(fname, data);
+    return disk.get();
+}
+
+std::vector<uint8_t> load_disk_file(const std::string& filename)
+{
+    const auto data = read_file(filename);
+    if (data.size() < 32)
+        throw std::runtime_error { filename + " is not a disk image" };
+    if (dms_detect(data))
+        return dms_unpack(data);
+    if (get_u32(&data[0]) == 1011) // HUNK_HEADER
+        return make_exe_disk(filename, data);
+    if (data.size() != 80 * 2 * 11 * 512)
+        throw std::runtime_error { filename + " is not a valid disk image (wrong size)" };
+    return data;
+}
+
 constexpr int default_disk_insertion_delay = 2 * 50;
 
 } // unnamed namespace
@@ -324,7 +352,6 @@ struct command_line_arguments {
     std::string df0;
     std::string df1;
     std::string hd;
-    std::string exe;
     std::string debug_script;
     uint32_t chip_size;
     uint32_t slow_size;
@@ -342,7 +369,6 @@ struct command_line_arguments {
         sf.handle(df0);
         sf.handle(df1);
         sf.handle(hd);
-        sf.handle(exe);
         sf.handle(chip_size);
         sf.handle(slow_size);
         sf.handle(fast_size);
@@ -354,7 +380,7 @@ void usage(const std::string& msg)
 {
     std::cerr << "Command line arguments:\n"
         "[-rom rom-file]\n"
-        "[-df0/-df1 adf-file]"
+        "[-df0/-df1 disk/exe]"
         "[-hd file]\n"
         "[-chip size]\n"
         "[-slow size]\n"
@@ -426,8 +452,6 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_string_arg("hd", args.hd))
                 continue;
-            else if (get_string_arg("exe", args.exe))
-                continue;
             else if (get_string_arg("rom", args.rom))
                 continue;
             else if (get_size_arg("chip", args.chip_size, max_chip_size))
@@ -477,9 +501,6 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
         args.cpu_scale = 1;
     if (!args.floppy_speed)
         args.floppy_speed = 16;
-
-    if (!args.exe.empty() && !args.df0.empty())
-        usage("-exe and -df0 are incompatible");
     return args;
 }
 
@@ -526,22 +547,9 @@ int main(int argc, char* argv[])
         m68000 cpu { mem };
 
         if (!cmdline_args.df0.empty())
-            df0.insert_disk(read_file(cmdline_args.df0));
-        else if (!cmdline_args.exe.empty()) {
-            // Create auto-booting (OFS) disk with the exectuable
-            const auto file = read_file(cmdline_args.exe);
-            std::string filename = cmdline_args.exe;
-            if (auto pos = filename.find_last_of("/\\"); pos != std::string::npos)
-                filename = filename.substr(pos + 1);
-            auto ss = ":" + filename;
-            auto disk = adf::new_disk("test");
-            disk.make_dir("S");
-            disk.write_file("s/startup-sequence", std::vector<uint8_t>(ss.begin(), ss.end()));
-            disk.write_file(filename, file);
-            df0.insert_disk(std::vector<uint8_t>(disk.get()));
-        }
+            df0.insert_disk(load_disk_file(cmdline_args.df0));
         if (!cmdline_args.df1.empty())
-            df1.insert_disk(read_file(cmdline_args.df1));
+            df1.insert_disk(load_disk_file(cmdline_args.df1));
 
         std::cout << "Memory configuration: Chip: " << (cmdline_args.chip_size >> 10) << " KB, Slow: " << (cmdline_args.slow_size >> 10) << " KB, Fast: " << (cmdline_args.fast_size >> 10) << " KB\n";
 
@@ -923,11 +931,11 @@ int main(int argc, char* argv[])
         auto insert_disk = [&](uint8_t drive, const char* filename, int delay = default_disk_insertion_delay) {
             assert(drive < max_drives && drives[drive]);
 
-            std::vector<uint8_t> file;
+            std::vector<uint8_t> disk;
             if (*filename) {
                 std::cout << "Reading " << filename << "\n";
                 try {
-                    file = read_file(filename);
+                    disk = load_disk_file(filename);
                 } catch (const std::exception& e) {
                     std::cerr << "Failed to read " << filename << ": " << e.what() << "\n";
                     return;
@@ -935,14 +943,14 @@ int main(int argc, char* argv[])
             }
             std::cout << drives[drive]->name() << " Ejecting\n";
             drives[drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
-            if (delay) {
+            if (delay && !disk_chosen_countdown) {
                 assert(pending_disk.empty());
                 disk_chosen_countdown = delay; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
-                pending_disk = std::move(file);
+                pending_disk = std::move(disk);
                 pending_disk_drive = drive;
             } else {
                 std::cout << drives[drive]->name() << " Inserting disk (" << filename << ")\n";
-                drives[drive]->insert_disk(std::move(file));
+                drives[drive]->insert_disk(std::move(disk));
             }
             // Hack overwrite cmdline args for disk file
             if (drive == 0) {

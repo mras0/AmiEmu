@@ -15,6 +15,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <commdlg.h>
+#include <ole2.h>
+#include <shlobj.h>
+#include <shellapi.h>
 
 namespace {
 
@@ -24,6 +27,12 @@ void throw_system_error(const std::string& what, const unsigned error_code = Get
 {
     assert(error_code != ERROR_SUCCESS);
     throw std::system_error(error_code, std::system_category(), what);
+}
+
+void throw_com_error(const std::string& what, HRESULT hr)
+{
+    assert(FAILED(hr));
+    throw std::runtime_error { what + " failed: 0x" + hexstring(hr) };
 }
 
 constexpr std::array<uint8_t, 256> vk_to_scan = []() constexpr {
@@ -1219,7 +1228,7 @@ private:
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
             } else if (id >= 200 && id < 200 + max_disks && code == BN_CLICKED) {
                 std::string f;
-                if (browse_for_file(hwnd, "Floppy image (*.adf;*.dms)\0*.adf;*.dms\0Amiga Disk File (*.adf)\0*.adf\0Disk Masher System (*.dms)\0*.adf\0All files (*.*)\0*.*\0", f))
+                if (browse_for_file(hwnd, "Floppy image/exe (*.adf;*.dms;*.exe)\0*.adf;*.dms;*.exe\0Amiga Disk File (*.adf)\0*.adf\0Disk Masher System (*.dms)\0*.dms\0Executable (*.exe)\0*.exe\0All files (*.*)\0*.*\0", f))
                     SetWindowTextA(filename_edit_[id - 200], f.c_str());
             } else if (id >= 300 && id < 300 + max_disks && code == BN_CLICKED) {
                 SetWindowTextA(filename_edit_[id - 300], "");
@@ -1243,12 +1252,107 @@ constexpr int led_width = 64;
 constexpr int led_height = 8;
 constexpr int extra_height = border_height*2 + led_height;
 
+
+class drop_target : public IDropTarget {
+public:
+    using on_drop = std::function<void (const std::string&)>;
+
+    explicit drop_target()
+    {
+    }
+
+    ~drop_target()
+    {
+        assert(ref_count_ == 1);
+    }
+
+    void set_callback(const on_drop& callback)
+    {
+        assert(!callback_);
+        callback_ = callback;
+    }
+
+    // IUnknown
+    ULONG STDMETHODCALLTYPE AddRef() override
+    {
+        return ++ref_count_;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        return --ref_count_;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** ppv) override
+    {
+        *ppv = nullptr;
+        if (iid == __uuidof(IUnknown))
+            *ppv = static_cast<IUnknown*>(this);
+        else if (iid == __uuidof(IDropTarget))
+            *ppv = static_cast<IDropTarget*>(this);
+        else
+            return E_NOINTERFACE;
+        AddRef();
+        return S_OK;
+    }
+
+    // IDropTarget
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* /*pDataObj*/, DWORD /*grfKeyState*/, POINTL /*pt*/, DWORD* pdwEffect) override
+    {
+        *pdwEffect &= DROPEFFECT_COPY;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD /*grfKeyState*/, POINTL /*pt*/, DWORD* pdwEffect) override
+    {
+        *pdwEffect &= DROPEFFECT_COPY;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE DragLeave(void) override
+    {
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* pDataObj, DWORD /*grfKeyState*/, POINTL /*pt*/, DWORD* pdwEffect) override
+    {
+        *pdwEffect &= DROPEFFECT_COPY;
+
+        if (*pdwEffect != DROPEFFECT_NONE && callback_) {
+            // https://devblogs.microsoft.com/oldnewthing/20100503-00/?p=14183
+            FORMATETC fmte = { CF_HDROP, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+            STGMEDIUM stgm;
+            if (SUCCEEDED(pDataObj->GetData(&fmte, &stgm))) {
+                HDROP hdrop = reinterpret_cast<HDROP>(stgm.hGlobal);
+                UINT cFiles = DragQueryFile(hdrop, 0xFFFFFFFF, NULL, 0);
+                for (UINT i = 0; i < cFiles; i++) {
+                    const auto cchFile = MAX_PATH;
+                    char szFile[cchFile];
+                    UINT cch = DragQueryFileA(hdrop, i, szFile, cchFile);
+                    if (cch > 0 && cch < cchFile) {
+                        callback_(szFile);
+                    }
+                }
+                ReleaseStgMedium(&stgm);
+            }
+        }
+        return S_OK;
+    }
+
+private:
+    ULONG ref_count_ = 1;
+    on_drop callback_;
+};
+
+bool quitting; // Bit of a hack
+
 }
 
 class gui::impl : public window_base<impl> {
 public:
     static impl* create(int width, int height, const std::array<std::string, 4>& disk_filenames)
     {
+        quitting = false;
         SetProcessDPIAware(); // Avoid GUI scaling (must be called before any windows are created)
 
         std::unique_ptr<impl> wnd { new impl { width, height, disk_filenames } };
@@ -1265,12 +1369,18 @@ public:
         return wnd.release();
     }
 
+    ~impl()
+    {
+        OleUninitialize();
+        quitting = true; // Going away!
+    }
+
     std::vector<event> update()
     {
         MSG msg;
         events_.clear();
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) {
+            if (quitting || msg.message == WM_QUIT) {
                 return { event { event_type::quit, {} } };
             }
             handle_message(msg);
@@ -1378,6 +1488,7 @@ private:
     static constexpr int disk_activity_countdown_max = 25; // ~0.5s
     WINDOWPLACEMENT old_placement_;
     DWORD old_style_ = 0;
+    drop_target drop_target_;
     static constexpr auto default_window_style_ = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
 
     impl(int width, int height, const std::array<std::string, 4>& disk_filenames)
@@ -1385,6 +1496,8 @@ private:
         , height_ { height }
         , disk_filenames_ { disk_filenames }
     {
+        if (const auto hr = OleInitialize(nullptr); FAILED(hr))
+            throw_com_error("OleInitialize", hr);
     }
 
     static void modify_window_class(WNDCLASS& wc)
@@ -1600,17 +1713,34 @@ private:
 
     bool on_create(HWND hwnd, const CREATESTRUCT&)
     {
-        bitmap_window_ = bitmap_window::create(0, 0, width_, height_, hwnd);
-        if (!bitmap_window_)
+        if (const auto hr = RegisterDragDrop(hwnd, &drop_target_); FAILED(hr)) {
+            std::cerr << "RegisterDragDrop failed: 0x" << hexfmt(hr) << "\n";
             return false;
+        }
+        bitmap_window_ = bitmap_window::create(0, 0, width_, height_, hwnd);
+        if (!bitmap_window_) {
+            RevokeDragDrop(hwnd);
+            return false;
+        }
         MoveWindow(bitmap_window_->handle(), 0, 0, width_ * gfx_scale, height_ * gfx_scale, FALSE);
+        drop_target_.set_callback([&](const std::string& filename) {
+            event evt;
+            const uint8_t drive = 0;
+            evt.type = event_type::disk_inserted;
+            evt.disk_inserted.drive =drive;
+            snprintf(evt.disk_inserted.filename, sizeof(evt.disk_inserted.filename), "%s", filename.c_str());
+            disk_filenames_[drive] = filename;
+            events_.push_back(evt);
+
+        });
         return true;
     }
 
-    void on_destroy(HWND)
+    void on_destroy(HWND hwnd)
     {
         if (mouse_captured_)
             release_mouse();
+        RevokeDragDrop(hwnd);
         PostQuitMessage(0);
     }
 
