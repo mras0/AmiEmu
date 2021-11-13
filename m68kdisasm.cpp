@@ -3975,26 +3975,29 @@ void analyzer::handle_predef_info()
 }
 
 
-constexpr uint32_t HUNK_UNIT    = 999;
-constexpr uint32_t HUNK_NAME    = 1000;
-constexpr uint32_t HUNK_CODE    = 1001;
-constexpr uint32_t HUNK_DATA    = 1002;
-constexpr uint32_t HUNK_BSS     = 1003;
-constexpr uint32_t HUNK_RELOC32 = 1004;
-constexpr uint32_t HUNK_RELOC16 = 1005;
-constexpr uint32_t HUNK_RELOC8  = 1006;
-constexpr uint32_t HUNK_EXT     = 1007;
-constexpr uint32_t HUNK_SYMBOL  = 1008;
-constexpr uint32_t HUNK_DEBUG   = 1009;
-constexpr uint32_t HUNK_END     = 1010;
-constexpr uint32_t HUNK_HEADER  = 1011;
-constexpr uint32_t HUNK_OVERLAY = 1013;
-constexpr uint32_t HUNK_BREAK   = 1014;
-constexpr uint32_t HUNK_DREL32  = 1015;
-constexpr uint32_t HUNK_DREL16  = 1016;
-constexpr uint32_t HUNK_DREL8   = 1017;
-constexpr uint32_t HUNK_LIB     = 1018;
-constexpr uint32_t HUNK_INDEX   = 1019;
+constexpr uint32_t HUNK_UNIT         = 999;
+constexpr uint32_t HUNK_NAME         = 1000;
+constexpr uint32_t HUNK_CODE         = 1001;
+constexpr uint32_t HUNK_DATA         = 1002;
+constexpr uint32_t HUNK_BSS          = 1003;
+constexpr uint32_t HUNK_RELOC32      = 1004;
+constexpr uint32_t HUNK_RELOC16      = 1005;
+constexpr uint32_t HUNK_RELOC8       = 1006;
+constexpr uint32_t HUNK_EXT          = 1007;
+constexpr uint32_t HUNK_SYMBOL       = 1008;
+constexpr uint32_t HUNK_DEBUG        = 1009;
+constexpr uint32_t HUNK_END          = 1010;
+constexpr uint32_t HUNK_HEADER       = 1011;
+constexpr uint32_t HUNK_OVERLAY      = 1013;
+constexpr uint32_t HUNK_BREAK        = 1014;
+constexpr uint32_t HUNK_DREL32       = 1015;
+constexpr uint32_t HUNK_DREL16       = 1016;
+constexpr uint32_t HUNK_DREL8        = 1017;
+constexpr uint32_t HUNK_LIB          = 1018;
+constexpr uint32_t HUNK_INDEX        = 1019;
+constexpr uint32_t HUNK_RELOC32SHORT = 1020;
+constexpr uint32_t HUNK_RELRELOC32   = 1021;
+constexpr uint32_t HUNK_ABSRELOC16   = 1022;
 
 std::string hunk_type_string(uint32_t hunk_type)
 {
@@ -4020,6 +4023,9 @@ std::string hunk_type_string(uint32_t hunk_type)
         HTS(HUNK_DREL8);
         HTS(HUNK_LIB);
         HTS(HUNK_INDEX);
+        HTS(HUNK_RELOC32SHORT);
+        HTS(HUNK_RELRELOC32);
+        HTS(HUNK_ABSRELOC16);
 #undef HTS
     }
     return "Unknown hunk type " + std::to_string(hunk_type);
@@ -4040,6 +4046,8 @@ constexpr uint8_t EXT_RELREF32	= 136;  // 32 bit PC-relative reference to symbol
 constexpr uint8_t EXT_RELCOMMON	= 137;  // 32 bit PC-relative reference to COMMON block
 constexpr uint8_t EXT_ABSREF16	= 138;  // 16 bit absolute reference to symbol
 constexpr uint8_t EXT_ABSREF8	= 139;  // 8 bit absolute reference to symbol
+
+constexpr uint32_t block_id_mask = (1 << 29U) - 1;
 
 std::string ext_type_string(uint8_t ext_type)
 {
@@ -4203,6 +4211,7 @@ void hunk_file::read_hunk_exe()
     struct hunk_info {
         uint32_t type;
         uint32_t addr;
+        uint32_t flags;
         std::vector<uint8_t> data;
         uint32_t loaded_size;
     };
@@ -4211,13 +4220,13 @@ void hunk_file::read_hunk_exe()
     std::vector<hunk_info> hunks(table_size);
     for (uint32_t i = 0; i < table_size; ++i) {
         const auto v = read_u32();
-        const auto flags = v >> 30;
+        auto flags = (v >> 29) & 0b110;
         const auto size = (v & 0x3fffffff) << 2;
-        if (flags == 3) {
-            throw std::runtime_error { "Unsupported hunk size: $" + hexstring(v) };
+        if (flags == 0b110) {
+            flags = read_u32() & ~(1<<30);
         }
         const auto aligned_size = (size + 4095) & -4096;
-        if (flags == 1) {
+        if (flags & 2) {
             hunks[i].addr = chip_ptr;
             chip_ptr += aligned_size;
             if (chip_ptr > 0x200000)
@@ -4229,14 +4238,15 @@ void hunk_file::read_hunk_exe()
                 throw std::runtime_error { "Out of fast mem" };
         }
         hunks[i].data.resize(size);
-        std::cerr << "Hunk " << i << " $" << hexfmt(size) << " " << (flags == 1 ? "CHIP" : flags == 2 ? "FAST" : "    ") << " @ " << hexfmt(hunks[i].addr) << "\n";
+        hunks[i].flags = flags;
+        std::cerr << "Hunk " << i << " $" << hexfmt(size) << " " << (flags & 2 ? "CHIP" : flags & 4 ? "FAST" : "    ") << " @ " << hexfmt(hunks[i].addr) << "\n";
     }
 
     uint32_t table_index = 0;
     while (table_index < table_size) {
         const uint32_t hunk_num = first_hunk + table_index;
 
-        const uint32_t hunk_type = read_u32();
+        const uint32_t hunk_type = read_u32() & block_id_mask;
 
         if (hunk_type == HUNK_DEBUG) {
             read_hunk_debug();
@@ -4262,8 +4272,8 @@ void hunk_file::read_hunk_exe()
             pos_ += hunk_bytes;
         }
 
-        while (pos_ <= data_.size() - 4 && !is_initial_hunk(get_u32(&data_[pos_]))) {
-            const auto ht = read_u32();
+        while (pos_ <= data_.size() - 4 && !is_initial_hunk(get_u32(&data_[pos_]) & block_id_mask)) {
+            const auto ht = read_u32() & block_id_mask;
             std::cerr << "\t\t" << hunk_type_string(ht) << "\n";
             switch (ht) {
             case HUNK_SYMBOL: {
@@ -4275,18 +4285,21 @@ void hunk_file::read_hunk_exe()
                 break;
             }
             case HUNK_RELOC32:
+            case HUNK_RELRELOC32: {
+                const uint32_t base = ht == HUNK_RELRELOC32 ? hunks[hunk_num].addr : 0;
                 for (const auto& r : read_hunk_reloc32()) {
                     if (r.hunk_ref > last_hunk)
-                        throw std::runtime_error { "Invalid RELOC32 refers to unknown hunk " + std::to_string(r.hunk_ref) };
+                        throw std::runtime_error { "Invalid " + hunk_type_string(ht) + " refers to unknown hunk " + std::to_string(r.hunk_ref) };
                     auto& hd = hunks[hunk_num].data;
-                    for (const auto ofs: r.relocs) {
+                    for (const auto ofs : r.relocs) {
                         if (ofs > hd.size() - 4)
-                            throw std::runtime_error { "Invalid relocation" };
+                            throw std::runtime_error { "Invalid relocation in " + hunk_type_string(ht) };
                         auto c = &hd[ofs];
-                        put_u32(c, get_u32(c) + hunks[r.hunk_ref].addr);
+                        put_u32(c, get_u32(c) + hunks[r.hunk_ref].addr - base);
                     }
                 }
                 break;
+            }
             case HUNK_END:
                 break;
             case HUNK_OVERLAY: {
@@ -4330,6 +4343,9 @@ void hunk_file::read_hunk_exe()
                 a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
                 a_->add_root(h.addr, simregs {});
                 has_code = true;
+            } else {
+                const std::string t = h.flags == 1 ? "chip" : "";
+                a_->add_auto_label(h.addr, unknown_type, t + (h.type == HUNK_CODE ? "code" : h.type == HUNK_BSS ? "bss" : "data"));
             }
         }
         assert(has_code);
@@ -4351,7 +4367,7 @@ void hunk_file::read_hunk_unit()
     while (pos_ < data_.size()) {
         auto hunk_type = read_u32();
         const auto flags = hunk_type >> 29;
-        hunk_type &= 0x1fffffff;
+        hunk_type &= block_id_mask;
         switch (hunk_type) {
         case HUNK_NAME: {
             const auto name = read_string();
