@@ -68,21 +68,38 @@ add_custom_command(
   DEPENDS m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm
   )
 
-if (WIN32)
-    set(DRIVER win32)
+set(FORCE_SDL2 FALSE CACHE BOOL "Force use of SDL2")
+
+if (WIN32 AND NOT FORCE_SDL2)
+    set(DRIVER_FILES gui_win32.cpp wavedev_win32.cpp)
+    set(DRIVER_LIBS winmm)
 else()
-    set(DRIVER null)
-    message(WARNING "Using null driver")
+    find_package(SDL2)
+    if (SDL2_FOUND)
+        set(DRIVER_FILES sdl_driver.cpp)
+        set(DRIVER_LIBS ${SDL2_LIBRARIES})
+        set(DRIVER_INC_DIR ${SDL2_INCLUDE_DIRS})
+        if (NOT WIN32)
+            set(DRIVER_LIBS ${DRIVER_LIBS} pthread)
+        endif()
+    else()
+        if (FORCE_SDL2)
+            message(FATAL_ERROR "SDL2 not found")
+        endif()
+        set(DRIVER_FILES null_driver.cpp)
+        message(WARNING "SDL2 not found - using null driver")
+    endif()
 endif()
+
 
 add_executable(amiemu
     main.cpp
     cia.cpp cia.h
     custom.cpp custom.h
     disk_drive.cpp disk_drive.h
-    gui_${DRIVER}.cpp gui.h
+    gui.h wavedev.h
+    ${DRIVER_FILES}
     debug.cpp debug.h
-    wavedev_${DRIVER}.cpp wavedev.h
     exprom.asm
     rtc.cpp rtc.h
     autoconf.cpp autoconf.h
@@ -92,9 +109,6 @@ add_executable(amiemu
     ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
     )
 set_source_files_properties(exprom.asm PROPERTIES HEADER_FILE_ONLY TRUE)
-target_link_libraries(amiemu PRIVATE utils m68k)
-if (WIN32)
-    target_link_libraries(amiemu PRIVATE winmm)
-endif()
-target_include_directories(amiemu PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(amiemu PRIVATE utils m68k ${DRIVER_LIBS})
+target_include_directories(amiemu PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${DRIVER_INC_DIR})
 target_compile_definitions(amiemu PRIVATE EXPROM_BASE=0x${EXPROM_BASE})

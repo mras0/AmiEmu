@@ -796,18 +796,30 @@ int main(int argc, char* argv[])
         if (!cmdline_args.nosound && !wavedev::is_null()) {
             audio = std::make_unique<wavedev>(audio_sample_rate, audio_buffer_size, [&](int16_t* buf, size_t sz) {
                 static_assert(2 * audio_samples_per_frame == audio_buffer_size);
+                constexpr auto warn_interval = std::chrono::seconds(2);
+                static auto last_warning = std::chrono::steady_clock::now() - warn_interval;
+                const auto now = std::chrono::steady_clock::now();
+                static unsigned num_warnings = 0;
                 assert(sz == audio_samples_per_frame);
                 {
                     std::unique_lock<std::mutex> lock { audio_mutex_ };
                     if (!audio_buffer_ready[audio_next_to_play]) {
-                        std::cerr << "Audio buffer not ready!\n";
-                        audio_buffer_ready_cv.wait(lock, [&]() { return audio_buffer_ready[audio_next_to_play]; });
+                        ++num_warnings;
+                        memset(buf, 0, sz * 2 * sizeof(int16_t));
+                        // Deadlocks with SDL
+                        //audio_buffer_ready_cv.wait(lock, [&]() { return audio_buffer_ready[audio_next_to_play]; });
+                    } else {
+                        memcpy(buf, audio_buffer[audio_next_to_play], sz * 2 * sizeof(int16_t));
                     }
-                    memcpy(buf, audio_buffer[audio_next_to_play], sz * 2 * sizeof(int16_t));
                     audio_buffer_ready[audio_next_to_play] = false;
                     audio_next_to_play = !audio_next_to_play;
                 }
                 audio_buffer_played_cv.notify_one();
+                if (num_warnings && now - last_warning > warn_interval) {
+                    std::cerr << "Audio buffer not ready! (" << num_warnings << ")\n";
+                    last_warning = now;
+                    num_warnings = 0;
+                }
             });
         }
 

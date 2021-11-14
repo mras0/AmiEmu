@@ -1,4 +1,5 @@
 #include "gui.h"
+#include "wavedev.h"
 #include <iostream>
 
 class gui::impl {
@@ -52,4 +53,20 @@ void gui::set_debug_windows_visible(bool)
 
 void gui::set_on_pause_callback(const on_pause_callback&)
 {
+}
+
+class wavedev::impl {
+};
+
+wavedev::wavedev(unsigned, unsigned, callback_t) { }
+
+wavedev::~wavedev() = default;
+
+void wavedev::set_paused(bool)
+{
+}
+
+bool wavedev::is_null()
+{
+    return true;
 }
