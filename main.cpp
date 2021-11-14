@@ -47,18 +47,69 @@ std::vector<std::string> split_line(const std::string& line)
         ++i;
     if (i == l)
         return {};
-    for (size_t j = i + 1; j < l;) {
-        if (isspace(line[j])) {
-            args.push_back(line.substr(i, j - i));
-            while (isspace(line[j]) && j < l)
-                ++j;
-            i = j;
-        } else {
-            ++j;
+
+    while (i < l) {
+        if (isspace(line[i])) {
+            ++i;
+            continue;
         }
+        if (line[i] == '"') {
+            ++i;
+            std::string s;
+            while (i < l) {
+                if (line[i] == '\\') {
+                    ++i;
+                    if (i >= l) {
+                        std::cerr << "Unterminated escape sequence\n";
+                        return {};
+                    }
+                    switch (line[i]) {
+                    case '\"':
+                        s.push_back('\"');
+                        break;
+                    case '\'':
+                        s.push_back('\'');
+                        break;
+                    case '\\':
+                        s.push_back('\\');
+                        break;
+                    case 't':
+                        s.push_back('\t');
+                        break;
+                    case 'r':
+                        s.push_back('\r');
+                        break;
+                    case 'n':
+                        s.push_back('\n');
+                        break;
+                    default:
+                        std::cerr << "Unknown escape character: \\" << line[i] << "\n";
+                        return {};
+                    }
+                    ++i;
+                    continue;
+                }
+
+                if (line[i] == '"')
+                    break;
+                s.push_back(line[i]);
+                ++i;
+            }
+            if (i >= l) {
+                std::cerr << "Unterminated quoted string\n";
+                return {};
+            }
+            args.push_back(s);
+            ++i;
+            continue;
+        }
+        const auto start = i;
+        ++i;
+        while (i < l && !isspace(line[i]))
+            ++i;
+        args.push_back(line.substr(start, i - start));
     }
-    if (i < l)
-        args.push_back(line.substr(i));
+
     return args;
 }
 
@@ -953,8 +1004,17 @@ int main(int argc, char* argv[])
                     return;
                 }
             }
+            // Hack: overwrite cmdline args for disk file
+            if (drive == 0) {
+                cmdline_args.df0 = filename;
+            } else {
+                assert(drive == 1);
+                cmdline_args.df1 = filename;
+            }
             std::cout << drives[drive]->name() << " Ejecting\n";
             drives[drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
+            if (!*filename)
+                return;
             if (delay && !disk_chosen_countdown) {
                 assert(pending_disk.empty());
                 disk_chosen_countdown = delay; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
@@ -963,13 +1023,6 @@ int main(int argc, char* argv[])
             } else {
                 std::cout << drives[drive]->name() << " Inserting disk (" << filename << ")\n";
                 drives[drive]->insert_disk(std::move(disk));
-            }
-            // Hack overwrite cmdline args for disk file
-            if (drive == 0) {
-                cmdline_args.df0 = filename;
-            } else {
-                assert(drive == 1);
-                cmdline_args.df1 = filename;
             }
         };
 
@@ -1075,9 +1128,8 @@ int main(int argc, char* argv[])
                             }
                         }
                         const auto args = split_line(line);
-                        if (args.empty())
+                        if (args.empty() || args[0].empty())
                             continue;
-                        assert(!args[0].empty());
                         if (args[0] == "c") {
                             custom.show_debug_state(std::cout);
                         } else if (args[0] == "d") {
