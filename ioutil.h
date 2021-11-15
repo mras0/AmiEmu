@@ -51,11 +51,18 @@ void hexdump16(std::ostream& os, uint32_t addr, const uint8_t* data, size_t size
 
 std::string trim(const std::string& line);
 
-std::pair<bool, uint32_t> from_hex(const char* s);
+uint8_t digitval(char c); // Returns 0xff on error
+
+std::pair<bool, uint32_t> number_from_string(const char* s, uint8_t base);
+
+inline std::pair<bool, uint32_t> from_hex(const char* s)
+{
+    return number_from_string(s, 16);
+}
 
 inline std::pair<bool, uint32_t> from_hex(const std::string& s)
 {
-    return from_hex(s.c_str());
+    return number_from_string(s.c_str(), 16);
 }
 
 #endif

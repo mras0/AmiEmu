@@ -99,9 +99,21 @@ std::string trim(const std::string& line)
     return line.substr(s, e + 1 - s);
 }
 
-
-std::pair<bool, uint32_t> from_hex(const char* s)
+uint8_t digitval(char c)
 {
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    else if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    else if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    else
+        return 0xff;
+}
+
+std::pair<bool, uint32_t> number_from_string(const char* s, uint8_t base)
+{
+    assert(base >= 2 && base <= 16);
     if (!*s)
         return { false, 0 };
     uint32_t val = 0;
@@ -110,16 +122,10 @@ std::pair<bool, uint32_t> from_hex(const char* s)
     while ((c = *s++) != '\0') {
         if (++len > 8)
             return { false, 0 };
-        uint32_t d;
-        if (c >= '0' && c <= '9')
-            d = c - '0';
-        else if (c >= 'A' && c <= 'F')
-            d = c - 'A' + 10;
-        else if (c >= 'a' && c <= 'f')
-            d = c - 'a' + 10;
-        else
+        uint8_t d = digitval(c);
+        if (d >= base)
             return { false, 0 };
-        val = val << 4 | d;
+        val = val * base + d;
     }
     return { true, val };
 }

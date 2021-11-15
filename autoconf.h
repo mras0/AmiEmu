@@ -19,6 +19,11 @@ public:
         uint16_t rom_vector_offset;
     };
 
+    uint32_t base_address() const
+    {
+        return mode_ == mode::active ? base_ << 16 : 0;
+    }
+
 protected:
     explicit autoconf_device(memory_handler& mem_handler, memory_area_handler& area_handler, const board_config& config);
 

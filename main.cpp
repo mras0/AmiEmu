@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <cstring>
 #include <iomanip>
+#include <variant>
 
 #include "ioutil.h"
 #include "instruction.h"
@@ -33,6 +34,17 @@ namespace {
 
 volatile bool ctrl_c;
 
+// Hack: global state for debugger values
+cpu_state debugger_cpu_state;
+uint32_t debugger_ans; // Last result
+uint32_t debugger_reg[100];
+
+struct debugger_function {
+    std::string name;
+    std::variant<std::function<uint32_t()>, std::function<uint32_t(uint32_t)>, std::function<uint32_t(uint32_t, uint32_t)>> func;
+};
+std::vector<debugger_function> debugger_functions;
+
 void ctrl_c_handler(int)
 {
     ctrl_c = true;
@@ -54,8 +66,9 @@ std::vector<std::string> split_line(const std::string& line)
             continue;
         }
         if (line[i] == '"') {
-            ++i;
             std::string s;
+            s.push_back(line[i]); // Keep quote
+            ++i;
             while (i < l) {
                 if (line[i] == '\\') {
                     ++i;
@@ -82,6 +95,20 @@ std::vector<std::string> split_line(const std::string& line)
                     case 'n':
                         s.push_back('\n');
                         break;
+                    case 'x':
+                        if (i + 3 >= l) {
+                            std::cerr << "Invalid escape sequence: \\" << line.substr(i) << "\n";
+                            return {};
+                        }
+                        ++i;
+                        if (auto [ok, val] = from_hex(line.substr(i, 2)); ok) {
+                            s.push_back(static_cast<char>(val & 0xff));
+                            ++i; // One more char consumed below
+                        } else {
+                            std::cerr << "Invalid escape sequence: \\x" << line.substr(i, 2) << "\n";
+                            return {};
+                        }
+                        break;
                     default:
                         std::cerr << "Unknown escape character: \\" << line[i] << "\n";
                         return {};
@@ -90,9 +117,9 @@ std::vector<std::string> split_line(const std::string& line)
                     continue;
                 }
 
+                s.push_back(line[i]); // Keep quote
                 if (line[i] == '"')
                     break;
-                s.push_back(line[i]);
                 ++i;
             }
             if (i >= l) {
@@ -113,24 +140,153 @@ std::vector<std::string> split_line(const std::string& line)
     return args;
 }
 
+std::string unquote(const std::string& s)
+{
+    if (s.size() < 2 || s[0] != '\"')
+        return s;
+    assert(s.back() == '\"');
+    return s.substr(1, s.size() - 2);
+}
+
+std::optional<std::vector<uint8_t>> unhex_bytes(const std::string& s)
+{
+    if (s.empty() || s.size() % 2)
+        return {};
+    std::vector<uint8_t> res(s.size() / 2);
+    for (size_t i = 0; i < res.size(); ++i) {
+        const auto d1 = digitval(s[i * 2 + 0]);
+        const auto d2 = digitval(s[i * 2 + 1]);
+        if ((d1 | d2) > 15)
+            return {};
+        res[i] = d1 << 4 | d2;
+    }
+    return res;
+}
+
+std::pair<uint32_t, const void*> get_register_address(const char* s, const cpu_state& st)
+{
+    std::string reg { s };
+    if (reg.empty()) {
+        std::cerr << "Unknown register \"" << reg << "\"\n";
+        return { 0, nullptr };
+    }
+    if (reg[0] >= '0' && reg[0] <= '9') {
+        // Internal register
+        const auto [ok, idx] = number_from_string(reg.c_str(), 10);
+        if (ok) {
+            if (idx < std::size(debugger_reg))
+                return { 4, &debugger_reg[idx] };
+            std::cerr << "Out of range for internal register \"" << reg << "\"\n";
+        } else {
+            std::cerr << "Invalid register \"" << reg << "\"\n";
+        }
+        return { 0, nullptr };
+    }
+    for (auto& c : reg) {
+        if (c >= 'a' && c <= 'z')
+            c -= 'a' - 'A';
+    }
+
+    if (reg == "SSP")
+        return { 4, &st.ssp };
+    else if (reg == "USP")
+        return { 4, &st.usp };
+    else if (reg == "PC")
+        return { 4, &st.pc };
+    else if (reg == "SR")
+        return { 2, &st.sr };
+    else if (reg == "ANS")
+        return { 4, &debugger_ans };
+
+    if (reg.size() == 2 && reg[1] >= '0' && reg[1] <= '7') {
+        const auto idx = reg[1] - '0';
+        if (reg[0] == 'D')
+            return { 4, &st.d[idx] };
+        else if (reg[0] == 'A')
+            return { 4, &const_cast<cpu_state&>(st).A(idx) };
+    }
+
+    std::cerr << "Unknown register \"" << reg << "\"\n";
+    return { 0, nullptr };
+}
+
+std::pair<bool, uint32_t> get_register(const char* s)
+{
+    const auto [size, ptr] = get_register_address(s, debugger_cpu_state);
+    if (!size)
+        return { false, 0 };
+    assert(ptr);
+    if (size == 2)
+        return { true, *reinterpret_cast<const uint16_t*>(ptr) };
+    assert(size == 4);
+    return { true, *reinterpret_cast<const uint32_t*>(ptr) };
+}
+
+std::pair<bool, uint32_t> get_number(const std::string& s)
+{
+    if (s.empty())
+        return { false, 0 };
+    if (s[0] == 'r' || s[0] == 'R')
+        return get_register(s.c_str() + 1);
+    else if (s[0] == '!')
+        return number_from_string(s.c_str() + 1, 10);
+    else if (s[0] == '%')
+        return number_from_string(s.c_str() + 1, 2);
+    else if (s[0] == '$')
+        return number_from_string(s.c_str() + 1, 16);
+    else if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        return number_from_string(s.c_str() + 2, 16);
+    else if (s.size() > 2 && s[0] == '0' && (s[1] == 'o' || s[1] == 'O'))
+        return number_from_string(s.c_str() + 2, 8);
+    return number_from_string(s.c_str(), 16);
+}
+
 std::pair<bool, uint32_t> get_simple_expr(const std::string& arg)
 {
     if (arg.empty())
         return { false, 0 };
 
-    auto prec = [](char c) {
+    constexpr unsigned char op_lsh = 0x80;
+    constexpr unsigned char op_rsh = 0x81;
+    constexpr unsigned char op_leq = 0x82;
+    constexpr unsigned char op_geq = 0x83;
+    constexpr unsigned char op_eq  = 0x84;
+    constexpr unsigned char op_neq = 0x85;
+    constexpr unsigned char op_func_base = 0x90;
+
+    assert(debugger_functions.size() < 0x100 - op_func_base);
+
+    auto prec = [](unsigned char c) {
         switch (c) {
+        case '|':
+            return 94;
+        case '^':
+            return 95;
+        case '&':
+            return 96;
+        case op_eq:
+        case op_neq:
+            return 97;
+        case '<':
+        case '>':
+        case op_leq:
+        case op_geq:
+            return 98;
+        case op_lsh:
+        case op_rsh:
+            return 99;
         case '+':
         case '-':
-            return 1;
+            return 100;
         case '*':
         case '/':
-            return 2;
+        case '%':
+            return 200;
         default:
             return 0;
         }
     };
-    auto doop = [](char c, uint32_t a, uint32_t b) -> uint32_t {
+    auto doop = [](unsigned char c, uint32_t a, uint32_t b) -> uint32_t {
         switch (c) {
         case '+':
             return a + b;
@@ -140,17 +296,42 @@ std::pair<bool, uint32_t> get_simple_expr(const std::string& arg)
             return a * b;
         case '/':
             return b ? a / b : 0xffffffff;
+        case '%':
+            return b ? a % b : 0xffffffff;
+        case '|':
+            return a | b;
+        case '^':
+            return a ^ b;
+        case '&':
+            return a & b;
+        case op_lsh:
+            return a << b;
+        case op_rsh:
+            return a >> b;
+        case '<':
+            return a < b;
+        case '>':
+            return a > b;
+        case op_leq:
+            return a <= b;
+        case op_geq:
+            return a >= b;
+        case op_eq:
+            return a == b;
+        case op_neq:
+            return a != b;
         }
         assert(false);
         return 0;
     };
 
+    enum class elem_type { number, op, func };
     struct stack_elem {
-        bool isop;
+        elem_type type;
         uint32_t val;
     };
     std::vector<stack_elem> s;
-    std::vector<char> opstack;
+    std::vector<unsigned char> opstack;
 
     #if 0
     auto print_state = [&]() {
@@ -170,41 +351,122 @@ std::pair<bool, uint32_t> get_simple_expr(const std::string& arg)
 
     // Extremely simple shunting yard expression parser
     for (size_t i = 0, size = arg.size(); i < size;) {
-        const char c = arg[i];
+        uint8_t c = arg[i];
+        if (c == ',' && i + 1 < size) {
+            // Ignore
+            ++i;
+            continue;
+        }
+        if ((c == '<' || c == '>') && i + 2 < size && (arg[i + 1] == c || arg[i + 1] == '=')) {
+            ++i;
+            if (arg[i] == c)
+                c = c == '<' ? op_lsh : op_rsh;
+            else {
+                assert(arg[i] == '=');
+                c = c == '<' ? op_leq : op_geq;
+            }
+        } else if (c == '=' && i + 2 < size && arg[i + 1] == '=') {
+            ++i;
+            c = op_eq;
+        } else if (c == '!' && i + 2 < size && arg[i + 1] == '=') {
+            ++i;
+            c = op_neq;
+        }
         if (auto pre = prec(c); pre) {
             while (!opstack.empty() && prec(c) <= prec(opstack.back())) {
-                s.push_back({ true, static_cast<uint32_t>(opstack.back()) });
+                s.push_back({ elem_type::op, static_cast<uint32_t>(opstack.back()) });
                 opstack.pop_back();
             }
             opstack.push_back(c);
             ++i;
+        } else if (c == '(') {
+            opstack.push_back(c);
+            ++i;
+        } else if (c == ')') {
+            ++i;
+            for (;;) {
+                if (opstack.empty())
+                    return { false, 0 };
+                if (opstack.back() == '(') {
+                    opstack.pop_back();
+                    if (!opstack.empty() && opstack.back() >= op_func_base) { // Function at the top of the stack
+                        s.push_back({ elem_type::func, static_cast<uint32_t>(opstack.back() - op_func_base) });
+                        opstack.pop_back();
+                    }
+                    break;
+                }
+                s.push_back({ elem_type::op, static_cast<uint32_t>(opstack.back()) });
+                opstack.pop_back();
+            }
         } else {
             size_t j = i + 1;
-            for (; j < size && !prec(arg[j]); ++j)
+            for (; j < size && !strchr("(),=*/%+-|<>&$^!", arg[j]); ++j)
                 ;
-            const auto [valid, num] = from_hex(arg.substr(i, j - i));
-            if (!valid)
-                return { false, 0 };
-            s.push_back({ false, num });
+            const auto tok = arg.substr(i, j - i);
             i = j;
+            uint8_t func_index = 0xFF;
+            for (size_t cnt = 0; cnt < debugger_functions.size(); ++cnt) {
+                if (tok == debugger_functions[cnt].name) {
+                    func_index = static_cast<uint8_t>(cnt);
+                    break;
+                }
+            }
+            if (func_index < 0x80) {
+                opstack.push_back(op_func_base + func_index);
+            } else {
+                const auto [valid, num] = get_number(tok);
+                if (!valid)
+                    return { false, 0 };
+                s.push_back({ elem_type::number, num });
+            }
         }
     }
     while (!opstack.empty()) {
-        s.push_back({ true, static_cast<uint32_t>(opstack.back()) });
+        if (opstack.back() == '(')
+            return { false, 0 };
+        s.push_back({ elem_type::op, static_cast<uint32_t>(opstack.back()) });
         opstack.pop_back();
     }
 
     std::vector<uint32_t> vals;
     for (auto& se : s) {
-        if (se.isop) {
+        if (se.type == elem_type::op) {
             if (vals.size() < 2)
                 return { false, 0 };
             auto b = vals.back();
             vals.pop_back();
             auto a = vals.back();
             vals.pop_back();
-            vals.push_back(doop(static_cast<char>(se.val), a, b));
+            assert(se.val < 0x100);
+            vals.push_back(doop(static_cast<unsigned char>(se.val), a, b));
+        } else if (se.type == elem_type::func) {
+            assert(se.val < debugger_functions.size());
+            const auto& func = debugger_functions[se.val];
+            if (vals.size() < func.func.index())
+                return { false, 0 };
+            std::vector<uint32_t> args;
+            for (size_t i = 0; i < func.func.index(); ++i) {
+                args.push_back(vals.back());
+                vals.pop_back();
+            }
+
+            uint32_t res = 0;
+            switch (func.func.index()) {
+            case 0:
+                res = std::get<0>(func.func)();
+                break;
+            case 1:
+                res = std::get<1>(func.func)(args[0]);
+                break;
+            case 2:
+                res = std::get<2>(func.func)(args[0], args[1]);
+                break;
+            default:
+                assert(false);
+            }
+            vals.push_back(res);
         } else {
+            assert(se.type == elem_type::number);
             vals.push_back(se.val);
         }
     }
@@ -375,6 +637,27 @@ std::vector<uint8_t> load_disk_file(const std::string& filename)
     if (data.size() != 80 * 2 * 11 * 512)
         throw std::runtime_error { filename + " is not a valid disk image (wrong size)" };
     return data;
+}
+
+void mem_search(const std::vector<uint8_t>& ram, uint32_t base_address, const std::vector<uint8_t>& needle, uint32_t start_address, uint32_t end_address, unsigned& match_count)
+{
+    constexpr unsigned max_matches = 20;
+    if (needle.size() > ram.size() || needle.empty() || match_count)
+        return;
+    if (!(start_address <= base_address + ram.size() && base_address <= end_address))
+        return;
+    for (size_t i = 0, e = ram.size() - needle.size(); i < e && base_address + i < end_address; ++i) {
+        if (base_address + i >= start_address && memcmp(&ram[i], &needle[0], needle.size()) == 0) {
+            const auto addr = base_address + static_cast<uint32_t>(i);
+            std::cout << "Found at $" << hexfmt(addr) << "\n";
+            if (!match_count)
+                debugger_ans = addr; // Save first match
+            if (++match_count > max_matches) {
+                std::cout << "maximum number of matches reached\n";
+                return;
+            }
+        }
+    }
 }
 
 constexpr int default_disk_insertion_delay = 2 * 50;
@@ -750,6 +1033,12 @@ int main(int argc, char* argv[])
             debug_mode = true;
         };
 
+        debugger_functions.push_back({ "get_u8", [&mem](uint32_t addr) -> uint32_t { return mem.read_u8(addr); } });
+        debugger_functions.push_back({ "get_u16", [&mem](uint32_t addr) -> uint32_t { return mem.read_u16(addr); } });
+        debugger_functions.push_back({ "get_u32", [&mem](uint32_t addr) -> uint32_t { return mem.read_u32(addr); } });
+        debugger_functions.push_back({ "extb", [](uint32_t val) { return sext(val, opsize::b); } });
+        debugger_functions.push_back({ "extw", [](uint32_t val) { return sext(val, opsize::w); } });
+
         std::unique_ptr<wavedev> audio;
 
         //#define WRITE_SOUND
@@ -1094,6 +1383,8 @@ int main(int argc, char* argv[])
                     cpu.show_state(std::cout);
                     disasm_stmts(mem, cpu_step.current_pc, 1);
 
+                    debugger_cpu_state = s;
+
                     uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
                     for (;;) {
                         std::string line;
@@ -1128,7 +1419,7 @@ int main(int argc, char* argv[])
                             }
                         }
                         const auto args = split_line(line);
-                        if (args.empty() || args[0].empty())
+                        if (args.empty() || args[0].empty() || args[0][0] == '#')
                             continue;
                         if (args[0] == "c") {
                             custom.show_debug_state(std::cout);
@@ -1175,7 +1466,18 @@ int main(int argc, char* argv[])
                                 break;
                             }
                         } else if (args[0] == "g") {
-                            break;
+                            if (args.size() == 2) {
+                                if (const auto [ok, addr] = get_simple_expr(args[1]); ok) {
+                                    const_cast<cpu_state&>(s).pc = addr;
+                                    break;
+                                } else {
+                                    std::cerr << "Invalid address\n";
+                                }
+                            } else if (args.size() == 1) {
+                                break;
+                            } else {
+                                std::cerr << "Invalid number of arguments\n";
+                            }
                         } else if (args[0] == "insert_disk") {
                             if (args.size() >= 2) {
                                 const int drive = args[1].length() == 1 && isdigit(args[1][0]) ? args[1][0] - '0' : -1;
@@ -1189,7 +1491,7 @@ int main(int argc, char* argv[])
                                             delay = -1;
                                     }
                                     if (delay >= 0)
-                                        insert_disk(static_cast<uint8_t>(drive), args.size() >= 3 ? args[2].c_str() : "", delay);
+                                        insert_disk(static_cast<uint8_t>(drive), args.size() >= 3 ? unquote(args[2]).c_str() : "", delay);
                                     else
                                         std::cerr << "Invalid delay";
                                 } else {
@@ -1228,7 +1530,71 @@ int main(int argc, char* argv[])
                             quit = true;
                             break;
                         } else if (args[0] == "r") {
-                            cpu.show_state(std::cout);
+                            if (args.size() == 1) {
+                                cpu.show_state(std::cout);
+                            } else if (args.size() == 3) {
+                                const auto [size, ptr] = get_register_address(args[1].c_str(), s);
+                                if (size) {
+                                    assert((size == 2 || size == 4) && ptr);                                    
+                                    if (const auto [ok, val] = get_simple_expr(args[2]); ok) {
+                                        if (size == 2) {
+                                            if (val < 65536)
+                                                *reinterpret_cast<uint16_t*>(const_cast<void*>(ptr)) = static_cast<uint16_t>(val);
+                                            else
+                                                std::cerr << "Value out of range for 16-bit register\n";
+                                        } else {
+                                            *reinterpret_cast<uint32_t*>(const_cast<void*>(ptr)) = val;
+                                        }
+                                    } else {
+                                        std::cerr << "Invalid value\n";
+                                    }
+                                }
+                            } else {
+                                std::cerr << "Invalid number of arguments\n";
+                            }
+                        } else if (args[0] == "s") {
+                            if (args.size() > 1 && !args[1].empty()) {
+                                std::vector<uint8_t> needle;
+                                bool ok = true;
+                                if (args[1][0] == '"') {
+                                    assert(args[1].back() == '"');
+                                    needle = std::vector<uint8_t>(args[1].begin() + 1, args[1].end() - 1);
+                                } else {
+                                    auto bytes = unhex_bytes(args[1]);
+                                    if (!bytes) {
+                                        std::cerr << "Invalid bytes\n";
+                                        ok = false;
+                                    } else {
+                                        needle = std::move(*bytes);
+                                    }
+                                }
+                                uint32_t start_address = 0;
+                                uint32_t end_address = 1 << 24;
+                                if (ok && args.size() > 2) {
+                                    std::tie(ok, start_address) = get_simple_expr(args[2]);
+                                    if (!ok)
+                                        std::cerr << "Invalid start address\n";
+                                }
+                                if (ok && args.size() > 3) {
+                                    std::tie(ok, end_address) = get_simple_expr(args[3]);
+                                    if (!ok)
+                                        std::cerr << "Invalid length\n";
+                                    end_address += start_address;
+                                }
+                                if (ok) {
+                                    unsigned match_count = 0;
+                                    mem_search(mem.ram(), 0, needle, start_address, end_address, match_count);
+                                    if (slow_ram)
+                                        mem_search(slow_ram->ram(), slow_base, needle, start_address, end_address, match_count);
+                                    if (fast_ram)
+                                        mem_search(fast_ram->ram(), fast_ram->base_address(), needle, start_address, end_address, match_count);
+                                    mem_search(rom.rom(), 0xf80000, needle, start_address, end_address, match_count); // Meh, not correct but w/e
+                                    if (!match_count)
+                                        debugger_ans = 0xffffffff;
+                                }
+                            } else {
+                                std::cerr << "Missing arguments\n";
+                            }
                         } else if (args[0] == "t") {
                             wait_arg = ~0U;
                             if (args.size() > 1) {
@@ -1475,7 +1841,8 @@ int main(int argc, char* argv[])
                                 // TODO: Also fast and slow mem (if present)
                                 std::ofstream f(args[1], std::ofstream::binary);
                                 if (f) {
-                                    std::cout << "Warning: Only writing chipmem\n";
+                                    if (fast_ram || slow_ram)
+                                        std::cout << "Warning: Only writing chipmem\n";
                                     f.write(reinterpret_cast<const char*>(mem.ram().data()), mem.ram().size());
                                 } else {
                                     std::cerr << "Error creating \"" << args[1] << "\"\n";
@@ -1550,11 +1917,16 @@ int main(int argc, char* argv[])
                                 std::cout << "Missing argument(s) vpos [hpos]\n";
                             }
                         } else if (args[0][0] == '?') {
-                            const auto [valid, num] = get_simple_expr(args[0].substr(1));
-                            if (valid)
+                            std::string expr = args[0].substr(1);
+                            for (size_t i = 1; i < args.size(); ++i)
+                                expr += args[i];
+                            const auto [valid, num] = get_simple_expr(expr);
+                            if (valid) {
                                 std::cout << "$" << hexfmt(num) << " = %" << binfmt(num) << " = " << num << "\n";
-                            else
-                                std::cout << "Invalid expression\n";                                
+                                debugger_ans = num;
+                            } else {
+                                std::cout << "Invalid expression\n";
+                            }
                         } else {
 unknown_command:
                             std::cout << "Unknown command \"" << args[0] << "\"\n";
