@@ -2121,9 +2121,11 @@ public:
             const uint8_t mask = s_.bplcon0 & BPLCON0F_HIRES ? 7 : 15;
             const uint8_t delay1 = s_.bplcon1_denise & mask;
             const uint8_t delay2 = (s_.bplcon1_denise >> 4) & mask;
+            // http://eab.abime.net/showthread.php?t=108873 only active planes are copied
+            const uint8_t nbpls = std::min<uint8_t>(6, (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
 
             if ((s_.bpldata_avail & 1) && delay1 == (s_.hpos & mask)) {
-                for (int i = 0; i < 6; i += 2)
+                for (int i = 0; i < nbpls; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~1;
 
@@ -2136,7 +2138,7 @@ public:
                 }
             }
             if ((s_.bpldata_avail & 2) && delay2 == (s_.hpos & mask)) {
-                for (int i = 1; i < 6; i += 2)
+                for (int i = 1; i < nbpls; i += 2)
                     s_.bpldat_shift[i] = s_.bpldat_temp[i];
                 s_.bpldata_avail &= ~2;
 
