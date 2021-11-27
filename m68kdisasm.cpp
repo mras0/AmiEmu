@@ -501,6 +501,8 @@ enum class base_data_type {
     code_,
     copper_code_,
     ptr_,
+    bptr_,
+    bstr_,
     struct_,
 };
 
@@ -514,11 +516,12 @@ public:
         , len_ { 0 }
     {
     }
-    explicit type(const type& base, uint32_t len)
-        : t_ { base_data_type::ptr_ }
+    explicit type(const type& base, uint32_t len, base_data_type t)
+        : t_ { t }
         , ptr_ { &base }
         , len_ { len }
     {
+        assert(t == base_data_type::ptr_ || (t == base_data_type::bptr_ && len == 0));
     }
     explicit type(const structure_definition& s)
         : t_ { base_data_type::struct_ }
@@ -537,6 +540,11 @@ public:
     const type* ptr() const
     {
         return t_ == base_data_type::ptr_ ? ptr_ : nullptr;
+    }
+
+    const type* bptr() const
+    {
+        return t_ == base_data_type::bptr_ ? ptr_ : nullptr;
     }
 
     const structure_definition* struct_def() const
@@ -565,16 +573,15 @@ const type word_type { base_data_type::word_ };
 const type long_type { base_data_type::long_ };
 const type code_type { base_data_type::code_ };
 const type copper_code_type { base_data_type::copper_code_ };
-const type unknown_ptr { unknown_type, 0 };
-const type char_ptr { char_type, 0 };
-const type byte_ptr { byte_type, 0 };
-const type word_ptr { word_type, 0 };
-const type long_ptr { long_type, 0 };
-const type code_ptr { code_type, 0 };
-const type copper_code_ptr { copper_code_type, 0 };
-// For now just alias these to long
-const type& bptr_type = long_type;
-const type& bstr_type = long_type;
+const type unknown_ptr { unknown_type, 0, base_data_type::ptr_ };
+const type char_ptr { char_type, 0, base_data_type::ptr_ };
+const type byte_ptr { byte_type, 0, base_data_type::ptr_ };
+const type word_ptr { word_type, 0, base_data_type::ptr_ };
+const type long_ptr { long_type, 0, base_data_type::ptr_ };
+const type code_ptr { code_type, 0, base_data_type::ptr_ };
+const type copper_code_ptr { copper_code_type, 0, base_data_type::ptr_ };
+const type bptr_type { unknown_type, 0, base_data_type::bptr_ };
+const type bstr_type { base_data_type::bstr_ };
 
 std::unordered_map<std::string, const type*> typenames {
     { "UNKNOWN", &unknown_type },
@@ -598,7 +605,7 @@ const type& make_array_type(const type& base, uint32_t len)
             return *t.get();
         }
     }
-    types.push_back(std::make_unique<type>(base, len));
+    types.push_back(std::make_unique<type>(base, len, base_data_type::ptr_));
     return *types.back().get();
 }
 
@@ -619,7 +626,22 @@ const type& make_pointer_type(const type& base)
             return *t.get();
         }
     }
-    types.push_back(std::make_unique<type>(base, 0));
+    types.push_back(std::make_unique<type>(base, 0, base_data_type::ptr_));
+    return *types.back().get();
+}
+
+const type& make_bpointer_type(const type& base)
+{
+    if (&base == &unknown_type)
+        return bptr_type;
+    assert(base.base() == base_data_type::struct_);
+    static std::vector<std::unique_ptr<type>> types;
+    for (const auto& t : types) {
+        if (t->ptr() == &base) {
+            return *t.get();
+        }
+    }
+    types.push_back(std::make_unique<type>(base, 0, base_data_type::bptr_));
     return *types.back().get();
 }
 
@@ -835,6 +857,11 @@ std::ostream& operator<<(std::ostream& os, const type& t)
         else
             os << "*";
         return os;
+    } else if (t.bptr()) {
+        assert(t.len() == 0);
+        if (t.bptr()->base() == base_data_type::unknown_)
+            return os << "BPTR";
+        return os << "BPTR(" << *t.bptr() << ")";
     }
     switch (t.base()) {
     case base_data_type::unknown_:
@@ -851,6 +878,8 @@ std::ostream& operator<<(std::ostream& os, const type& t)
         return os << "CODE";
     case base_data_type::copper_code_:
         return os << "COPPER";
+    case base_data_type::bstr_:
+        return os << "BSTR";
     case base_data_type::struct_:
         return os << "struct " << t.struct_def()->name();
     default:
@@ -862,8 +891,6 @@ std::ostream& operator<<(std::ostream& os, const type& t)
 
 uint32_t sizeof_type(const type& t)
 {
-    if (t.ptr())
-        return t.len() ? t.len() * sizeof_type(*t.ptr()) : 4;
     switch (t.base()) {
     //case base_data_type::unknown_:
     case base_data_type::char_:
@@ -874,8 +901,15 @@ uint32_t sizeof_type(const type& t)
         return 2;
     case base_data_type::long_:
         return 4;
-    //case base_data_type::code_:
-    //case base_data_type::ptr_:
+    case base_data_type::code_:
+        return 2;
+    case base_data_type::ptr_:
+        return t.len() ? t.len() * sizeof_type(*t.ptr()) : 4;
+    case base_data_type::bptr_:
+        assert(t.len() == 0);
+        return 4;
+    case base_data_type::bstr_:
+        return 4;
     case base_data_type::struct_:
         return t.struct_def()->size();
     default:
@@ -917,7 +951,7 @@ const type* parse_type(const std::string& str)
     return t;
 }
 
-const type& libvec_code = make_array_type(word_type, 3);
+const type& libvec_code = make_array_type(code_type, 3);
 
 // nodes.h
 const structure_definition MinNode {
@@ -939,13 +973,35 @@ const structure_definition Node {
     }
 };
 
+constexpr uint8_t NT_UNKNOWN        = 0;
+constexpr uint8_t NT_TASK           = 1;   // Exec task
+constexpr uint8_t NT_INTERRUPT      = 2;
+constexpr uint8_t NT_DEVICE         = 3;
+constexpr uint8_t NT_MSGPORT        = 4;
+constexpr uint8_t NT_MESSAGE        = 5;   // Indicates message currently pending
+constexpr uint8_t NT_FREEMSG        = 6;
+constexpr uint8_t NT_REPLYMSG       = 7;   // Message has been replied
+constexpr uint8_t NT_RESOURCE       = 8;
+constexpr uint8_t NT_LIBRARY        = 9;
+constexpr uint8_t NT_MEMORY         = 10;
+constexpr uint8_t NT_SOFTINT        = 11;  // Internal flag used by SoftInits
+constexpr uint8_t NT_FONT           = 12;
+constexpr uint8_t NT_PROCESS        = 13;  // AmigaDOS Process
+constexpr uint8_t NT_SEMAPHORE      = 14;
+constexpr uint8_t NT_SIGNALSEM      = 15;  // signal semaphores
+constexpr uint8_t NT_BOOTNODE       = 16;
+constexpr uint8_t NT_KICKMEM        = 17;
+constexpr uint8_t NT_GRAPHICS       = 18;
+constexpr uint8_t NT_DEATHMESSAGE   = 19;
+
+
 // lists.h
 const structure_definition List {
     "List",
     {
-        { "lh_Head", make_pointer_type(make_struct_type(List)) },
-        { "lh_Tail", make_pointer_type(make_struct_type(List)) },
-        { "lh_TailPred", make_pointer_type(make_struct_type(List)) },
+        { "lh_Head", make_pointer_type(make_struct_type(Node)) },
+        { "lh_Tail", make_pointer_type(make_struct_type(Node)) },
+        { "lh_TailPred", make_pointer_type(make_struct_type(Node)) },
         { "lh_Type", byte_type },
         { "l_pad", byte_type },
     }
@@ -954,9 +1010,9 @@ const structure_definition List {
 const structure_definition MinList {
     "MinList",
     {
-        { "mlh_Head", make_pointer_type(make_struct_type(MinList)) },
-        { "mlh_Tail", make_pointer_type(make_struct_type(MinList)) },
-        { "mlh_TailPred", make_pointer_type(make_struct_type(MinList)) },
+        { "mlh_Head", make_pointer_type(make_struct_type(MinNode)) },
+        { "mlh_Tail", make_pointer_type(make_struct_type(MinNode)) },
+        { "mlh_TailPred", make_pointer_type(make_struct_type(MinNode)) },
     }
 };
 
@@ -992,7 +1048,7 @@ const structure_definition IntVector {
     {
         { "iv_Data", unknown_ptr },
         { "iv_Code", code_ptr },
-        { "iv_Node", make_pointer_type(make_struct_type(IntVector)) },
+        { "iv_Node", make_pointer_type(make_struct_type(Node)) },
     }
 };
 
@@ -1115,6 +1171,40 @@ const structure_definition IOStdReq {
     }
 };
 
+// semaphores.h
+const structure_definition SemaphoreRequest {
+    "SemaphoreRequest",
+    {
+        { "sr_Link", make_struct_type(MinNode) },
+        { "sr_Waiter", make_pointer_type(make_struct_type(Task)) },
+    }
+};
+const structure_definition SignalSemaphore {
+    "SignalSemaphore",
+    {
+        { "ss_Link", make_struct_type(Node) },
+        { "ss_NestCount", word_type },
+        { "ss_WaitQueue", make_struct_type(MinList) },
+        { "ss_MultipleLink", make_struct_type(SemaphoreRequest) },
+        { "ss_Owner", make_pointer_type(make_struct_type(Task)) },
+        { "ss_QueueCount", word_type },
+    }
+};
+const structure_definition SemaphoreMessage {
+    "SemaphoreMessage",
+    {
+        { "ssm_Message", make_struct_type(Message) },
+        { "ssm_Semaphore", make_pointer_type(make_struct_type(SignalSemaphore)) },
+    }
+};
+const structure_definition Semaphore {
+    "Semaphore",
+    {
+        { "sm_MsgPort", make_struct_type(MsgPort) },
+        { "sm_Bids", word_type },
+    }
+};
+
 // execbase.h
 
 constexpr int32_t _LVOSupervisor = -30;
@@ -1184,6 +1274,7 @@ const structure_definition ExecBase {
         { "KickMemPtr", unknown_ptr },
         { "KickTagPtr", unknown_ptr },
         { "KickCheckSum", unknown_ptr },
+#if 0 // V36 onwards
         { "ex_Pad0", word_type },
         { "ex_LaunchPoint", long_type },
         { "ex_RamLibPrivate", unknown_ptr },
@@ -1193,8 +1284,14 @@ const structure_definition ExecBase {
         { "ex_Reserved1", make_array_type(long_type, 5) },
         { "ex_MMULock", unknown_ptr },
         { "ex_Reserved2", make_array_type(long_type, 3) },
+        // V39
         { "ex_MemHandlers", make_struct_type(MinList) },
         { "ex_MemHandler", unknown_ptr },
+#endif
+        { "_LVOOpenLib", libvec_code, -6 },
+        { "_LVOCloseLib", libvec_code, -12 },
+        { "_LVOExpungeLib", libvec_code, -18 },
+        { "_LVOReservedFuncLib", libvec_code, -24 },
 
         { "_LVOSupervisor", libvec_code, _LVOSupervisor },
         { "_LVOExitIntr", libvec_code, -36 },
@@ -1332,7 +1429,6 @@ const structure_definition ExecBase {
 TEMP_STRUCT(bltnode);
 TEMP_STRUCT(TextFont);
 TEMP_STRUCT(SimpleSprite);
-TEMP_STRUCT(SignalSemaphore);
 TEMP_STRUCT(MonitorSpec);
 TEMP_STRUCT(ViewPort);
 TEMP_STRUCT(copinit);
@@ -1462,6 +1558,11 @@ const structure_definition GfxBase {
         { "VBCounter", long_type },
         { "HashTableSemaphore", make_pointer_type(make_struct_type(SignalSemaphore)) },
         { "HWEmul", make_array_type(long_ptr, 9) },
+
+        { "_LVOOpenLib", libvec_code, -6 },
+        { "_LVOCloseLib", libvec_code, -12 },
+        { "_LVOExpungeLib", libvec_code, -18 },
+        { "_LVOReservedFuncLib", libvec_code, -24 },
 
         { "_LVOBltBitMap", libvec_code, -30 },
         { "_LVOBltTemplate", libvec_code, -36 },
@@ -1641,6 +1742,7 @@ TEMP_STRUCT(RootNode);
 TEMP_STRUCT(ErrorString);
 TEMP_STRUCT(timerequest);
 constexpr int32_t _LVOOpen = -30;
+constexpr int32_t _LVOWrite = -48;
 
 const structure_definition DosBase {
     "DosBase",
@@ -1656,10 +1758,15 @@ const structure_definition DosBase {
         { "dl_UtilityBase", make_pointer_type(make_struct_type(Library)) },
         { "dl_IntuitionBase", make_pointer_type(make_struct_type(Library)) },
 
+        { "_LVOOpenLib", libvec_code, -6 },
+        { "_LVOCloseLib", libvec_code, -12 },
+        { "_LVOExpungeLib", libvec_code, -18 },
+        { "_LVOReservedFuncLib", libvec_code, -24 },
+
         { "_LVOOpen", libvec_code, _LVOOpen },
         { "_LVOClose", libvec_code, -36 },
         { "_LVORead", libvec_code, -42 },
-        { "_LVOWrite", libvec_code, -48 },
+        { "_LVOWrite", libvec_code, _LVOWrite },
         { "_LVOInput", libvec_code, -54 },
         { "_LVOOutput", libvec_code, -60 },
         { "_LVOSeek", libvec_code, -66 },
@@ -1818,6 +1925,28 @@ const structure_definition DosBase {
     }
 };
 
+const structure_definition CommandLineInterface {
+    "CommandLineInterface",
+    {
+        { "cli_Result2", long_type },
+        { "cli_SetName", bstr_type },
+        { "cli_CommandDir", bptr_type },
+        { "cli_ReturnCode", long_type },
+        { "cli_CommandName", bstr_type },
+        { "cli_FailLevel", long_type },
+        { "cli_Prompt", bstr_type },
+        { "cli_StandardInput", bptr_type },
+        { "cli_CurrentInput", bptr_type },
+        { "cli_CommandFile", bstr_type },
+        { "cli_Interactive", long_type },
+        { "cli_Background", long_type },
+        { "cli_CurrentOutput", bptr_type },
+        { "cli_DefaultStack", long_type },
+        { "cli_StandardOutput", bptr_type },
+        { "cli_Module", bptr_type },
+    }
+};
+
 const structure_definition Process {
     "Process",
     {
@@ -1835,10 +1964,11 @@ const structure_definition Process {
         { "pr_COS", bptr_type },
         { "pr_ConsoleTask", unknown_ptr },
         { "pr_FileSystemTask", unknown_ptr },
-        { "pr_CLI", bptr_type },
+        { "pr_CLI", make_bpointer_type(make_struct_type(CommandLineInterface)) },
         { "pr_ReturnAddr", unknown_ptr },
         { "pr_PktWait", unknown_ptr },
         { "pr_WindowPtr", unknown_ptr },
+        #if 0 // New in 2.0
         { "pr_HomeDir", bptr_type },
         { "pr_Flags", long_type },
         { "pr_ExitCode", code_ptr }, // void (*pr_ExitCode)()
@@ -1847,6 +1977,7 @@ const structure_definition Process {
         { "pr_LocalVars", make_struct_type(MinList) },
         { "pr_ShellPrivate", long_type },
         { "pr_CES", bptr_type },
+        #endif
     }
 };
 
@@ -2046,10 +2177,13 @@ void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simv
     }    
 }
 
+constexpr uint16_t JMP_ABS_L_instruction = 0x4EF9;
+
 class analyzer {
 public:
     explicit analyzer()
         : written_(max_mem)
+        , data_handled_at_(max_mem)
         , data_(max_mem)
         , regs_ {}
     {
@@ -2059,6 +2193,8 @@ public:
         std::string name;
         const type* t;
     };
+
+    void do_system_scan();
 
     uint32_t fake_exec_base() const
     {
@@ -2232,6 +2368,9 @@ public:
         if (!force && (!written_[addr] || addr < 32*4))
             return;
 
+        if (addr >= alloc_top_ && addr <= alloc_start)
+            return;
+
         if (visited_.find(addr) == visited_.end()) {
             roots_.push_back({ addr, regs });
             visited_[addr] = regs; // Mark visitied now to avoid re-insertion
@@ -2242,7 +2381,7 @@ public:
     void add_label(uint32_t addr, const std::string& name, const type& t)
     {
         auto [li, offset] = find_label(addr);
-        if (!li) {
+        if (!li || (offset < 0 && &t == &code_type)) {
             labels_.insert({ addr, { name, &t } });
             return;
         }
@@ -2332,15 +2471,15 @@ public:
 
     void add_fakes()
     {
-        if (exec_base_)
-            throw std::runtime_error { "TODO: Support exec_base being present already" };
-
-        exec_base_ = add_library("exec.library", "SysBase", ExecBase);
-        saved_pointers_.insert({ 4, exec_base_ });
-        fake_process_ = alloc_fake_mem(Process.size());
-        add_label(fake_process_, "FakeProcess", make_struct_type(Process));
-        update_mem(opsize::l, exec_base_ + 0x114, simval { fake_process_ }); // ThisTask
-
+        if (!exec_base_) {
+            exec_base_ = add_library("exec.library", "SysBase", ExecBase);
+            saved_pointers_.insert({ 4, exec_base_ });
+            fake_process_ = alloc_fake_mem(Process.size());
+            add_label(fake_process_, "FakeProcess", make_struct_type(Process));
+            update_mem(opsize::l, exec_base_ + 0x114, simval { fake_process_ }); // ThisTask
+        } else {
+            library_bases_.insert({ "exec.library", exec_base_ });
+        }
         add_library("graphics.library", "GfxBase", GfxBase);
         const auto dos_base = add_library("dos.library", "DosBase", DosBase);
         add_library("intuition.library", "IntuitionBase", IntuitionBase);
@@ -2403,12 +2542,14 @@ public:
                                                                                      },
                                                               open_library } });
         // dos.library
-        //_LVOOpen
         functions_.insert({ dos_base + _LVOOpen, function_description {
-                                                     {},
-                                                     { { regname::D1, "name", &char_ptr }, { regname::D2, "accessMode ", &long_type } },
-                                                 } });
-
+                                                        {},
+                                                        { { regname::D1, "name", &char_ptr }, { regname::D2, "accessMode ", &long_type } },
+                                                    } });
+        functions_.insert({ dos_base + _LVOWrite, function_description {
+                                                        {},
+                                                        { { regname::D1, "file", &bptr_type }, { regname::D2, "buffer", &unknown_ptr }, { regname::D3, "length", &long_type } },
+                                                    } });
         //std::cerr << "Fake execbase: $" << hexfmt(exec_base_) << "\n";
     }
 
@@ -2612,7 +2753,10 @@ public:
                         switch (ea & ea_xn_mask) {
                         case ea_other_abs_w:
                         case ea_other_abs_l:
-                            print_addr(ea_addr_[i].raw());
+                            if (inst.type != inst_type::PEA || ea_addr_[i].raw() > 0x2000) // arbitrary limit
+                                print_addr(ea_addr_[i].raw());
+                            else
+                                std::cout << "$" << hexfmt(ea_addr_[i].raw());
                             break;
                         case ea_other_pc_disp16:
                             print_addr(ea_addr_[i].raw());
@@ -2685,6 +2829,7 @@ private:
         uint32_t end;
     };
     std::vector<bool> written_;
+    std::vector<bool> data_handled_at_;
     std::vector<uint8_t> data_;
     std::vector<std::pair<uint32_t, simregs>> roots_;
     std::map<uint32_t, simregs> visited_;
@@ -2703,7 +2848,8 @@ private:
     simval ea_addr_[2];
     simval ea_val_[2];
     std::map<uint32_t, uint32_t> saved_pointers_;
-    uint32_t alloc_top_ = 0xa00000; // serve memory (from AllocMem) from here..
+    static constexpr uint32_t alloc_start = 0xa00000;
+    uint32_t alloc_top_ = alloc_start; // serve memory (from AllocMem) from here..
 
     static const area* find_area(const std::vector<area>& areas, uint32_t addr)
     {
@@ -2900,11 +3046,15 @@ private:
                     handle_copper_code(pos, next_pos, t.len());
                 } else {
                     const auto elem_size = sizeof_type(*t.ptr());
-                    if (elem_size > 4) {
-                        assert(false);
-                        throw std::runtime_error { "TODO: Handle array of something other than elementary types" };
+                    if (elem_size <= 4) {
+                        handle_array_range(pos, std::min(pos + elem_size * t.len(), next_pos), elem_size, t.ptr()->ptr() != nullptr);
+                    } else {
+                        assert(!name.empty());
+                        for (uint32_t i = 0; i < t.len() && pos + elem_size <= next_pos; ++i) {
+                            handle_typed_data(pos, next_pos, *t.ptr(), name + "[" + std::to_string(i) + "]" );
+                        }
+                        assert(pos <= next_pos);
                     }
-                    handle_array_range(pos, std::min(pos + elem_size * t.len(), next_pos), elem_size, t.ptr()->ptr() != nullptr);
                 }
             } else {
                 std::cout << "\tdc.l\t";
@@ -2914,18 +3064,33 @@ private:
                 pos += 4;
             }
             return true;
+        case base_data_type::bptr_:
+        case base_data_type::bstr_: {
+            assert(!t.len());
+            const auto addr = get_u32(&data_[pos]) * 4;
+            pos += 4;
+            std::cout << "\tdc.l\t$" << hexfmt(addr/4);
+            if (addr) {
+                std::cout << " ; points to ";
+                print_addr(addr);
+            }
+            std::cout << "\n";
+            return true;
+        }
         case base_data_type::struct_: {
-            const auto end_pos = pos + t.struct_def()->size();
+            auto end_pos = pos + t.struct_def()->size();
             if (end_pos > next_pos) {
-                std::cerr << "WARNING: Structure size goes beyond next_pos!\n";
-                assert(!"TODO");
-                return false;
+                //std::cerr << "WARNING: Structure size goes beyond next_pos!\n";
+                //assert(!"TODO");
+                end_pos = next_pos;
             }
             for (const auto& f : t.struct_def()->fields()) {
                 if (f.offset() < 0)
                     continue;
-                const auto n = name + "." + f.name();
                 auto p = pos + f.offset();
+                if (p >= end_pos)
+                    break;
+                const auto n = name + "." + f.name();
                 std::cout << "; " << std::left << std::setw(32) << n << " $" << hexfmt(p) << " " << f.t() << "\n";
                 handle_typed_data(p, next_pos, f.t(), n);
             }
@@ -3423,7 +3588,7 @@ private:
             }
             if (fptr) {
                 fptr -= 6;
-                update_mem(opsize::w, fptr, simval { 0x4EF9 }); // JMP abs.l (not currently written)
+                update_mem(opsize::w, fptr, simval { JMP_ABS_L_instruction }); // JMP abs.l (not currently written)
                 update_mem(opsize::l, fptr + 2, simval { v });
             }
         }
@@ -3511,7 +3676,7 @@ private:
                             if (!lit->second.t->ptr() && !lit->second.t->struct_def()) {
                                 std::cerr << "Warning: Overriding type of " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
                                 lit->second.t = pt;
-                            } else {
+                            } else if (lit->second.t != pt) {
                                 std::cerr << "Warning: Type conflict for " << lit->second.name << " previous type " << *lit->second.t << " new type " << *pt << "\n";
                             }
                         } else {
@@ -3621,6 +3786,15 @@ private:
                         continue;
 
                     const auto& t = inst.type == inst_type::LEA ? unknown_type : type_from_size(inst.size);
+
+                    if (ea_addr < 0x400) {
+                        if (inst.type == inst_type::PEA)
+                            continue;
+                        if (inst.size != opsize::l)
+                            continue;
+                        if (ea_addr & 3)
+                            continue;
+                    }
 
                     switch (inst.ea[i] >> ea_m_shift) {
                     case ea_m_Dn:
@@ -3830,7 +4004,9 @@ private:
     void maybe_find_string_at(uint32_t addr);
     void maybe_find_copper_list_at(uint32_t addr);
     void handle_data_at(uint32_t addr, const type& t);
+    void handle_pointer_to(uint32_t addr, const type& t);
     void handle_predef_info();
+    uint32_t check_exec_base();
 };
 
 
@@ -3838,8 +4014,80 @@ void analyzer::handle_struct_at(uint32_t addr, const structure_definition& s)
 {
     if (!pointer_ok(addr))
         return;
+    
+    if (&s == &Node && !data_handled_at_[addr] && !find_label(addr).first) {
+        switch (data_[addr + 0x08]) { // ln_Type
+        case NT_UNKNOWN:
+            break;
+        case NT_TASK:
+            handle_struct_at(addr, Task);
+            return;
+        case NT_INTERRUPT:
+            handle_struct_at(addr, Interrupt);
+            return;
+        case NT_DEVICE:
+        case NT_RESOURCE:
+        case NT_LIBRARY: {
+            handle_struct_at(addr, Library);
+            const auto neg_size = get_u16(&data_[addr + 0x10]); // lib_NegSize
+            if (neg_size % 6)
+                return;
+
+            simregs r {};
+            r.a[6] = simval { addr };
+            auto n = "lib" + hexstring(addr) + "_Func";
+            for (int i = 0; i < neg_size / 6; ++i) {
+                const auto faddr = addr - (i + 1) * 6;
+
+                if (get_u16(&data_[faddr]) == JMP_ABS_L_instruction) {
+                    const auto impl_addr = get_u32(&data_[faddr + 2]);
+                    add_label(impl_addr, n + std::to_string(i), code_type);
+                    add_root(impl_addr, r);
+                }
+
+                add_label(faddr, n + std::to_string(i) + "Vec", code_type);
+                add_root(faddr, r);
+            }
+            return;
+        }
+        case NT_MEMORY: // MemList
+            break;
+        case NT_PROCESS:
+            handle_struct_at(addr, Process);
+            return;
+        case NT_SIGNALSEM:
+            handle_struct_at(addr, SignalSemaphore);
+            return;
+        default:
+            std::cerr << "Unhandled node type " << static_cast<int>(data_[addr + 0x08]) << " at $" << hexfmt(addr) << "\n";
+        }
+    }
+
+    add_auto_label(addr, make_struct_type(s), s.name());
     for (const auto& f : s.fields()) {
-        handle_data_at(addr + f.offset(), f.t());
+        const auto faddr = addr + f.offset();
+        if (f.offset() < 0) {
+            assert(&f.t() == &libvec_code);
+            if (faddr < 256 * 4 || faddr + 6 > max_mem)
+                continue;
+            simregs r{};
+            r.a[6] = simval{addr};
+            auto fn = std::string { f.name() };
+            if (fn.compare(0, 4, "_LVO") == 0)
+                fn.erase(1, 3);
+
+            if (get_u16(&data_[faddr]) == JMP_ABS_L_instruction) {
+                const auto impl_addr = get_u32(&data_[faddr + 2]);
+                add_label(impl_addr, std::string { s.name() } + fn, code_type);
+                add_root(impl_addr, r);
+            }
+
+            add_label(faddr, std::string { s.name() } + fn + "Vec", code_type);
+            add_root(faddr, r);
+            continue;
+        }
+
+        handle_data_at(faddr, f.t());
     }
 }
 
@@ -3877,6 +4125,7 @@ void analyzer::maybe_find_string_at(uint32_t addr)
     if (nprint * 10 > len)
         return;
 
+    std::fill(data_handled_at_.begin() + start_addr, data_handled_at_.begin() + start_addr + len, true);
     add_label(start_addr, "text_" + hexstring(start_addr), make_array_type(char_type, len));
 }
 
@@ -3885,6 +4134,7 @@ void analyzer::maybe_find_copper_list_at(uint32_t addr)
     addr &= ~1;
     if (addr + 3 >= max_mem || !written_[addr])
         return;
+
     const auto start_addr = addr;
     // Arbitrary limits
     constexpr uint32_t max_len = 4096;
@@ -3909,13 +4159,20 @@ void analyzer::maybe_find_copper_list_at(uint32_t addr)
         if (ir1 == 0x88 || ir1 == 0x8a)
             break;
     }
+    std::fill(data_handled_at_.begin() + start_addr, data_handled_at_.begin() + start_addr + len * 4, true);
     add_label(start_addr, "copperlist_" + hexstring(start_addr), make_array_type(copper_code_type, len * 2));
 }
 
 void analyzer::handle_data_at(uint32_t addr, const type& t)
 {
-    if (!pointer_ok(addr) || !written_[addr])
+    if (!addr || addr >= max_mem || !written_[addr])
         return;
+
+    if (data_handled_at_[addr]) {
+        //std::cerr << "ignoring $" << hexfmt(addr) << " of type " << t << " - already handled\n";
+        return;
+    }
+    //std::cerr << "handling $" << hexfmt(addr) << " of type " << t << "\n";
 
     switch (t.base()) {
     default:
@@ -3926,41 +4183,100 @@ void analyzer::handle_data_at(uint32_t addr, const type& t)
     case base_data_type::byte_:
     case base_data_type::word_:
     case base_data_type::long_:
+        break;
+    case base_data_type::code_:
+        assert(false);
+        add_root(addr, simregs {}, true);
+        break;
+    case base_data_type::ptr_:
+        if (const auto len = t.len(); len != 0) {
+            assert(t.ptr() != &code_type);
+            const auto size = sizeof_type(*t.ptr());
+            for (uint32_t i = 0; i < len; ++i)
+                handle_data_at(addr + i * size, *t.ptr());
+            break;
+        }
+        data_handled_at_[addr] = true; // Prevent infinite recursion
+        if (t.ptr() != &unknown_type)
+            handle_pointer_to(get_u32(&data_[addr]), *t.ptr());
+        break;
+    case base_data_type::bptr_:
+        assert(t.len() == 0);
+        data_handled_at_[addr] = true; // Prevent infinite recursion
+        if (t.bptr() != &unknown_type)
+            handle_pointer_to(get_u32(&data_[addr]) * 4, *t.bptr());
+        break;
+    case base_data_type::bstr_: {
+        const auto p = get_u32(&data_[addr]) * 4;
+        if (p && p + 256 < max_mem && written_[p]) {
+            add_auto_label(p, byte_type, "bstr");
+            if (data_[p])
+                add_auto_label(p + 1, make_array_type(char_type, data_[p]), "bstr_text");
+        }
+        break;
+    }
+    case base_data_type::struct_:
+        handle_struct_at(addr, *t.struct_def());
+        break;
+    }
+
+    data_handled_at_[addr] = true;
+}
+
+void analyzer::handle_pointer_to(uint32_t addr, const type& t)
+{
+    if (!addr || addr + 1 >= max_mem || !written_[addr] || &t == &unknown_type)
+        return;
+
+    switch (t.base()) {
+    default:
+        std::cerr << "TODO: $" << hexfmt(addr) << " pointer to " << t << "\n";
+        assert(!"TODO");
+        [[fallthrough]];
+    case base_data_type::char_:
+        maybe_find_string_at(addr);
+        return;
+    case base_data_type::byte_:
+    case base_data_type::word_:
+    case base_data_type::long_:
         return;
     case base_data_type::code_:
         add_root(addr, simregs {}, true);
         return;
-    case base_data_type::ptr_:
-        if (auto p = try_read_pointer(addr); p) {
-            auto it = labels_.find(p);
-            if (it != labels_.end()) {
-                if (it->second.t != t.ptr())
-                    std::cerr << "TODO: Maybe handle " << *t.ptr() << " at $" << hexfmt(p) << " - already present as " << it->second.name << " (" << *it->second.t << ")\n";
-                return;
-            }
-
-            if (t.ptr() == &code_type) {
-                std::cerr << "TODO: Pointer to code at $" << hexfmt(p) << "!\n";
-                assert(0);
-                return;
-            } else if (t.ptr()->base() == base_data_type::struct_) {
-                std::cerr << "TODO: Pointer to struct at $" << hexfmt(p) << "!\n";
-                assert(0);
-                return;
-            } else if (t.ptr()->base() == base_data_type::copper_code_) {
-                std::cerr << "TODO: Pointer to copper at $" << hexfmt(p) << "!\n";
-                assert(0);
-                return;
-            } else if (t.ptr() == &char_type) {
-                maybe_find_string_at(p);
-                return;
-            }
-        }
+    case base_data_type::copper_code_:
+        maybe_find_copper_list_at(addr);
         return;
+    //case base_data_type::ptr_:
+    //case base_data_type::bptr_:
     case base_data_type::struct_:
         handle_struct_at(addr, *t.struct_def());
         return;
     }
+}
+
+uint32_t analyzer::check_exec_base()
+{
+    const uint32_t base = try_read_pointer(4);
+    if (!base || !written_[base] || !written_[base + 608] || ~base != get_u32(&data_[base + 0x26]))
+        return 0;
+    uint16_t csum = 0;
+    for (uint32_t offset = 0x22; offset < 0x54; offset += 2)
+        csum += get_u16(&data_[base + offset]);
+    if (csum != 0xffff)
+        return 0;
+
+    // Check if Chip/fast mem matches loaded areas
+    uint32_t MaxLocMem = get_u32(&data_[base + 0x3e]);
+    uint32_t MaxExtMem = get_u32(&data_[base + 0x4e]);
+    for (const auto& a : areas_) {
+        if (MaxLocMem == a.end)
+            MaxLocMem = 0;
+        else if (MaxExtMem == a.end)
+            MaxExtMem = 0;
+    }
+    if (MaxLocMem || MaxExtMem)
+        return 0;
+    return base;
 }
 
 void analyzer::handle_predef_info()
@@ -3972,6 +4288,67 @@ void analyzer::handle_predef_info()
         if (&t != &code_type)
             handle_data_at(i.first, t);
     }
+}
+
+void analyzer::do_system_scan()
+{
+    exec_base_ = check_exec_base();
+    if (!exec_base_) {
+        std::cerr << "ExecBase not valid\n";
+        return;
+    }
+
+    const uint32_t this_task_ptr = get_u32(&data_[exec_base_ + 0x0114]);
+    if (!pointer_ok(this_task_ptr)) {
+        std::cerr << "ThisTask not valid\n";
+        return;
+    }
+
+    if (data_[this_task_ptr + 0x08] != NT_PROCESS) {
+        std::cerr << "ThisTask is not a process (type=" << static_cast<int>(data_[this_task_ptr + 0x08]) << ")\n";
+        return;
+    }
+
+    auto process_seg_list = [this](uint32_t seg_list_ptr) {
+        if (!pointer_ok(seg_list_ptr))
+            return;
+        std::cerr << "SegList: $" << hexfmt(seg_list_ptr) << "\n";
+        hexdump16(std::cerr, seg_list_ptr, &data_[seg_list_ptr], 32);
+        for (uint32_t cnt = 0; pointer_ok(seg_list_ptr); seg_list_ptr = get_u32(&data_[seg_list_ptr]) * 4, ++cnt) {
+            std::cerr << "Segment at: $" << hexfmt(seg_list_ptr+4) << " size: $" << hexfmt(get_u32(&data_[seg_list_ptr-4])) << "\n";
+            if (cnt == 0)
+                add_start_root(seg_list_ptr + 4);
+        }
+    };
+
+    if (const auto pr_cli = get_u32(&data_[this_task_ptr + 0xac]); pointer_ok(pr_cli * 4)) {
+        if (const uint32_t cli_name_addr = get_u32(&data_[pr_cli * 4 + 0x10]) * 4; cli_name_addr + 256 < max_mem && written_[cli_name_addr]) {
+            const auto len = data_[cli_name_addr];
+            std::cerr << "Current task: \"" << std::string{ &data_[cli_name_addr + 1], &data_[cli_name_addr + 1 + len] } << "\"\n";
+        }
+        add_label(this_task_ptr, "ThisProcess", make_struct_type(Process));
+        add_label(pr_cli * 4, "ThisCli", make_struct_type(CommandLineInterface));
+        handle_data_at(this_task_ptr, make_struct_type(Process));
+        process_seg_list(get_u32(&data_[pr_cli * 4 + 0x3c]) * 4); // BADDR(BADDR(proc->pr_CLI)->cli_Module)
+    } else {
+        if (const uint32_t task_name_addr = get_u32(&data_[this_task_ptr + 0x0a]); task_name_addr < max_mem && written_[task_name_addr])
+            std::cerr << "Current task: \"" << reinterpret_cast<const char*>(&data_[task_name_addr]) << "\"\n";
+
+        add_label(this_task_ptr, "ThisProcess", make_struct_type(Process));
+
+        const auto seg_list_array = get_u32(&data_[this_task_ptr + 0x80]) * 4; // BADDR(proc->pr_SegList)
+        // Array of seg lists used by this process
+        if (!pointer_ok(seg_list_array) || get_u32(&data_[seg_list_array]) > 4)
+            return;
+
+        hexdump16(std::cerr, seg_list_array, &data_[seg_list_array], 32);
+        // Ignore array size (first element)
+        process_seg_list(get_u32(&data_[seg_list_array + 3 * 4]) * 4);
+        process_seg_list(get_u32(&data_[seg_list_array + 4 * 4]) * 4);
+    }
+
+    add_label(exec_base_, "SysBase", make_struct_type(ExecBase));
+    handle_data_at(exec_base_, make_struct_type(ExecBase));
 }
 
 
@@ -4700,8 +5077,11 @@ int main(int argc, char* argv[])
                 a->write_data(load_base, data.data(), static_cast<uint32_t>(data.size()));
                 if (start)
                     a->add_start_root(hex_or_die(argv[2]));
+                else
+                    a->do_system_scan();
                 if (!load_base)
                     a->add_int_vectors();
+                a->add_fakes();
                 a->run();
             } else {
                 if (argc > 4)
