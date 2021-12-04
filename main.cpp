@@ -1838,12 +1838,35 @@ int main(int argc, char* argv[])
                             }
                         } else if (args[0] == "write_mem") {
                             if (args.size() > 1) {
-                                // TODO: Also fast and slow mem (if present)
                                 std::ofstream f(args[1], std::ofstream::binary);
                                 if (f) {
-                                    if (fast_ram || slow_ram)
-                                        std::cout << "Warning: Only writing chipmem\n";
-                                    f.write(reinterpret_cast<const char*>(mem.ram().data()), mem.ram().size());
+                                    auto write_part = [&f](const void* data, uint32_t size, uint32_t base) {
+                                        uint8_t part_header[8];
+                                        put_u32(&part_header[0], base);
+                                        put_u32(&part_header[4], size);
+                                        f.write("PART", 4);
+                                        f.write(reinterpret_cast<const char*>(part_header), sizeof(part_header));
+                                        f.write(reinterpret_cast<const char*>(data), size);
+                                    };
+                                    f.write("MEMDUMP!", 8);
+                                    write_part(mem.ram().data(), static_cast<uint32_t>(mem.ram().size()), 0);
+                                    if (fast_ram && fast_ram->base_address())
+                                        write_part(fast_ram->ram().data(), static_cast<uint32_t>(fast_ram->ram().size()), fast_ram->base_address());
+                                    if (slow_ram)
+                                        write_part(slow_ram->ram().data(), static_cast<uint32_t>(slow_ram->ram().size()), slow_base);
+                                    f.write("REGS", 4);
+                                    auto put_reg = [&f](uint32_t val) {
+                                        uint8_t dat[4];
+                                        put_u32(dat, val);
+                                        f.write(reinterpret_cast<const char*>(dat), 4);
+                                    };
+                                    put_reg(s.pc);
+                                    put_reg(s.sr);
+                                    for (int i = 0; i < 8; ++i)
+                                        put_reg(s.d[i]);
+                                    for (int i = 0; i < 8; ++i)
+                                        put_reg(s.A(i));
+                                    put_reg(s.sr & srm_s ? s.usp : s.ssp);
                                 } else {
                                     std::cerr << "Error creating \"" << args[1] << "\"\n";
                                 }

@@ -368,7 +368,26 @@ constexpr const char* const dmacon_bitnames[16] = {
     "BIT12",
     "BZERO",
     "BBUSY",
-    "SET/CLR",
+    "SETCLR",
+};
+
+constexpr const char* const int_bitnames[16] = {
+    "TBE",
+    "DSKBLK",
+    "SOFT",
+    "PORTS",
+    "COPER",
+    "VERTB",
+    "BLIT",
+    "AUD0",
+    "AUD1",
+    "AUD2",
+    "AUD3",
+    "RBF",
+    "DSKSYN",
+    "EXTER",
+    "INTEN",
+    "SETCLR",
 };
 
 std::string interrupt_name(uint8_t vec)
@@ -2172,9 +2191,55 @@ void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simv
             // DMACON(R)
             extra << " bit " << static_cast<int>(bitnum) << " = " << dmacon_bitnames[bitnum];
             return;
+        } else if (reg == 0x1c || reg == 0x1e || reg == 0x9a || reg == 0x9c) {
+            // Interrupt bits
+            extra << " bit " << static_cast<int>(bitnum) << " = " << int_bitnames[bitnum];
+            return;
+        } else if (reg == 0x16 && bitnum == 10) {
+            // POTGOR (special case for RMB)
+            extra << " /RMB";
+            return;
         }
-        std::cerr << "TODO: Add bitnum info for custom register " << custom_regname[reg >> 1] << "\n";
+        std::cerr << "TODO: Add bitnum info for custom register " << custom_regname[reg >> 1] << " ($" << hexfmt(reg, 3) << ") bit " << static_cast<int>(bitnum) << " \n";
     }    
+}
+
+void maybe_add_custom_bit_info(std::ostringstream& extra, uint32_t addr, uint16_t val)
+{
+    if (addr & 1)
+        return;
+    addr &= 0x1fe;
+    if (addr == 0x96) {
+        // DMACON
+        if (val == 0x7fff) {
+            extra << " disable all";
+            return;
+        } else if (val == 0) {
+            return;
+        }
+        bool first = true;
+        for (int bit = 15; bit >= 0; --bit) {
+            if (val & (1 << bit)) {
+                extra << (first ? " ":"+") << dmacon_bitnames[bit];
+                first = false;
+            }
+        }
+    } else if (addr == 0x9a || addr == 0x9c) {
+        // INTENA/INTREQ
+        if (val == 0x7fff) {
+            extra << " " << (addr == 0x9a ? "disable" : "acknowledge") <<  " all";
+            return;
+        } else if (val == 0) {
+            return;
+        }
+        bool first = true;
+        for (int bit = 15; bit >= 0; --bit) {
+            if (val & (1 << bit)) {
+                extra << (first ? " " : "+") << int_bitnames[bit];
+                first = false;
+            }
+        }
+    }
 }
 
 constexpr uint16_t JMP_ABS_L_instruction = 0x4EF9;
@@ -2372,8 +2437,14 @@ public:
             return;
 
         if (visited_.find(addr) == visited_.end()) {
-            roots_.push_back({ addr, regs });
-            visited_[addr] = regs; // Mark visitied now to avoid re-insertion
+
+            auto root_regs = regs;
+            auto forced = forced_values_.equal_range(addr);
+            for (auto fit = forced.first; fit != forced.second; ++fit) {
+                reg_from_name(root_regs, fit->second.first) = simval { fit->second.second };
+            }
+            roots_.push_back({ addr, root_regs });
+            visited_[addr] = root_regs; // Mark visitied now to avoid re-insertion
         }
         add_auto_label(addr, code_type, is_func ? "func" : "lab");
     }
@@ -2694,6 +2765,10 @@ public:
                                 if (int ofs = (addr & 1) - (aval.raw() & 0x1ff); ofs != 0)
                                     std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
                                 std::cout << "(A" << (ea & 7) << ")";
+
+                                if (i == 1 && inst.size == opsize::w && inst.type == inst_type::MOVE && ea_val_[0].known()) {
+                                    maybe_add_custom_bit_info(extra, addr, static_cast<uint16_t>(ea_val_[0].raw()));
+                                }
                                 break;
                             } else if (auto [li, lofs] = find_label(addr); li) {
                                 if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
@@ -3640,10 +3715,10 @@ private:
         }
     }
 
-    auto& reg_from_name(regname reg)
+    simval& reg_from_name(simregs& regs, regname reg)
     {
         assert(static_cast<uint32_t>(reg) < 16);
-        return (reg >= regname::A0 ? regs_.a : regs_.d)[static_cast<uint8_t>(reg) & 7];
+        return (reg >= regname::A0 ? regs.a : regs.d)[static_cast<uint8_t>(reg) & 7];
     }
 
     void do_branch(uint32_t addr, bool is_func)
@@ -3662,7 +3737,7 @@ private:
         //std::cerr << "Found function at $" << hexfmt(addr) << "\n";
         const auto& fd = it->second;
         for (const auto& i : fd.input()) {
-            const auto& reg = reg_from_name(i.reg);
+            const auto& reg = reg_from_name(regs_, i.reg);
             //std::cerr << i.reg << " = " << reg << " -> type " << *i.t << "\n";
             if (auto pt = i.t->ptr()) {
                 if (reg.known()) {
@@ -3714,7 +3789,7 @@ private:
 
             auto forced = forced_values_.equal_range(start);
             for (auto fit = forced.first; fit != forced.second; ++fit) {
-                reg_from_name(fit->second.first) = simval { fit->second.second };
+                reg_from_name(regs_, fit->second.first) = simval { fit->second.second };
             }
 
             #if 0
@@ -5065,7 +5140,53 @@ int main(int argc, char* argv[])
 
             a->add_root(base + 0x0c, regs);
             a->run();
+        } else if (data.size() > 128*1024+20 && !memcmp(data.data(), "MEMDUMP!", 8)) {
+            if (!a)
+                throw std::runtime_error { "Currently memdumps are only supported for analysis" };
+            if (argc > 2)
+                throw std::runtime_error { "Arguments for memdump analysis not supported" };
+            for (size_t pos = 8; pos < data.size();) {
+                if (pos + 12 >= data.size())
+                    throw std::runtime_error { "Invalid memory dump" };
+                if (!memcmp(data.data() + pos, "PART", 4)) {
+                    const uint32_t base = get_u32(&data[pos + 4]);
+                    const uint32_t size = get_u32(&data[pos + 8]);
+                    pos += 12;
+                    if (size > (1<<24) || base >= (1<<24) || base + size >= (1<<24) || pos + size > data.size())
+                        throw std::runtime_error { "Invalid memory dump part" };
+                    a->write_data(base, data.data() + pos, size);
+                    pos += size;
+                } else if (!memcmp(data.data() + pos, "REGS", 4)) {
+                    pos += 4;
+                    if (pos + 76 != data.size())
+                        throw std::runtime_error { "Invalid memory dump (expected registers last)" };
 
+                    auto get_val = [&]() {
+                        const auto val = get_u32(data.data() + pos);
+                        pos += 4;
+                        return val;
+                    };
+                    simregs r { };
+                    const auto pc = get_val();
+                    get_val(); // SR
+                    for (int i = 0; i < 8; ++i)
+                        r.d[i] = simval { get_val() };
+                    for (int i = 0; i < 8; ++i)
+                        r.a[i] = simval { get_val() };
+                    get_val(); // USP/SSP (that isn't A7)
+                    assert(pos == data.size());
+                    a->add_label(pc, "CurrentPosition", code_type);
+                    a->add_root(pc, r);
+                    std::cerr << "Current PC: $" << hexfmt(pc) << "\n";
+                    break;
+                } else {
+                    throw std::runtime_error { "Invalid memory dump" };
+                }
+            }
+            a->do_system_scan();
+            a->add_int_vectors();
+            a->add_fakes();
+            a->run();
         } else {
             if (a) {
                 uint32_t start = 0;
