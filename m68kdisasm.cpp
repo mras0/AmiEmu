@@ -2449,7 +2449,7 @@ public:
         add_auto_label(addr, code_type, is_func ? "func" : "lab");
     }
 
-    void add_label(uint32_t addr, const std::string& name, const type& t)
+    void add_label(uint32_t addr, const std::string& name, const type& t, bool is_auto_label = true)
     {
         auto [li, offset] = find_label(addr);
         if (!li || (offset < 0 && &t == &code_type)) {
@@ -2458,8 +2458,12 @@ public:
         }
 
         // Exact match and type is same or we already know a better one
-        if (li->t == &t || &t == &unknown_type)
+        if (li->t == &t || &t == &unknown_type) {
+            // But update in case this isn't an automatic label
+            if (&t != &unknown_type && !is_auto_label)
+                li->name = name;
             return;
+        }
 
         //std::cerr << "Warning: Label " << name << " $" << hexfmt(addr) << " " << t << " overlaps " << li->name << " " << *li->t << " offset $" << hexfmt(offset) << "\n";
 
@@ -2895,6 +2899,10 @@ public:
                 pos += inst.ilen * 2;
             }
         }
+
+        std::cerr << "exec_base = $" << hexfmt(exec_base_) << "\n";
+        for (const auto& l : library_bases_)
+            std::cerr << l.first << ": $" << hexfmt(l.second) << "\n";
     }
 
 private:
@@ -4048,6 +4056,12 @@ private:
             update_ea(opsize::l, 1, inst.ea[1], val);
             break;
         }
+        case inst_type::MOVEQ: {
+            assert(inst.ea[0] == ea_data8);
+            assert(inst.ea[1] < 8);
+            regs_.d[inst.ea[1]] = simval { static_cast<uint32_t>(sext(inst.data, opsize::b)) };
+            break;
+        }
         case inst_type::SUB:
         case inst_type::SUBA:
             if (inst.size == opsize::l) {
@@ -4358,7 +4372,7 @@ void analyzer::handle_predef_info()
 {
     for (const auto& i : predef_info_) {
         const auto& t = *i.second.t;
-        add_label(i.first, i.second.name, t);
+        add_label(i.first, i.second.name, t, false);
         // Don't add root here in case better register values can be inferred
         if (&t != &code_type)
             handle_data_at(i.first, t);
