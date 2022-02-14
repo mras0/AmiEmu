@@ -2544,6 +2544,37 @@ public:
         return addr;
     }
 
+    void handle_rtf_autoinit(uint32_t addr)
+    {
+        assert(addr + 16 <= max_mem);
+        assert(!regs_.a[0].known());
+        assert(!regs_.a[1].known());
+        assert(!regs_.a[2].known());
+        assert(!regs_.d[0].known());
+        assert(!regs_.d[1].known());
+
+
+        const uint32_t dSize = get_u32(&data_[addr]);
+        const uint32_t vectors = get_u32(&data_[addr + 4]);
+        const uint32_t structure = get_u32(&data_[addr + 8]);
+        const uint32_t initFunc = get_u32(&data_[addr + 12]);
+
+        regs_.a[0] = simval {vectors};
+        regs_.a[1] = simval {structure};
+        regs_.a[2] = simval {initFunc};
+        regs_.d[0] = simval {dSize};
+        regs_.d[1] = simval {}; // segList
+
+        do_make_library();
+
+        regs_.a[0] = simval{};
+        regs_.a[1] = simval{};
+        regs_.a[2] = simval{};
+        regs_.d[0] = simval{};
+        regs_.d[1] = simval{};
+    }
+
+
     void add_fakes()
     {
         if (!exec_base_) {
@@ -5049,9 +5080,16 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
         a->add_label(tag.name_addr, name + "_name", make_array_type(char_type, slen(tag.name_addr)));
         a->add_label(tag.id_addr, name + "_id", make_array_type(char_type, slen(tag.id_addr)));
         if (tag.init_addr) {
-            a->add_label(tag.init_addr, name + "_init", code_type);
-            if (!(tag.flags & 0x80)) // Not RTF_AUTOINIT
+            if (!(tag.flags & 0x80)) { // Not RTF_AUTOINIT
+                a->add_label(tag.init_addr, name + "_init", code_type);
                 a->add_root(tag.init_addr, rom_tag_init_regs);
+            } else {
+                a->add_label(tag.init_addr, name + "_init_dsize", long_type);
+                a->add_label(tag.init_addr + 4, name + "_init_functable", unknown_ptr);
+                a->add_label(tag.init_addr + 8, name + "_init_datatable", unknown_ptr);
+                a->add_label(tag.init_addr + 12, name + "_init_routine", code_ptr);
+                a->handle_rtf_autoinit(tag.init_addr);
+            }
         }
         if (tag.init_addr == start)
             has_entry_name = true;
