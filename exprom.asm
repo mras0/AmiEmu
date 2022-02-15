@@ -1,7 +1,10 @@
 RomStart=0
 
 VERSION=0
-REVISION=1
+REVISION=2
+
+OP_INIT=$fedf
+OP_IOREQ=$fede
 
 RT_MATCHWORD=$00		; UWORD word to match on (ILLEGAL)
 RT_MATCHTAG=$02			; APTR  pointer to the above (RT_MATCHWORD)
@@ -167,9 +170,8 @@ devn_upperCyl=$38       ; ULONG upper cylinder
 devn_numBuffers=$3C     ; ULONG number of buffers
 devn_memBufType=$40     ; ULONG Type of memory for AmigaDOS buffers
 devn_dName=$44 	        ; char[4] DOS file handler name
-devn_Sizeof=$48	        ; Size of this structure
-
-
+devn_bootFlags=$48	    ; ULONG boot flags (filled in by host)
+devn_Sizeof=$4c	        ; Size of this structure
 
 DiagStart:
             dc.b $90                 ; da_Config = DAC_WORDWIDE|DAC_CONFIGTIME
@@ -310,49 +312,52 @@ initRoutine:
         move.l  cd_BoardAddr(a0), dev_Base(a5) ; Save base address
         bclr.b  #CDB_CONFIGME, cd_Flags(a0)    ; Mark as configured
 
-        ; Make dos packet
+        moveq   #0, d5 ; Unit counter
+
+irUnitLoop:
+        ; Room for dos packet
         sub.l   #devn_Sizeof, a7
         move.l  a7, a3
 
-        lea     DosName(pc), a0
-        move.l  a0, devn_dosName(a3)
+        ; Room for name
+        sub.l   #32, a7
+
+        move.l  a7, devn_dosName(a3)
         lea     DevName(pc), a0
         move.l  a0, devn_execName(a3)
-        move.l  #0, devn_unit(a3)
-        move.l  #0, devn_flags(a3)
-        move.l  #12, devn_tableSize(a3)
-        move.l  #128, devn_sizeBlock(a3) ;SECTOR/4
-        move.l  #0, devn_secOrg(a3)
-        move.l  #1, devn_numHeads(a3)
-        move.l  #1, devn_secsPerBlk(a3)
-        move.l  #10, devn_blkTrack(a3)    ;sectors per track
-        move.l  #2, devn_resBlks(a3)      ;2 blocks reserved (boot sector)
-        move.l  #0, devn_prefac(a3)
-        move.l  #0, devn_interleave(a3)
-        move.l  #0, devn_lowCyl(a3)
-        move.l  #999, devn_upperCyl(a3)
-        move.l  #1, devn_numBuffers(a3)
-        move.l  #0, devn_memBufType(a3)
-        move.l  #$44483000, devn_dName(a3) ; 'DH0\0'
+        move.l  d5, devn_unit(a3)
+        move.l  #13, devn_tableSize(a3)
 
         lea     RomCodeEnd(pc), a0
         move.l  a3, (a0)
-        move.w  #$fedf, 4(a0)
+        move.w  #OP_INIT, 4(a0)
 
         move.l  a3, a0
         jsr     _LVOMakeDosNode(a6)
+
+        move.l  devn_bootFlags(a3), d4 ; Get boot flags etc. from host
+
+        add.l   #32, a7 ; Free name
         add.l   #devn_Sizeof, a7 ; Free dos packet
         move.l  d0, d7 ; d7 = DosNode
         beq.b   irError
 
-        ; If disk is not supposed to be bootable do this instead
-        ;move.l  d7, a0
-        ;moveq   #0, d0 ; Boot priority
-        ;moveq   #ADNF_STARTPROC, d1 ; Flags
-        ;jsr     _LVOAddDosNode(a6)
-        ;tst.l   d0
-        ;beq.b   irError
+        btst.l  #1, d4 ; Don't auto mount?
+        bne     irNextUnit
 
+        btst.l  #0, d4 ; Auto boot?
+        bne     irBootNode
+
+        move.l  d7, a0
+        moveq   #0, d0 ; Boot priority
+        moveq   #ADNF_STARTPROC, d1 ; Flags
+        jsr     _LVOAddDosNode(a6)
+        tst.l   d0
+        beq.b   irError
+
+        bra.b   irNextUnit
+
+irBootNode:
         cmp.w   #36, LIB_VERSION(a6)
         bcs.b   irPrev36
 
@@ -364,7 +369,7 @@ initRoutine:
         tst.l   d0
         beq.b   irError
 
-        bra.b   irDone
+        bra.b   irNextUnit
 
 irPrev36:
         ; Enqueue boot node
@@ -384,7 +389,11 @@ irPrev36:
         jsr     _LVOEnqueue(a6)
         jsr     _LVOPermit(a6)
 
-irDone:
+irNextUnit:
+        addq.w  #1, d5 ; next unit
+        cmp.w   RomCodeEnd(pc), d5 ; Done?
+        bne     irUnitLoop
+
         move.l  a5, d0
         bra.b   irExit
 irError:
@@ -438,8 +447,10 @@ Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         addq.w  #1, LIB_OPENCNT(a6) ; Avoid expunge during open
         move.l  a1, a2 ; IOB in a2
 
-        tst.l   d0
-        bne.b   OpenError ; Invalid unit
+        moveq   #0, d2
+        move.w  RomCodeEnd(pc), d2 ; Number of units
+        cmp.l   d2, d0
+        bge.b   OpenError ; Invalid unit
 
         ; Allocate memory for unit
         move.l  #devunit_Sizeof, d0
@@ -506,12 +517,13 @@ CloseEnd:
         rts
 
 Expunge:
-        moveq   #3, d0
-        bra.b   Expunge
+        ; TODO: Support this (maybe)
+        moveq   #0, d0
+        rts
 
 Null:
-        moveq   #4, d0
-        bra.b   Null
+        moveq   #0, d0
+        rts
 
 BeginIO: ; ( iob: a1, device:a6 )
         movem.l d0-d7/a0-a6, -(sp)
@@ -524,7 +536,7 @@ BeginIO: ; ( iob: a1, device:a6 )
 
         lea     RomCodeEnd(pc), a0
         move.l  a1, (a0)
-        move.w  #$fede, 4(a0)
+        move.w  #OP_IOREQ, 4(a0)
 
         btst    #IOB_QUICK, IO_FLAGS(a1)
         bne.b   BeginIO_End

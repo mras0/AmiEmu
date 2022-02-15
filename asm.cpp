@@ -1473,7 +1473,7 @@ done:
 
         ea[0].type = 0; // Don't encode the immediate
         constexpr uint8_t size_encoding[4] = { 0b00, 0b00, 0b01, 0b10 };
-        return 0x5000 | is_sub << 8 | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[1].type & 0x3f);
+        return 0x5000 | (ea[0].val & 7) << 9 | is_sub << 8 | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[1].type & 0x3f);
     }
 
     int32_t handle_disp_bw(const instruction_info_type& info, const ea_result& ea, opsize& osize)
