@@ -791,6 +791,10 @@ number:
         for (uint8_t arg = 0; arg < info.num_operands; ++arg) {
             expect(arg == 0 ? token_type::whitespace : token_type::comma);
             ea[arg] = process_ea();
+
+            if (ea[arg].type == ea_reglist && inst != token_type::MOVEM)
+                ASSEMBLER_ERROR("Register list not allowed for " + std::string { info.name });
+
             if (info.num_operands == 3) {
                 if (token_type_ == token_type::comma) {
                     info.num_operands = 2;

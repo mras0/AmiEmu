@@ -258,6 +258,11 @@ public:
                 HANDLE_INST(TST);
                 HANDLE_INST(UNLK);
 #undef HANDLE_INST
+#ifdef DEBUG_BREAK_INST
+            case inst_type::DBGBRK:
+                handle_NOP();
+                break;
+#endif
             default: {
                 std::ostringstream oss;
                 disasm(oss, start_pc_, iwords_, inst_->ilen);
@@ -374,7 +379,11 @@ found:
     }
 
 private:
-    struct address_error_exception {
+    struct address_error_exception : public std::exception {
+        const char* what() const noexcept override
+        {
+            return "Unhadled address error exception";
+        }
     };
 
     memory_handler& mem_;

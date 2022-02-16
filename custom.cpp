@@ -2506,8 +2506,13 @@ public:
             return 0xFF00 & ~(s_.rmb_pressed[0] ? 0x400 : 0) & ~(s_.rmb_pressed[1] ? 0x4000 : 0);
         case SERDATR: // $018
             return (3<<12); // Just return transmit buffer empty
-        case DSKBYTR:
+        case DSKBYTR: {
+            static int warn = 0;
+            if (warn > 50)
+                return 0xffff;
+            ++warn;
             break;
+        }
         case INTENAR: // $01C
             return s_.intena;
         case INTREQR: // $01E

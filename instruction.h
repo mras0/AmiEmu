@@ -39,6 +39,9 @@ constexpr int32_t sext(uint32_t val, opsize size)
 
 enum class inst_type {
     ILLEGAL,
+#ifdef DEBUG_BREAK_INST
+    DBGBRK,
+#endif
     ABCD,
     ADD,
     ADDA,
@@ -166,6 +169,10 @@ constexpr uint16_t reset_instruction_num   = 0x4e70;
 constexpr uint16_t stop_instruction_num    = 0x4e72;
 constexpr uint16_t movec_instruction_dr0_num = 0x4e7a; // Not supported on 68000
 constexpr uint16_t movec_instruction_dr1_num = 0x4e7b; // Not supported on 68000
+
+#ifdef DEBUG_BREAK_INST
+constexpr uint16_t debug_break_instruction_num = DEBUG_BREAK_INST;
+#endif
 
 extern const instruction instructions[65536];
 

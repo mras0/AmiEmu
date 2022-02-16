@@ -5,6 +5,9 @@ REVISION=2
 
 OP_INIT=$fedf
 OP_IOREQ=$fede
+OP_SETFSRES=$fee0
+OP_FSINFO=$fee1
+OP_FSINITSEG=$fee2
 
 RT_MATCHWORD=$00		; UWORD word to match on (ILLEGAL)
 RT_MATCHTAG=$02			; APTR  pointer to the above (RT_MATCHWORD)
@@ -30,6 +33,7 @@ NT_MSGPORT=4
 NT_MESSAGE=5
 NT_FREEMSG=6
 NT_REPLYMSG=7
+NT_RESOURCE=8
 NT_BOOTNODE=16
 
 ; exec.library
@@ -38,10 +42,16 @@ _LVOForbid=-132
 _LVOPermit=-138
 _LVOAllocMem=-198
 _LVOFreeMem=-210
+_LVOAddHead=-240
+_LVOAddTail=-246
 _LVOEnqueue=-270
 _LVOReplyMsg=-378
 _LVOCloseLibrary=-414
+_LVOAddResource=-486
+_LVOOpenResource=-498
 _LVOOpenLibrary=-552
+
+ResourceList=$150
 
 ; expansion.library
 _LVOAddBootNode=-36
@@ -146,10 +156,48 @@ BootNode_SIZEOF=$14
 dev_SysLib=$22  ; LIB_SIZE
 dev_SegList=$26
 dev_Base=$2A
+dev_FileSysRes=$2e
+dev_Sizeof=$32
+
+; struct DeviceNode
+dn_Next=$0000
+dn_Type=$0004
+dn_Task=$0008
+dn_Lock=$000c
+dn_Handler=$0010
+dn_StackSize=$0014
+dn_Priority=$0018
+dn_Startup=$001c
+dn_SegList=$0020
+dn_GlobalVec=$0024
+dn_Name=$0028
+dn_Sizeof=$002c
 
 ; Starts at UNIT_SIZE
 devunit_Device=$26              ; APTR
 devunit_Sizeof=$2A
+
+; struct FileSysResource
+fsr_Node=$0000                  ; struct Node
+fsr_Creator=$000e               ; char*
+fsr_FileSysEntries=$0012        ; struct List
+fsr_Sizeof=$0020
+
+; struct FileSysEntry
+fse_Node=$0000                  ; struct Node
+fse_DosType=$000e               ; ULONG
+fse_Version=$0012               ; ULONG
+fse_PatchFlags=$0016            ; ULONG
+fse_Type=$001a                  ; ULONG
+fse_Task=$001e                  ; CPTR
+fse_Lock=$0022                  ; BPTR
+fse_Handler=$0026               ; BSTR
+fse_StackSize=$002a             ; ULONG
+fse_Priority=$002e              ; LONG
+fse_Startup=$0032               ; BPTR
+fse_SegList=$0036               ; BPTR
+fse_GlobalVec=$003a             ; BPTR
+fse_Sizeof=$003e
 
 ; Parameter packet for MakeDosNode
 devn_dosName=$00        ; APTR  Pointer to DOS file handler name
@@ -168,10 +216,24 @@ devn_interleave=$30     ; ULONG interleave
 devn_lowCyl=$34	        ; ULONG lower cylinder
 devn_upperCyl=$38       ; ULONG upper cylinder
 devn_numBuffers=$3C     ; ULONG number of buffers
-devn_memBufType=$40     ; ULONG Type of memory for AmigaDOS buffers
-devn_dName=$44 	        ; char[4] DOS file handler name
-devn_bootFlags=$48	    ; ULONG boot flags (filled in by host)
-devn_Sizeof=$4c	        ; Size of this structure
+devn_memBufType=$40     ; ULONG type of memory for AmigaDOS buffers
+devn_transferSize=$44   ; LONG  largest transfer size (largest signed #)
+devn_addMask=$48        ; ULONG address mask
+devn_bootPrio=$4c       ; ULONG boot priority
+devn_dName=$50 	        ; char[4] DOS file handler name
+devn_bootFlags=$54	; ULONG boot flags (filled in by host)
+devn_segList=$58        ; BPTR segList (filled in by host)
+devn_Sizeof=$5c	        ; Size of this structure
+
+; Filesystem info
+fsinfo_num=$00          ; UWORD Filesystem number (filled in by expansion ROM)
+fsinfo_dosType=$02      ; ULONG dos type (filled by host)
+fsinfo_version=$06      ; ULONG dos type (filled by host)
+fsinfo_numHunks=$0a     ; ULONG number of hunks (filled by host)
+fsinfo_hunk1=$0e        ; ULONG mem flags for hunk1 (filled by host)
+fsinfo_hunk2=$12        ; ULONG mem flags for hunk2 (filled by host)
+fsinfo_hunk3=$16        ; ULONG mem flags for hunk3 (filled by host)
+fsinfo_Sizeof=$1a
 
 DiagStart:
             dc.b $90                 ; da_Config = DAC_WORDWIDE|DAC_CONFIGTIME
@@ -202,7 +264,7 @@ DosLibName: dc.b 'dos.library', 0
     even
 
 Init:
-            dc.l    $100 ; data space size
+            dc.l    dev_Sizeof ; data space size
             dc.l    funcTable-DiagStart
             dc.l    dataTable-DiagStart
             dc.l    initRoutine-RomStart
@@ -247,14 +309,14 @@ dloop:
         move.w  (a1)+, d0
         bmi.b   bpatches
         add.l   d1, 0(a2,d0.w)
-        bra.b   dloop
+        bra     dloop
 bpatches:
         move.l  a0, d1
 bloop:
         move.w  (a1)+, d0
         bmi.b   endpatches
         add.l   d1, 0(a2,d0.w)
-        bra.b   bloop
+        bra     bloop
 endpatches:
         moveq   #1,d0 ; success
         rts
@@ -282,9 +344,6 @@ patchTable:
         dc.w   funcTable-DiagStart+$14
         dc.w   -1
 
-DosName: dc.b 'DH0',0
-         even
-
 ; d0 = device pointer, a0 = segment list
 ; a6 = exec base
 initRoutine:
@@ -302,7 +361,108 @@ initRoutine:
         beq     irError
         move.l  d0, a4    ; a4=expansion library
 
-        move.l  a4, a6
+        ; Open FileSystem.resource
+        lea     FsrName(pc), a1
+        jsr     _LVOOpenResource(a6)
+        move.l  d0, dev_FileSysRes(a5)
+        lea     RomCodeEnd(pc), a0
+        tst.l   d0
+        beq     irNoFsResource
+
+        ; Inform host about FileSystem.resource
+        move.l  d0, (a0)
+        move.w  #OP_SETFSRES, 4(a0)
+
+irNoFsResource:
+        ; Now check if we need to install any filesystems
+        move.w  2(a0), d6
+        beq     irFsOK
+
+        tst.l   dev_FileSysRes(a5)
+        bne     irHasFsResource
+        bsr     CreateFileSysResource
+        tst.l   d0
+        beq     irError
+        move.l  d0, dev_FileSysRes(a5)
+
+irHasFsResource:
+        sub.l   #fsinfo_Sizeof, a7
+        moveq   #0, d5 ; Fs counter
+irFsLoop:
+
+        move.l  a7, a1
+        move.w  d5, fsinfo_num(a1)
+        lea     RomCodeEnd(pc), a0
+        move.l  a1, (a0)
+        move.w  #OP_FSINFO, 4(a0)
+
+        sub.l   #16, a7 ; fsseginfo
+        move.l  a7, a3
+        move.l  fsinfo_numHunks(a1), d3
+        lea     fsinfo_hunk1(a1), a2
+        moveq   #0, d2
+irAllocHunkLoop:
+        move.l  (a2)+, d0       ; Hunk size + flags
+        move.l  d0, d1
+        clr.w   d1
+        swap    d1
+        lsr.l   #8, d1
+        lsr.l   #5, d1
+        or.l    #$10000, d1 ; MEMF_CLEAR
+        and.l   #$3FFFFFFF, d0
+        lsl.l   #2, d0
+        addq.l  #8, d0
+        jsr     _LVOAllocMem(a6)
+        move.l  d2, d1
+        lsl.l   #2, d1
+        move.l  d0, 0(a3,d1.w)
+        addq.l  #1, d2
+        cmp.l   d2, d3
+        bne     irAllocHunkLoop
+
+        move.l  d5, 12(a3)
+        lea     RomCodeEnd(pc), a0
+        move.l  a3, (a0)
+        move.w  #OP_FSINITSEG, 4(a0)
+
+        move.l  0(a3), d0 ; First hunk
+        addq.l  #4, d0    ; Point to link
+        lsr.l   #2, d0    ; BPTR
+        move.l  d0, a3
+
+        add.l   #16, a7
+
+        move.l  #fse_Sizeof, d0
+        move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
+        jsr     _LVOAllocMem(a6)
+        tst.l   d0
+        beq     irError ; TODO: Need clean up...
+        move.l  d0, a0
+
+        move.l  a7, a1
+        ; a0 = FileSysEntry
+        ; a1 = fsinfo
+        ; a3 = seglist
+        move.l  fsinfo_dosType(a1), fse_DosType(a0)
+        move.l  fsinfo_version(a1), fse_Version(a0)
+        move.l  #$180, fse_PatchFlags(a0) ; Needed?
+        move.l  #-1, fse_GlobalVec(a0)
+        move.l  a3, fse_SegList(a0)
+        lea.l   IdString(pc), a3
+        move.l  a3, LN_NAME(a0)
+        move.l  a0, a1
+        move.l  dev_FileSysRes(a5), a0
+        lea.l   fsr_FileSysEntries(a0), a0
+        jsr     _LVOAddHead(a6)
+
+        addq.w  #1, d5
+        cmp.w   d5, d6
+        bne     irFsLoop
+        add.l   #fsinfo_Sizeof, a7
+
+irFsOK:
+
+        move.l  a4, a6 ; a6 = expansion library
         lea     dev_Base(a5), a0
         moveq   #4, d0 ; Just get address (length = 4)
         jsr     _LVOGetCurrentBinding(a6)
@@ -326,7 +486,7 @@ irUnitLoop:
         lea     DevName(pc), a0
         move.l  a0, devn_execName(a3)
         move.l  d5, devn_unit(a3)
-        move.l  #13, devn_tableSize(a3)
+        move.l  #16, devn_tableSize(a3)
 
         lea     RomCodeEnd(pc), a0
         move.l  a3, (a0)
@@ -334,74 +494,85 @@ irUnitLoop:
 
         move.l  a3, a0
         jsr     _LVOMakeDosNode(a6)
+        tst.l   d0
+        beq     irUnitError
 
-        move.l  devn_bootFlags(a3), d4 ; Get boot flags etc. from host
+        move.l  d0, a0 ; a0 = DosNode
 
-        add.l   #32, a7 ; Free name
-        add.l   #devn_Sizeof, a7 ; Free dos packet
-        move.l  d0, d7 ; d7 = DosNode
-        beq.b   irError
+        move.l  #-1, dn_GlobalVec(a0)
+        move.l  devn_segList(a3), dn_SegList(a0) ; Seglist from host
 
-        btst.l  #1, d4 ; Don't auto mount?
-        bne     irNextUnit
-
-        btst.l  #0, d4 ; Auto boot?
+        move.l  devn_bootFlags(a3), d0
+        btst.l  #0, d0 ; Auto boot?
         bne     irBootNode
 
-        move.l  d7, a0
-        moveq   #0, d0 ; Boot priority
+        ; a0 = dosNode
+        move.l  devn_bootPrio(a3), d0 ; Boot priority
         moveq   #ADNF_STARTPROC, d1 ; Flags
         jsr     _LVOAddDosNode(a6)
         tst.l   d0
-        beq.b   irError
+        beq     irUnitError
 
-        bra.b   irNextUnit
+        bra     irNextUnit
 
 irBootNode:
         cmp.w   #36, LIB_VERSION(a6)
         bcs.b   irPrev36
 
-        move.l  d7, a0 ; deviceNode
+        ; a0 = dosNode
         move.l  d6, a1 ; configDev
-        moveq   #0, d0 ; bootpri
+        move.l  devn_bootPrio(a3), d0 ; Boot priority
         moveq   #ADNF_STARTPROC, d1 ; flags
         jsr     _LVOAddBootNode(a6)
         tst.l   d0
-        beq.b   irError
+        beq     irUnitError
 
-        bra.b   irNextUnit
+        bra     irNextUnit
 
 irPrev36:
         ; Enqueue boot node
+        move.l  a0, -(sp)
         move.l  dev_SysLib(a5), a6
         moveq   #BootNode_SIZEOF, d0
         move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
         move.l  dev_SysLib(a5), a6
         jsr     _LVOAllocMem(a6)
+        move.l  (sp)+, a0
         tst.l   d0
-        beq     irError
+        beq     irUnitError
         move.l  d0, a1
         move.b  #NT_BOOTNODE, LN_TYPE(a1)
         move.l  d6, LN_NAME(a1)
-        move.l  d7, bn_DeviceNode(a1)
+        move.w  #ADNF_STARTPROC, bn_Flags(a1)
+        move.l  a0, bn_DeviceNode(a1)
         lea     eb_MountList(a4), a0
         jsr     _LVOForbid(a6)
         jsr     _LVOEnqueue(a6)
         jsr     _LVOPermit(a6)
+        move.l  a4, a6 ; a6 = expansion.library again!
+        bra     irNextUnit
+
+irUnitError:
+        add.l   #32, a7 ; Free name
+        add.l   #devn_Sizeof, a7 ; Free dos packet
+        bra     irError
 
 irNextUnit:
+        add.l   #32, a7 ; Free name
+        add.l   #devn_Sizeof, a7 ; Free dos packet
         addq.w  #1, d5 ; next unit
         cmp.w   RomCodeEnd(pc), d5 ; Done?
         bne     irUnitLoop
 
         move.l  a5, d0
-        bra.b   irExit
+        bra     irExit
 irError:
         moveq   #0, d0
 irExit:
         move.l  dev_SysLib(a5), a6 ; restore exec base
+
         cmp.l   #0, a4
-        beq.b   irNoClose
+        beq     irNoClose
         move.l  d0, -(sp)
         ; Close expansion library
         move.l  a4, a1
@@ -412,35 +583,74 @@ irNoClose:
         rts
 
 ExLibName:  dc.b 'expansion.library', 0
+FsrName:    dc.b 'FileSystem.resource', 0
             even
 
-;msg1:   dc.b 'Debugmsg: ',0
-;hexchars: dc.b '0123456789abcdef'
-;        even
-;DebugMsg:
-;        movem.l d0-d2/a0, -(sp)
-;        move.l  d0, d1
-;        lea     msg1(pc), a0
-;        move.w  #$100, d0 ; Stop bit
-;dmLoop:
-;        move.b  (a0)+,d0
-;        beq.b   dmDone
-;        move.w  d0, $dff030
-;        bra.b   dmLoop
-;dmDone:
-;        lea     hexchars(pc), a0
-;        moveq   #7, d2
-;dmHexPrint:
-;        rol.l   #4, d1
-;        move.w  d1, d0
-;        and.w   #$f, d0
-;        move.b  0(a0,d0.w), d0
-;        or.w    #$100, d0
-;        move.w  d0, $dff030
-;        dbf     d2, dmHexPrint
-;        move.w  #$010a, $dff030
-;        movem.l (sp)+, d0-d2/a0
-;        rts
+        ; a0 = List
+PrintList:
+        movem.l d0/a0/a1, -(sp)
+        move.l  a0, a1
+prLoop:
+        tst.l   LN_SUCC(a1)
+        beq     prDone
+        move.l  a1, d0
+        bsr     SerPutNum
+        move.b  #$20, d0
+        bsr     SerPutchar
+        move.l  LN_NAME(a1), a0
+        bsr     SerPutMsg
+        bsr     SerPutCrLf
+        move.l  LN_SUCC(a1), a1
+        bra     prLoop
+prDone:
+        movem.l (sp)+, d0/a0/a1
+        rts
+
+SerPutchar:
+        move.l  d0, -(sp)
+        and.w   #$ff, d0
+        or.w    #$100, d0       ; stop bit
+        move.w  d0, $dff030
+        move.l  (sp)+, d0
+        rts
+
+SerPutMsg:
+        movem.l  d0/a0, -(sp)
+spLoop:
+        move.b  (a0)+, d0
+        beq     spDone
+        bsr     SerPutchar
+        bra     spLoop
+spDone:
+        movem.l  (sp)+, d0/a0
+        rts
+
+SerPutCrLf:
+        move.l  d0, -(sp)
+        move.b  #13, d0
+        bsr     SerPutchar
+        move.b  #10, d0
+        bsr     SerPutchar
+        move.l  (sp)+, d0
+        rts
+
+SerPutNum:
+        movem.l d0-d2, -(sp)
+        move.l  d0, d1
+        moveq   #7, d2
+spnLoop:
+        rol.l   #4, d1
+        move.w  d1, d0
+        and.b   #$f, d0
+        add.b   #$30, d0
+        cmp.b   #$39, d0
+        ble.b   spnPrint
+        add.b   #39, d0
+spnPrint:
+        bsr     SerPutchar
+        dbf     d2, spnLoop
+        movem.l (sp)+, d0-d2
+        rts
 
 Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         movem.l d0-d7/a0-a6, -(sp)
@@ -486,7 +696,7 @@ OpenError:
         moveq   #IOERR_OPENFAIL, d0
         move.b  d0, IO_ERROR(a2)
         move.l  d0, IO_DEVICE(a2)
-        bra.b   OpenDone
+        bra     OpenDone
 
 Close:  ; ( device:a6, iob:a1 )
         movem.l d0-d7/a0-a6, -(sp)
@@ -497,7 +707,7 @@ Close:  ; ( device:a6, iob:a1 )
         move.l  d0, IO_DEVICE(a1)
 
         subq.w  #1, UNIT_OPENCNT(a3)
-        bne.b   CloseDevice
+        bne     CloseDevice
 
         ; Free unit
         move.l  a6, a5
@@ -510,7 +720,7 @@ Close:  ; ( device:a6, iob:a1 )
 CloseDevice:
         moveq   #0, d0
         subq.w  #1, LIB_OPENCNT(a6)
-        bne.b   CloseEnd
+        bne     CloseEnd
         bsr     Expunge
 CloseEnd:
         movem.l (sp)+, d0-d7/a0-a6
@@ -518,6 +728,7 @@ CloseEnd:
 
 Expunge:
         ; TODO: Support this (maybe)
+        ; Just leak memory for now
         moveq   #0, d0
         rts
 
@@ -539,7 +750,7 @@ BeginIO: ; ( iob: a1, device:a6 )
         move.w  #OP_IOREQ, 4(a0)
 
         btst    #IOB_QUICK, IO_FLAGS(a1)
-        bne.b   BeginIO_End
+        bne     BeginIO_End
 
         ; Note: "trash" a6
         move.l  dev_SysLib(a6), a6
@@ -552,6 +763,34 @@ BeginIO_End:
 
 AbortIO:
         moveq   #6, d0
-        bra.b   AbortIO
+        bra     AbortIO
+
+; In: a6=SysBase Out: d0=Filesystem resource
+CreateFileSysResource:
+        move.l  #fsr_Sizeof, d0
+        move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
+        jsr     _LVOAllocMem(a6)
+        tst.l   d0
+        beq     cfsrOut
+        move.l  d0, -(sp)
+        move.l  d0, a0
+        move.b  #NT_RESOURCE, LN_TYPE(a0)
+        lea     FsrName(pc), a1
+        move.l  a1, LN_NAME(a0)
+        lea     IdString(pc), a1
+        move.l  a1, fsr_Creator(a0)
+        ; Init the list
+        lea     fsr_FileSysEntries(a0), a0
+        move.l  a0, LH_HEAD(a0)
+        addq.l  #4, LH_HEAD(a0) ; Point head to tail
+        clr.l   LH_TAIL(a0)     ; Clear tail
+        move.l  a0, LH_TAILPRED(a0) ; TailPred points to head
+        ; Add it to the system
+        lea     ResourceList(a6), a0
+        move.l  d0, a1
+        jsr     _LVOAddTail(a6)
+        move.l  (sp)+, d0
+cfsrOut:
+        rts
 
 RomCodeEnd:

@@ -1973,6 +1973,10 @@ unknown_command:
                 } else {
                     switch (wait_mode) {
                     case wait_none:
+#ifdef DEBUG_BREAK_INST
+                        if (cpu_step.instruction == debug_break_instruction_num)
+                            break;
+#endif
                         goto check_breakpoint;
                     case wait_next_inst:
                         if (wait_arg) {

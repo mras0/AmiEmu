@@ -1176,6 +1176,14 @@ int main(int argc, char* argv[])
 
     for (unsigned i = 0; i < 65536; ++i) {
         auto& ai = all_instructions[i];
+#ifdef DEBUG_BREAK_INST
+        if (i == DEBUG_BREAK_INST) {
+            assert(ai.name.empty());
+            ai.type = ai.name = "DBGBRK";
+            ai.base_cycles = 4;
+            ai.memory_accesses = 1;
+        } else
+#endif
         if (ai.name.empty()) {
             ai.type = ai.name = "ILLEGAL";
             ai.base_cycles = 34;

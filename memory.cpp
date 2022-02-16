@@ -5,10 +5,22 @@
 #include <iostream>
 #include <stdexcept>
 
+static uint32_t warncnt;
+static bool memwarn()
+{
+    constexpr uint32_t maxwarn = 50;
+    if (warncnt < 50) {
+        if (++warncnt == maxwarn)
+            std::cerr << "[MEM] Maximum warnings reached.\n";
+        return true;
+    }
+    return false;
+}
+
 uint8_t default_handler::read_u8(uint32_t addr, uint32_t)
 {
     // Don't warn a bunch when scanning for ROM tags / I/O space
-    if (addr < 0xf00000)
+    if (addr < 0xf00000 && memwarn())
         std::cerr << "[MEM] Unhandled byte read from $" << hexfmt(addr) << "\n";
     //return 0xff;
     return 0;
@@ -16,18 +28,20 @@ uint8_t default_handler::read_u8(uint32_t addr, uint32_t)
 uint16_t default_handler::read_u16(uint32_t addr, uint32_t)
 {
     // Don't warn a bunch when scanning for ROM tags / I/O space
-    if (addr < 0xf00000)
+    if (addr < 0xf00000 && memwarn())
         std::cerr << "[MEM] Unhandled word read from $" << hexfmt(addr) << "\n";
     //return 0xffff;
     return 0;
 }
 void default_handler::write_u8(uint32_t addr, uint32_t, uint8_t val)
 {
-    std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
+    if (memwarn())
+        std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
 }
 void default_handler::write_u16(uint32_t addr, uint32_t, uint16_t val)
 {
-    std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
+    if (memwarn())
+        std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
 }
 
 ram_handler::ram_handler(uint32_t size)
@@ -156,7 +170,8 @@ void rom_area_handler::write_u8(uint32_t addr, uint32_t offset, uint8_t val)
         wom_[offset] = val;
         return;
     }
-    std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+    if (memwarn())
+        std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
     //throw std::runtime_error { "Write to ROM" };
 }
 
@@ -166,7 +181,8 @@ void rom_area_handler::write_u16(uint32_t addr, uint32_t offset, uint16_t val)
         put_u16(&wom_[offset], val);
         return;
     }
-    std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+    if (memwarn())
+        std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
     //throw std::runtime_error { "Write to ROM" };
 }
 
