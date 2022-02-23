@@ -298,13 +298,14 @@ memory_handler::area& memory_handler::find_area(uint32_t& addr)
 
 void memory_handler::reset()
 {
-    std::vector<memory_area_handler*> already_reset;
+    std::vector<memory_area_handler*> devices;
     for (auto& a : areas_) {
-        if (std::find(already_reset.begin(), already_reset.end(), a.handler) != already_reset.end())
+        if (std::find(devices.begin(), devices.end(), a.handler) != devices.end())
             continue;
-        already_reset.push_back(a.handler);
-        a.handler->reset();
+        devices.push_back(a.handler);
     }
+    for (auto d : devices)
+        d->reset();
 }
 
 void memory_handler::handle_state(state_file& sf)

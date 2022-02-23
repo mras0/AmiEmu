@@ -685,7 +685,7 @@ struct command_line_arguments {
     std::string rom;
     std::string df0;
     std::string df1;
-    std::string hd;
+    std::vector<std::string> hds;
     std::string debug_script;
     uint32_t chip_size;
     uint32_t slow_size;
@@ -702,7 +702,7 @@ struct command_line_arguments {
         sf.handle(rom);
         sf.handle(df0);
         sf.handle(df1);
-        sf.handle(hd);
+        sf.handle(hds);
         sf.handle(chip_size);
         sf.handle(slow_size);
         sf.handle(fast_size);
@@ -784,8 +784,10 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             else if (get_string_arg("df1", args.df1))
                 continue;
-            else if (get_string_arg("hd", args.hd))
+            else if (std::string s; get_string_arg("hd", s)) {
+                args.hds.push_back(s);
                 continue;
+            }
             else if (get_string_arg("rom", args.rom))
                 continue;
             else if (get_size_arg("chip", args.chip_size, max_chip_size))
@@ -1047,8 +1049,8 @@ int main(int argc, char* argv[])
         #endif
 
         std::unique_ptr<harddisk> hd;
-        if (!cmdline_args.hd.empty()) {
-            hd = std::make_unique<harddisk>(mem, cpu_active, cmdline_args.hd);
+        if (!cmdline_args.hds.empty()) {
+            hd = std::make_unique<harddisk>(mem, cpu_active, cmdline_args.hds);
             autoconf.add_device(hd->autoconf_dev());
         }
 

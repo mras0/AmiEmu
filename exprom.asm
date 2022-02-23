@@ -173,9 +173,17 @@ dn_GlobalVec=$0024
 dn_Name=$0028
 dn_Sizeof=$002c
 
+; struct CurrentBinding
+cb_ConfigDev=$0000
+cb_FileName=$0004
+cb_ProductString=$0008
+cb_ToolTypes=$000c
+cb_Sizeof=$0010
+
 ; Starts at UNIT_SIZE
 devunit_Device=$26              ; APTR
-devunit_Sizeof=$2A
+devunit_UnitNum=$2A             ; ULONG
+devunit_Sizeof=$2E
 
 ; struct FileSysResource
 fsr_Node=$0000                  ; struct Node
@@ -258,8 +266,9 @@ rt_Id:      dc.l    IdString-DiagStart ; APTR  RT_IDSTRING
 rt_InitPtr: dc.l    Init-DiagStart     ; APTR  RT_INIT
 
 
-DevName:    dc.b 'hello.device', 0
-IdString:   dc.b 'hello ',VERSION+48,'.',REVISION+48, 0
+; Padding to allow change to longer name
+DevName:    dc.b 'virtualhd.device', 0, 0, 0, 0, 0, 0, 0, 0, 0
+IdString:   dc.b 'virtualhd ',VERSION+48,'.',REVISION+48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 DosLibName: dc.b 'dos.library', 0
     even
 
@@ -296,8 +305,7 @@ BootEntry:
         jsr     _LVOFindResident(a6)    ; find the DOS resident tag
         move.l  d0, a0
         move.l  RT_INIT(a0), a0         ; set vector to DOS INIT
-        jsr     (a0)                    ; initialize DOS
-        rts
+        jmp     (a0)                    ; initialize DOS
 
 DiagEntry:
         ;lea     patchTable-RomStart(a0), a1
@@ -361,35 +369,32 @@ initRoutine:
         beq     irError
         move.l  d0, a4    ; a4=expansion library
 
+        ; Check if we need to install any filesystems
+        lea     RomCodeEnd(pc), a0
+        move.w  2(a0), d6       ; d6 = number of filesystems to install
+        beq     irFsOK
+
         ; Open FileSystem.resource
         lea     FsrName(pc), a1
         jsr     _LVOOpenResource(a6)
-        move.l  d0, dev_FileSysRes(a5)
-        lea     RomCodeEnd(pc), a0
-        tst.l   d0
         beq     irNoFsResource
 
         ; Inform host about FileSystem.resource
+        lea     RomCodeEnd(pc), a0
         move.l  d0, (a0)
         move.w  #OP_SETFSRES, 4(a0)
+        bra     irHasFsResource
 
 irNoFsResource:
-        ; Now check if we need to install any filesystems
-        move.w  2(a0), d6
-        beq     irFsOK
-
-        tst.l   dev_FileSysRes(a5)
-        bne     irHasFsResource
         bsr     CreateFileSysResource
         tst.l   d0
         beq     irError
-        move.l  d0, dev_FileSysRes(a5)
 
 irHasFsResource:
+        move.l  d0, dev_FileSysRes(a5)
         sub.l   #fsinfo_Sizeof, a7
         moveq   #0, d5 ; Fs counter
 irFsLoop:
-
         move.l  a7, a1
         move.w  d5, fsinfo_num(a1)
         lea     RomCodeEnd(pc), a0
@@ -461,19 +466,20 @@ irAllocHunkLoop:
         add.l   #fsinfo_Sizeof, a7
 
 irFsOK:
-
         move.l  a4, a6 ; a6 = expansion library
-        lea     dev_Base(a5), a0
-        moveq   #4, d0 ; Just get address (length = 4)
+        sub.l   #cb_Sizeof, a7
+        move.l  a7, a0
+        moveq   #cb_Sizeof, d0 ; Don't pass in less than sizeof(CurrentBinding) for KS1.3!
         jsr     _LVOGetCurrentBinding(a6)
-        move.l  dev_Base(a5), d6         ; d6 = ConfigNode
+        move.l  cb_ConfigDev(a7), d6         ; d6 = ConfigNode
+        add.l   #cb_Sizeof, a7
+        tst.l   d6
         beq     irError
         move.l  d6, a0
         move.l  cd_BoardAddr(a0), dev_Base(a5) ; Save base address
         bclr.b  #CDB_CONFIGME, cd_Flags(a0)    ; Mark as configured
 
         moveq   #0, d5 ; Unit counter
-
 irUnitLoop:
         ; Room for dos packet
         sub.l   #devn_Sizeof, a7
@@ -586,71 +592,71 @@ ExLibName:  dc.b 'expansion.library', 0
 FsrName:    dc.b 'FileSystem.resource', 0
             even
 
-        ; a0 = List
-PrintList:
-        movem.l d0/a0/a1, -(sp)
-        move.l  a0, a1
-prLoop:
-        tst.l   LN_SUCC(a1)
-        beq     prDone
-        move.l  a1, d0
-        bsr     SerPutNum
-        move.b  #$20, d0
-        bsr     SerPutchar
-        move.l  LN_NAME(a1), a0
-        bsr     SerPutMsg
-        bsr     SerPutCrLf
-        move.l  LN_SUCC(a1), a1
-        bra     prLoop
-prDone:
-        movem.l (sp)+, d0/a0/a1
-        rts
-
-SerPutchar:
-        move.l  d0, -(sp)
-        and.w   #$ff, d0
-        or.w    #$100, d0       ; stop bit
-        move.w  d0, $dff030
-        move.l  (sp)+, d0
-        rts
-
-SerPutMsg:
-        movem.l  d0/a0, -(sp)
-spLoop:
-        move.b  (a0)+, d0
-        beq     spDone
-        bsr     SerPutchar
-        bra     spLoop
-spDone:
-        movem.l  (sp)+, d0/a0
-        rts
-
-SerPutCrLf:
-        move.l  d0, -(sp)
-        move.b  #13, d0
-        bsr     SerPutchar
-        move.b  #10, d0
-        bsr     SerPutchar
-        move.l  (sp)+, d0
-        rts
-
-SerPutNum:
-        movem.l d0-d2, -(sp)
-        move.l  d0, d1
-        moveq   #7, d2
-spnLoop:
-        rol.l   #4, d1
-        move.w  d1, d0
-        and.b   #$f, d0
-        add.b   #$30, d0
-        cmp.b   #$39, d0
-        ble.b   spnPrint
-        add.b   #39, d0
-spnPrint:
-        bsr     SerPutchar
-        dbf     d2, spnLoop
-        movem.l (sp)+, d0-d2
-        rts
+;        ; a0 = List
+;PrintList:
+;        movem.l d0/a0/a1, -(sp)
+;        move.l  a0, a1
+;prLoop:
+;        tst.l   LN_SUCC(a1)
+;        beq     prDone
+;        move.l  a1, d0
+;        bsr     SerPutNum
+;        move.b  #$20, d0
+;        bsr     SerPutchar
+;        move.l  LN_NAME(a1), a0
+;        bsr     SerPutMsg
+;        bsr     SerPutCrLf
+;        move.l  LN_SUCC(a1), a1
+;        bra     prLoop
+;prDone:
+;        movem.l (sp)+, d0/a0/a1
+;        rts
+;
+;SerPutchar:
+;        move.l  d0, -(sp)
+;        and.w   #$ff, d0
+;        or.w    #$100, d0       ; stop bit
+;        move.w  d0, $dff030
+;        move.l  (sp)+, d0
+;        rts
+;
+;SerPutMsg:
+;        movem.l  d0/a0, -(sp)
+;spLoop:
+;        move.b  (a0)+, d0
+;        beq     spDone
+;        bsr     SerPutchar
+;        bra     spLoop
+;spDone:
+;        movem.l  (sp)+, d0/a0
+;        rts
+;
+;SerPutCrLf:
+;        move.l  d0, -(sp)
+;        move.b  #13, d0
+;        bsr     SerPutchar
+;        move.b  #10, d0
+;        bsr     SerPutchar
+;        move.l  (sp)+, d0
+;        rts
+;
+;SerPutNum:
+;        movem.l d0-d2, -(sp)
+;        move.l  d0, d1
+;        moveq   #7, d2
+;spnLoop:
+;        rol.l   #4, d1
+;        move.w  d1, d0
+;        and.b   #$f, d0
+;        add.b   #$30, d0
+;        cmp.b   #$39, d0
+;        ble.b   spnPrint
+;        add.b   #39, d0
+;spnPrint:
+;        bsr     SerPutchar
+;        dbf     d2, spnLoop
+;        movem.l (sp)+, d0-d2
+;        rts
 
 Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         movem.l d0-d7/a0-a6, -(sp)
@@ -661,6 +667,8 @@ Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         move.w  RomCodeEnd(pc), d2 ; Number of units
         cmp.l   d2, d0
         bge.b   OpenError ; Invalid unit
+
+        move.l  d0, d4 ; UnitNum in d4
 
         ; Allocate memory for unit
         move.l  #devunit_Sizeof, d0
@@ -675,6 +683,7 @@ Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
 
         ; Initialize it
         move.l  a6, devunit_Device(a3)
+        move.l  d4, devunit_UnitNum(a3)
         move.b  #PA_IGNORE, MP_FLAGS(a3)
         move.b  #NT_MSGPORT, LN_TYPE(a3)
         lea     DevName(pc), a0
@@ -739,10 +748,6 @@ Null:
 BeginIO: ; ( iob: a1, device:a6 )
         movem.l d0-d7/a0-a6, -(sp)
 
-        ;moveq   #0, d0
-        ;move.w  IO_COMMAND(a1), d0
-        ;bsr     DebugMsg
-
         move.b  #NT_MESSAGE, LN_TYPE(a1)
 
         lea     RomCodeEnd(pc), a0
@@ -762,8 +767,9 @@ BeginIO_End:
         rts
 
 AbortIO:
-        moveq   #6, d0
-        bra     AbortIO
+        ; Shouldn't be called, but fake success anyway
+        move.b  #0, IO_ERROR(a1)
+        rts
 
 ; In: a6=SysBase Out: d0=Filesystem resource
 CreateFileSysResource:

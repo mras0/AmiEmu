@@ -37,6 +37,7 @@ public:
     void handle(uint16_t& num);
     void handle(uint32_t& num);
     void handle(std::string& s);
+    void handle(std::vector<std::string>& vec);
     void handle(std::vector<uint8_t>& vec);
     void handle_blob(void* blob, uint32_t size);
 

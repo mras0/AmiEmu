@@ -14,6 +14,7 @@ constexpr uint32_t marker_u32         = 102;
 constexpr uint32_t marker_blob        = 200;
 constexpr uint32_t marker_string      = 300;
 constexpr uint32_t marker_vec_u8      = 400;
+constexpr uint32_t marker_vec_string  = 500;
 }
 
 class state_file::impl {
@@ -85,6 +86,14 @@ public:
             expect_marker(marker_string);
             s = get_string();
         }
+    }
+
+    void handle(std::vector<std::string>& vec)
+    {
+        if (dir_ == dir::save)
+            put_vector(marker_vec_string, vec);
+        else
+            get_vector(marker_vec_string, vec);
     }
 
     void handle(std::vector<uint8_t>& vec)
@@ -249,6 +258,11 @@ void state_file::close_scope(uint32_t pos)
 void state_file::handle(std::string& s)
 {
     impl_->handle(s);
+}
+
+void state_file::handle(std::vector<std::string>& vec)
+{
+    impl_->handle(vec);
 }
 
 void state_file::handle(std::vector<uint8_t>& vec)

@@ -18,7 +18,7 @@ constexpr uint32_t IDNAME_FILESYSHEADER = 0x46534844; // 'FSHD'
 constexpr uint32_t IDNAME_LOADSEG       = 0x4C534547; // 'LSEG'
 
 constexpr int8_t IOERR_NOCMD = -3;
-constexpr int8_t IOERR_BADLENGTH = -4;
+//constexpr int8_t IOERR_BADLENGTH = -4;
 constexpr int8_t IOERR_BADADDRESS = -5;
 
 struct scsi_cmd {
@@ -173,186 +173,17 @@ std::vector<hunk> parse_hunk_file(const std::vector<uint8_t>& code)
 
 class harddisk::impl final : public memory_area_handler, public autoconf_device {
 public:
-    explicit impl(memory_handler& mem, bool& cpu_active, const std::string& hdfilename)
+    explicit impl(memory_handler& mem, bool& cpu_active, const std::vector<std::string>& hdfilenames)
         : autoconf_device { mem, *this, config }
         , mem_ { mem }
         , cpu_active_ { cpu_active }
-        , hdfile_ { hdfilename, std::ios::binary | std::ios::in | std::ios::out }
     {
-        if (!hdfile_.is_open())
-            throw std::runtime_error { "Error opening " + hdfilename };
-        hdfile_.seekg(0, std::fstream::end);
-        total_size_ = hdfile_.tellg();
+        if (hdfilenames.empty())
+            throw std::runtime_error { "Harddisk initialized with no filenames" };
+        if (hdfilenames.size() > 9)
+            throw std::runtime_error { "Too many harddrive files" };
 
-        if (!total_size_ || total_size_ % sector_size_bytes || total_size_ < 1024*1024)
-            throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size_) };
-
-        const uint8_t* sector = disk_read(0, sector_size_bytes);
-        if (check_structure(sector, IDNAME_RIGIDDISK)) {
-
-            if (get_u32(&sector[16]) != 512) // Block size
-                throw std::runtime_error { hdfilename + " has unsupported/invalid blocksize" };
-
-            const uint32_t num_cylinders = get_u32(&sector[64]);
-            const uint32_t sectors_per_track = get_u32(&sector[68]);
-            const uint32_t num_heads = get_u32(&sector[72]);
-
-            std::cout << "C/H/S: " << num_cylinders << "/" << num_heads << "/" << sectors_per_track << "\n";
-
-            constexpr uint32_t end_of_list = 0xffffffff;
-            uint32_t part_list = get_u32(&sector[28]);
-            uint32_t fshdr_list = get_u32(&sector[32]);
-
-            // Read partition list
-
-            for (uint32_t cnt = 0;  part_list != end_of_list; ++cnt) {
-                if (cnt >= 10)
-                    throw std::runtime_error { hdfilename + " has too many partitions" };
-
-                sector = disk_read(part_list * sector_size_bytes, sector_size_bytes);
-                if (!check_structure(sector, IDNAME_PARTITION))
-                    throw std::runtime_error { hdfilename + " has an invalid partition list" };
-
-                partition_info pi {};
-                const uint8_t name_len = sector[36];
-                if (name_len >= sizeof(pi.name) - 1)
-                    throw std::runtime_error { hdfilename + " has invalid partition name length" };
-                std::memcpy(pi.name, &sector[37], name_len);
-                pi.name[name_len] = 0;
-                
-                pi.flags = get_u32(&sector[32]);
-                pi.block_size_bytes = 4 * get_u32(&sector[132]);
-                pi.num_heads = get_u32(&sector[140]);
-                pi.sectors_per_track = get_u32(&sector[148]);
-                pi.reserved_blocks = get_u32(&sector[152]);
-                pi.interleave = get_u32(&sector[160]);
-                pi.lower_cylinder = get_u32(&sector[164]);
-                pi.upper_cylinder = get_u32(&sector[168]);
-                pi.num_buffers = get_u32(&sector[172]);
-                pi.mem_buffer_type = get_u32(&sector[176]);
-                pi.max_transfer = get_u32(&sector[180]);
-                pi.mask = get_u32(&sector[184]);
-                pi.boot_priority = get_u32(&sector[188]);
-                pi.dos_type = get_u32(&sector[192]);
-                pi.boot_flags = get_u32(&sector[20]); // bit0: bootable, bit1: no automount
-
-                part_list = get_u32(&sector[16]); // Next partition
-
-                if (pi.boot_flags & 2) {
-                    std::cout << "[HD] Skipping partition \"" << pi.name << "\" DOS type: \"" << dos_type_string(pi.dos_type) << "\" - No auto mount\n";
-                    continue;
-                }
-
-                partitions_.push_back(pi);
-
-
-                std::cout << "[HD] Found partition \"" << pi.name << "\" DOS type: \"" << dos_type_string(pi.dos_type) << "\"\n";
-
-            }
-
-            for (uint32_t cnt = 0; fshdr_list != end_of_list; ++cnt) {
-                if (cnt > 10)
-                    throw std::runtime_error { hdfilename + " has an invalid file system header list (too many)" };
-
-                sector = disk_read(fshdr_list * sector_size_bytes, sector_size_bytes);
-                if (!check_structure(sector, IDNAME_FILESYSHEADER))
-                    throw std::runtime_error { hdfilename + " has an invalid file system header list" };
-
-                fshdr_list = get_u32(&sector[16]); // Next
-
-                const uint32_t dos_type = get_u32(&sector[32]);
-                const uint32_t version = get_u32(&sector[36]);
-                const uint32_t patch_flags = get_u32(&sector[40]);
-                uint32_t seg_list = get_u32(&sector[72]);
-
-                if (seg_list == end_of_list)
-                    continue;
-
-                bool needed = true;
-                // Do we already have the same filesystem in the same or newer versoin?
-                for (const auto& fs : filesystems_) {
-                    if (fs.dos_type == dos_type && fs.version >= version) {
-                        needed = false;
-                        break;
-                    }
-                }
-                if (!needed)
-                    continue;
-                needed = false;
-
-                // Check if any partitions use this filesystem
-                for (const auto& pi : partitions_) {
-                    if (pi.dos_type == dos_type) {
-                        needed = true;
-                        break;
-                    }
-                }
-                if (!needed)
-                    continue;
-
-                if (patch_flags != 0x180) {
-                    std::cerr << "HD: Warning: Don't know how to handle patch flags $" << hexfmt(patch_flags) << "\n";
-                }
-
-                std::cout << "HD: Found filesystem for : \"" << dos_type_string(dos_type) << "\" Version " << (version >> 16) << "." << (version & 0xffff) << " seg_list: " << (int)seg_list << "\n";
-
-                std::vector<uint8_t> fs_code;
-                while (seg_list != end_of_list) {
-                    // No file system is ever going to be this large (right?)
-                    if (fs_code.size() > 1024*1024)
-                        throw std::runtime_error { hdfilename + " has an invalid segment list" };
-
-                    sector = disk_read(seg_list * sector_size_bytes, sector_size_bytes);
-                    const auto size_bytes = get_u32(&sector[4]) * 4;
-                    if (size_bytes < 24 || size_bytes > sector_size_bytes)
-                        throw std::runtime_error { hdfilename + " has an invalid segment list" };
-                    if (!check_structure(sector, IDNAME_LOADSEG, size_bytes))
-                        throw std::runtime_error { hdfilename + " has an invalid segment list" };
-
-                    fs_code.insert(fs_code.end(), &sector[20], &sector[size_bytes]);
-
-                    seg_list = get_u32(&sector[16]); // Next
-                }
-
-                filesystems_.push_back(fs_info {
-                        dos_type,
-                        version,
-                        patch_flags,
-                        parse_hunk_file(fs_code),
-                        0
-                    });
-            }
-
-            return;
-        }
-
-        // HDF: Mount as a single partition
-
-        const uint32_t num_heads = 16;
-        const uint32_t sectors_per_track = 63;
-
-        const auto cyl_size = num_heads * sectors_per_track * sector_size_bytes;
-        if (!total_size_ || total_size_ % cyl_size || total_size_ > 504 * 1024 * 1024 || total_size_ < 8 * 1024 * 1024) // Limit to 504MB for now (probably need more heads)
-            throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size_) };
-        const uint32_t num_cylinders = static_cast<uint32_t>(total_size_ / cyl_size);
-        partitions_.push_back(partition_info {
-            "DH0",
-            0,
-            sector_size_bytes,
-            num_heads,
-            sectors_per_track,
-            2,
-            0,
-            0,
-            num_cylinders - 1,
-            1, // one buffer
-            0,
-            0x7ffe, // Max transfer
-            0xfffffffe, // Mask
-            0, // Boot priority
-            0x444f5300, // 'DOS\0'
-            0 << 24 | 1, // Bootable
-        });
+        init_disks(hdfilenames);
     }
 
 private:
@@ -366,7 +197,17 @@ private:
     };
     static constexpr uint32_t sector_size_bytes = 512;
 
+    struct hd_info {
+        std::string filename;
+        std::fstream f;
+        uint64_t size;
+        uint32_t cylinders;
+        uint8_t heads;
+        uint16_t sectors_per_track;
+    };
+
     struct partition_info {
+        hd_info& hd;
         char name[32];
         uint32_t flags; // Flags for OpenDevice
         uint32_t block_size_bytes;
@@ -395,8 +236,7 @@ private:
 
     memory_handler& mem_;
     bool& cpu_active_;
-    std::fstream hdfile_;
-    uint64_t total_size_;
+    std::vector<std::unique_ptr<hd_info>> hds_;
     uint32_t ptr_hold_ = 0;
     std::vector<uint8_t> buffer_;
     std::vector<partition_info> partitions_;
@@ -405,6 +245,214 @@ private:
     void reset() override
     {
         ptr_hold_ = 0;
+        // HACK to re-read RDB in case of format etc.
+        std::vector<std::string> disk_filenames;
+        for (const auto& hd : hds_)
+            disk_filenames.push_back(hd->filename);
+        hds_.clear();
+        partitions_.clear();
+        filesystems_.clear();
+        init_disks(disk_filenames);
+    }
+
+    void init_disks(const std::vector<std::string>& hdfilenames)
+    {
+        for (const auto& hdfilename : hdfilenames) {
+            std::fstream hdfile { hdfilename, std::ios::binary | std::ios::in | std::ios::out };
+
+            if (!hdfile.is_open())
+                throw std::runtime_error { "Error opening " + hdfilename };
+            hdfile.seekg(0, std::fstream::end);
+            const uint64_t total_size = hdfile.tellg();
+
+            if (!total_size || total_size % sector_size_bytes || total_size < 1024 * 1024)
+                throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size) };
+
+            hds_.push_back(std::unique_ptr<hd_info>(new hd_info{hdfilename, std::move(hdfile), total_size, uint32_t(0), uint8_t(0), uint16_t(0)}));
+            auto& hd = *hds_.back();
+
+            const uint8_t* sector = disk_read(hd, 0, sector_size_bytes);
+            if (check_structure(sector, IDNAME_RIGIDDISK)) {
+
+                if (get_u32(&sector[16]) != 512) // Block size
+                    throw std::runtime_error { hdfilename + " has unsupported/invalid blocksize" };
+
+                const uint32_t num_cylinders = get_u32(&sector[64]);
+                const uint32_t sectors_per_track = get_u32(&sector[68]);
+                const uint32_t num_heads = get_u32(&sector[72]);
+
+                hd.cylinders = num_cylinders;
+                hd.heads = static_cast<uint8_t>(num_heads);
+                hd.sectors_per_track = static_cast<uint16_t>(sectors_per_track);
+
+                constexpr uint32_t end_of_list = 0xffffffff;
+                uint32_t part_list = get_u32(&sector[28]);
+                uint32_t fshdr_list = get_u32(&sector[32]);
+
+                // Read partition list
+
+                for (uint32_t cnt = 0; part_list != end_of_list; ++cnt) {
+                    if (cnt >= 10)
+                        throw std::runtime_error { hdfilename + " has too many partitions" };
+
+                    sector = disk_read(hd, part_list * sector_size_bytes, sector_size_bytes);
+                    if (!check_structure(sector, IDNAME_PARTITION))
+                        throw std::runtime_error { hdfilename + " has an invalid partition list" };
+
+                    partition_info pi {hd};
+                    const uint8_t name_len = sector[36];
+                    if (name_len >= sizeof(pi.name) - 1)
+                        throw std::runtime_error { hdfilename + " has invalid partition name length" };
+                    std::memcpy(pi.name, &sector[37], name_len);
+                    pi.name[name_len] = 0;
+
+                    if (!partition_name_ok(pi.name))
+                        throw std::runtime_error { "Multiple partitions named " + std::string { pi.name } };
+
+                    pi.flags = get_u32(&sector[32]);
+                    pi.block_size_bytes = 4 * get_u32(&sector[132]);
+                    pi.num_heads = get_u32(&sector[140]);
+                    pi.sectors_per_track = get_u32(&sector[148]);
+                    pi.reserved_blocks = get_u32(&sector[152]);
+                    pi.interleave = get_u32(&sector[160]);
+                    pi.lower_cylinder = get_u32(&sector[164]);
+                    pi.upper_cylinder = get_u32(&sector[168]);
+                    pi.num_buffers = get_u32(&sector[172]);
+                    pi.mem_buffer_type = get_u32(&sector[176]);
+                    pi.max_transfer = get_u32(&sector[180]);
+                    pi.mask = get_u32(&sector[184]);
+                    pi.boot_priority = get_u32(&sector[188]);
+                    pi.dos_type = get_u32(&sector[192]);
+                    pi.boot_flags = get_u32(&sector[20]); // bit0: bootable, bit1: no automount
+
+                    part_list = get_u32(&sector[16]); // Next partition
+
+                    if (pi.boot_flags & 2) {
+                        std::cout << "[HD] Skipping partition \"" << pi.name << "\" DOS type: \"" << dos_type_string(pi.dos_type) << "\" - No auto mount\n";
+                        continue;
+                    }
+
+                    partitions_.push_back(pi);
+
+                    std::cout << "[HD] Found partition \"" << pi.name << "\" DOS type: \"" << dos_type_string(pi.dos_type) << "\"\n";
+                }
+
+                for (uint32_t cnt = 0; fshdr_list != end_of_list; ++cnt) {
+                    if (cnt > 10)
+                        throw std::runtime_error { hdfilename + " has an invalid file system header list (too many)" };
+
+                    sector = disk_read(hd, fshdr_list * sector_size_bytes, sector_size_bytes);
+                    if (!check_structure(sector, IDNAME_FILESYSHEADER))
+                        throw std::runtime_error { hdfilename + " has an invalid file system header list" };
+
+                    fshdr_list = get_u32(&sector[16]); // Next
+
+                    const uint32_t dos_type = get_u32(&sector[32]);
+                    const uint32_t version = get_u32(&sector[36]);
+                    const uint32_t patch_flags = get_u32(&sector[40]);
+                    uint32_t seg_list = get_u32(&sector[72]);
+
+                    if (seg_list == end_of_list)
+                        continue;
+
+                    bool needed = true;
+                    // Do we already have the same filesystem in the same or newer versoin?
+                    for (const auto& fs : filesystems_) {
+                        if (fs.dos_type == dos_type && fs.version >= version) {
+                            needed = false;
+                            break;
+                        }
+                    }
+                    if (!needed)
+                        continue;
+                    needed = false;
+
+                    // Check if any partitions use this filesystem
+                    for (const auto& pi : partitions_) {
+                        if (pi.dos_type == dos_type) {
+                            needed = true;
+                            break;
+                        }
+                    }
+                    if (!needed)
+                        continue;
+
+                    if (patch_flags != 0x180) {
+                        std::cerr << "[HD] Warning: Don't know how to handle patch flags $" << hexfmt(patch_flags) << "\n";
+                    }
+
+                    std::cout << "[HD] Found filesystem for : \"" << dos_type_string(dos_type) << "\" Version " << (version >> 16) << "." << (version & 0xffff) << " seg_list: " << (int)seg_list << "\n";
+
+                    std::vector<uint8_t> fs_code;
+                    while (seg_list != end_of_list) {
+                        // No file system is ever going to be this large (right?)
+                        if (fs_code.size() > 1024 * 1024)
+                            throw std::runtime_error { hdfilename + " has an invalid segment list" };
+
+                        sector = disk_read(hd, seg_list * sector_size_bytes, sector_size_bytes);
+                        const auto size_bytes = get_u32(&sector[4]) * 4;
+                        if (size_bytes < 24 || size_bytes > sector_size_bytes)
+                            throw std::runtime_error { hdfilename + " has an invalid segment list" };
+                        if (!check_structure(sector, IDNAME_LOADSEG, size_bytes))
+                            throw std::runtime_error { hdfilename + " has an invalid segment list" };
+
+                        fs_code.insert(fs_code.end(), &sector[20], &sector[size_bytes]);
+
+                        seg_list = get_u32(&sector[16]); // Next
+                    }
+
+                    filesystems_.push_back(fs_info {
+                        dos_type,
+                        version,
+                        patch_flags,
+                        parse_hunk_file(fs_code),
+                        0 });
+                }
+
+                continue;
+            }
+
+            // HDF: Mount as a single partition
+
+            const uint32_t num_heads = 1;
+            const uint32_t sectors_per_track = 32;
+
+            const auto cyl_size = num_heads * sectors_per_track * sector_size_bytes;
+            if (!total_size || total_size % cyl_size || total_size > 504 * 1024 * 1024 || total_size < 8 * 1024 * 1024) // Limit to 504MB for now (probably need more heads)
+                throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size) };
+            const uint32_t num_cylinders = static_cast<uint32_t>(total_size / cyl_size);
+
+            hd.cylinders = num_cylinders;
+            hd.heads = static_cast<uint8_t>(num_heads);
+            hd.sectors_per_track = static_cast<uint16_t>(sectors_per_track);
+
+            partitions_.push_back(partition_info {
+                hd,
+                "",
+                0,
+                sector_size_bytes,
+                num_heads,
+                sectors_per_track,
+                2,
+                0,
+                0,
+                num_cylinders - 1,
+                1, // one buffer
+                0,
+                0x7ffe, // Max transfer
+                0xfffffffe, // Mask
+                0, // Boot priority
+                0x444f5300, // 'DOS\0'
+                0 << 24 | 1, // Bootable
+            });
+            for (uint32_t num = 0;; ++num) {
+                std::string name = "DH" + std::to_string(num);
+                if (partition_name_ok(name)) {
+                    strcpy(partitions_.back().name, name.c_str());
+                    break;
+                }
+            }
+        }
     }
 
     void handle_state(state_file& sf) override
@@ -413,14 +461,19 @@ private:
         sf.handle(ptr_hold_);
     }
 
-    const uint8_t* disk_read(uint64_t offset, uint32_t len)
+    bool partition_name_ok(const std::string& name)
     {
-        assert(len && len % sector_size_bytes == 0 && offset % sector_size_bytes == 0);
+        return std::find_if(partitions_.begin(), partitions_.end(), [&name](const partition_info& pi) { return pi.name == name; }) == partitions_.end();
+    }
+
+    const uint8_t* disk_read(hd_info& hd, uint64_t offset, uint32_t len)
+    {
+        assert(len && len % sector_size_bytes == 0 && offset % sector_size_bytes == 0 && offset < hd.size && len < hd.size && offset + len < hd.size);
         buffer_.resize(len);
-        hdfile_.seekg(offset);
-        hdfile_.read(reinterpret_cast<char*>(&buffer_[0]), len);
-        if (!hdfile_)
-            throw std::runtime_error { "Error reading from harddrive" };
+        hd.f.seekg(offset);
+        hd.f.read(reinterpret_cast<char*>(&buffer_[0]), len);
+        if (!hd.f)
+            throw std::runtime_error { "Error reading from " + hd.filename};
         return &buffer_[0];
     }
 
@@ -560,31 +613,123 @@ private:
         mem_.write_u32(ptr_hold_ + devn_segList, seglist_bptr);
     }
 
-    void do_scsi_cmd(scsi_cmd& sc)
+    void do_scsi_cmd(hd_info& hd, scsi_cmd& sc)
     {
         std::vector<uint8_t> cmd(sc.scsi_CmdLength);
         for (uint32_t i = 0; i < sc.scsi_CmdLength; ++i)
             cmd[i] = mem_.read_u8(sc.scsi_Command + i);
-        std::cout << "TODO: SCSI command:\n";
-        hexdump(std::cout, cmd.data(), cmd.size());
+
+        static constexpr bool scsi_debug = false;
+
+        if constexpr (scsi_debug) {
+            std::cout << "[HD] SCSI command for " << hd.filename << ": ";
+            hexdump(std::cout, cmd.data(), cmd.size());
+        }
 
         if (sc.scsi_CmdLength < 6) {
+            std::cerr << "[HD] Invalid SCSI command length: " << sc.scsi_CmdLength << "\n";
             sc.scsi_Status = 2; // check condition (TODO: sense data)
             return;
         }
 
-        if (cmd[0] == 0x37) { // READ DEFECT DATA
+        auto copy_data = [&](const uint8_t* data, size_t len) {
+            const uint32_t actlen = std::min(sc.scsi_Length, static_cast<uint32_t>(len));
+            for (uint32_t i = 0; i < actlen; ++i)
+                mem_.write_u8(sc.scsi_Data + i, data[i]);
+
+            if constexpr (scsi_debug) {
+                std::cout << "[HD] Returning: ";
+                hexdump(std::cout, data, actlen);
+            }
+
+            sc.scsi_Actual = actlen;
             sc.scsi_CmdActual = sc.scsi_CmdLength;
             sc.scsi_Status = 0;
-            sc.scsi_Actual = 4;
             sc.scsi_SenseActual = 0;
-            mem_.write_u8(sc.scsi_Data + 0, 0);
-            mem_.write_u8(sc.scsi_Data + 1, cmd[1] & 0x1f); // Copy out format
-            mem_.write_u8(sc.scsi_Data + 2, 0);
-            mem_.write_u8(sc.scsi_Data + 3, 0);
+        };
+
+        if (cmd[0] == 0x25 && sc.scsi_CmdLength == 10) {
+            // READ CAPACITY (10)
+            uint8_t data[8] = { 0, };
+            const uint32_t max_block = static_cast<uint32_t>(std::min(uint64_t(0xffffffff), hd.size / sector_size_bytes - 1));
+            if (cmd[8] & 1) { // pmi
+                uint32_t lba = get_u32(&cmd[2]);
+                lba += hd.sectors_per_track * hd.heads;
+                lba /= hd.sectors_per_track * hd.heads;
+                lba *= hd.sectors_per_track * hd.heads;
+                put_u32(&data[0], std::min(max_block, lba));
+            } else {
+                put_u32(&data[0], max_block);
+            }
+            put_u32(&data[4], sector_size_bytes);
+            copy_data(data, sizeof(data));
+            return;
+        }
+
+        if (cmd[0] == 0x12 && sc.scsi_CmdLength == 6) {
+            // INQUIRY
+            uint8_t data[36] = { 0, };
+
+            auto copy_string = [](uint8_t* d, const char* s, int len) {
+                while (*s && len--)
+                    *d++ = *s++;
+                while (len--)
+                    *d++ = ' ';
+            };
+
+            data[2] = 2; // Version
+            data[4] = static_cast<uint8_t>(sizeof(data) - 4); // Additional length
+            copy_string(&data[8], "AmiEmu", 8); // vendor
+            copy_string(&data[16], "Virtual HD", 16); // product id
+            copy_string(&data[32], "0.1", 4); // revision
+
+            copy_data(data, sizeof(data));
+            return;
+        }
+
+        if (cmd[0] == 0x1a && sc.scsi_CmdLength == 6 && (cmd[2] == 3 || cmd[2] == 4)) {
+            // MODE SENSE (6) with PC = 0 and Page Code = 3 (Format Parameters page) or 4 (Rigid drive geometry parameters)
+            uint8_t data[256];
+            memset(data, 0, sizeof(data));
+            data[3] = 8;
+            put_u32(&data[4], static_cast<uint32_t>(std::min(uint64_t(0xffffffff), hd.size / sector_size_bytes)));
+            put_u32(&data[8], sector_size_bytes);
+
+            uint8_t* page = &data[12];
+
+            page[0] = cmd[2]; // page code
+            page[1] = 0x16; // page length
+
+            if (cmd[2] == 3) {
+                put_u16(&page[2], 1); // tracks per zone
+                put_u16(&page[10], hd.sectors_per_track);
+                put_u16(&page[12], sector_size_bytes); // data bytes per physical sector
+                put_u16(&page[14], 1); // interleave
+                page[20] = 0x80; // Drive type
+            } else {
+                assert(cmd[2] == 4);
+                page[14] = page[2] = static_cast<uint8_t>((hd.cylinders >> 16) & 0xff);
+                page[15] = page[3] = static_cast<uint8_t>((hd.cylinders >> 8) & 0xff);
+                page[16] = page[4] = static_cast<uint8_t>((hd.cylinders >> 0) & 0xff);
+                page[5] = hd.heads;
+                put_u16(&page[20], 5400); // rotation speed
+            }
+            page += page[1] + 2;
+
+            data[0] = static_cast<uint8_t>(page - data - 1);
+
+            copy_data(data, page - data);
+            return;
+        }
+
+        if (cmd[0] == 0x37 && sc.scsi_CmdLength == 10) { // READ DEFECT DATA
+            uint8_t data[4] = { 0, static_cast<uint8_t>(cmd[1] & 0x1f), 0, 0 };
+            copy_data(data, sizeof(data));
             return;
         }
         
+        std::cerr << "[HD] Unsupported SCSI command: ";
+        hexdump(std::cerr, cmd.data(), cmd.size());
         //#define SCSI_INVALID_COMMAND 0x20
 
         sc.scsi_Status = /*SCSI_INVALID_COMMAND*/0x20; // SCSI status
@@ -621,6 +766,7 @@ private:
         constexpr uint16_t TD_REMCHANGEINT = CMD_NONSTD + 12; // 15
         constexpr uint16_t HD_SCSICMD      = 28;
 
+        constexpr uint32_t IO_UNIT    = 0x18;
         constexpr uint32_t IO_COMMAND = 0x1C;
         constexpr uint32_t IO_ERROR   = 0x1F;
         constexpr uint32_t IO_ACTUAL  = 0x20;
@@ -628,17 +774,26 @@ private:
         constexpr uint32_t IO_DATA    = 0x28;
         constexpr uint32_t IO_OFFSET  = 0x2C;
 
+        constexpr uint16_t devunit_UnitNum = 0x2A;
+
+        const auto unit = mem_.read_u32(mem_.read_u32(ptr_hold_ + IO_UNIT) + devunit_UnitNum); // grab from private field
         const auto cmd  = mem_.read_u16(ptr_hold_ + IO_COMMAND);
         const auto len  = mem_.read_u32(ptr_hold_ + IO_LENGTH);
         const auto data = mem_.read_u32(ptr_hold_ + IO_DATA);
         const auto ofs  = mem_.read_u32(ptr_hold_ + IO_OFFSET);
 
-        //std::cerr << "harddisk: Command=$" << hexfmt(cmd) << " Length=$" << hexfmt(len) << " Data=$" << hexfmt(data) << " Offset=$" << hexfmt(ofs) << "\n";
+        if (unit >= partitions_.size()) {
+            throw std::runtime_error { "Invalid partition (unit) $" + hexstring(unit) + " in IORequest" };
+        }
+        auto& hd = partitions_[unit].hd;
+
+        //std::cerr << "[HD]: Command=$" << hexfmt(cmd) << " Unit=" << unit << " Length=$" << hexfmt(len) << " Data=$" << hexfmt(data) << " Offset=$" << hexfmt(ofs) << "\n";
         switch (cmd) {
         case CMD_READ:
         case CMD_WRITE:
         case TD_FORMAT:
-            if (ofs > total_size_ || len > total_size_ || ofs > total_size_ - len || ofs % sector_size_bytes) {
+            // TODO: Maybe check against partition offset/size?
+            if (ofs > hd.size || len > hd.size || ofs > hd.size - len || ofs % sector_size_bytes) {
                 std::cerr << "Test board: Invalid offset $" << hexfmt(ofs) << " length=$" << hexfmt(len) << "\n";
                 mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
             } else if (len % sector_size_bytes) {
@@ -646,17 +801,17 @@ private:
                 mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
             } else {
                 if (cmd == CMD_READ) {
-                    const uint8_t* diskdata = disk_read(ofs, len);
+                    const uint8_t* diskdata = disk_read(hd, ofs, len);
                     for (uint32_t i = 0; i < len; i += 4)
                         mem_.write_u32(data + i, get_u32(&diskdata[i]));
                 } else {
                     buffer_.resize(len);
                     for (uint32_t i = 0; i < len; i += 4)
                         put_u32(&buffer_[i], mem_.read_u32(data + i));
-                    hdfile_.seekp(ofs);
-                    hdfile_.write(reinterpret_cast<const char*>(&buffer_[0]), len);
-                    if (!hdfile_)
-                        throw std::runtime_error { "Error writing to harddrive" };
+                    hd.f.seekp(ofs);
+                    hd.f.write(reinterpret_cast<const char*>(&buffer_[0]), len);
+                    if (!hd.f)
+                        throw std::runtime_error { "Error writing to " + hd.filename };
                 }
                 mem_.write_u32(ptr_hold_ + IO_ACTUAL, len);
                 mem_.write_u8(ptr_hold_ + IO_ERROR, 0);
@@ -707,7 +862,7 @@ private:
             scmd.scsi_SenseData = mem_.read_u32(data + scsi_SenseData);
             scmd.scsi_SenseLength = mem_.read_u16(data + scsi_SenseLength);
 
-            do_scsi_cmd(scmd);
+            do_scsi_cmd(hd, scmd);
             mem_.write_u32(data + scsi_Actual, scmd.scsi_Actual);
             mem_.write_u32(data + scsi_CmdActual, scmd.scsi_CmdActual);
             mem_.write_u8(data + scsi_Status, scmd.scsi_Status);
@@ -805,8 +960,8 @@ private:
     }
 };
 
-harddisk::harddisk(memory_handler& mem, bool& cpu_active, const std::string& hdfilename)
-    : impl_{ new impl(mem, cpu_active, hdfilename) }
+harddisk::harddisk(memory_handler& mem, bool& cpu_active, const std::vector<std::string>& hdfilenames)
+    : impl_{ new impl(mem, cpu_active, hdfilenames) }
 {
 }
 

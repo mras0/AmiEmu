@@ -3,13 +3,14 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 class memory_handler;
 class autoconf_device;
 
 class harddisk {
 public:
-    explicit harddisk(memory_handler& mem, bool& cpu_active, const std::string& hdfilename);
+    explicit harddisk(memory_handler& mem, bool& cpu_active, const std::vector<std::string>& hdfilenames);
     ~harddisk();
 
     autoconf_device& autoconf_dev();
