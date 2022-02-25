@@ -265,7 +265,7 @@ private:
             hdfile.seekg(0, std::fstream::end);
             const uint64_t total_size = hdfile.tellg();
 
-            if (!total_size || total_size % sector_size_bytes || total_size < 1024 * 1024)
+            if (!total_size || total_size % sector_size_bytes || total_size < 100 * 1024)
                 throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size) };
 
             hds_.push_back(std::unique_ptr<hd_info>(new hd_info{hdfilename, std::move(hdfile), total_size, uint32_t(0), uint8_t(0), uint16_t(0)}));
@@ -334,7 +334,7 @@ private:
 
                     partitions_.push_back(pi);
 
-                    std::cout << "[HD] Found partition \"" << pi.name << "\" DOS type: \"" << dos_type_string(pi.dos_type) << "\"\n";
+                    std::cout << "[HD] Found partition \"" << pi.name << "\" DOS type: \"" << dos_type_string(pi.dos_type) << "\" " << (pi.boot_flags & 1 ? "" : "not") << "bootable\n";
                 }
 
                 for (uint32_t cnt = 0; fshdr_list != end_of_list; ++cnt) {

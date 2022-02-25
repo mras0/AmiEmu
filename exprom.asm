@@ -517,7 +517,7 @@ irUnitLoop:
         bne     irBootNode
 
         ; a0 = dosNode
-        move.l  devn_bootPrio(a3), d0 ; Boot priority
+        moveq   #-128, d0 ; Boot priority (-128 = not bootable)
         moveq   #ADNF_STARTPROC, d1 ; Flags
         jsr     _LVOAddDosNode(a6)
         tst.l   d0
