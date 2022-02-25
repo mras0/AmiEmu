@@ -1,7 +1,7 @@
 RomStart=0
 
 VERSION=0
-REVISION=2
+REVISION=3
 
 OP_INIT=$fedf
 OP_IOREQ=$fede
@@ -377,13 +377,17 @@ initRoutine:
         ; Open FileSystem.resource
         lea     FsrName(pc), a1
         jsr     _LVOOpenResource(a6)
+        tst.l   d0
         beq     irNoFsResource
 
         ; Inform host about FileSystem.resource
         lea     RomCodeEnd(pc), a0
         move.l  d0, (a0)
         move.w  #OP_SETFSRES, 4(a0)
-        bra     irHasFsResource
+        ; re-read number of file systems to install after host has had chance to prune list
+        move.w  2(a0), d6
+        bne     irHasFsResource
+        bra     irFsOK
 
 irNoFsResource:
         bsr     CreateFileSysResource
