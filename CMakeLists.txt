@@ -70,6 +70,12 @@ add_custom_command(
   DEPENDS m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm
   )
 
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/debug_exprom.h
+  COMMAND m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/debug_exprom.asm -ofmt header -org ${EXPROM_BASE} -o ${CMAKE_CURRENT_BINARY_DIR}/debug_exprom.h
+  DEPENDS m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/debug_exprom.asm
+  )
+
 set(FORCE_SDL2 FALSE CACHE BOOL "Force use of SDL2")
 
 if (WIN32 AND NOT FORCE_SDL2)
@@ -102,15 +108,18 @@ add_executable(amiemu
     gui.h wavedev.h
     ${DRIVER_FILES}
     debug.cpp debug.h
-    exprom.asm
     rtc.cpp rtc.h
     autoconf.cpp autoconf.h
     harddisk.cpp harddisk.h
     dms.cpp dms.h
     adf.cpp adf.h
+    debug_board.cpp debug_board.h
+    exprom.asm
     ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
+    debug_exprom.asm
+    ${CMAKE_CURRENT_BINARY_DIR}/debug_exprom.h
     )
-set_source_files_properties(exprom.asm PROPERTIES HEADER_FILE_ONLY TRUE)
+set_source_files_properties(exprom.asm debug_exprom.h PROPERTIES HEADER_FILE_ONLY TRUE)
 target_link_libraries(amiemu PRIVATE utils m68k ${DRIVER_LIBS})
 target_include_directories(amiemu PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${DRIVER_INC_DIR})
 target_compile_definitions(amiemu PRIVATE EXPROM_BASE=0x${EXPROM_BASE})

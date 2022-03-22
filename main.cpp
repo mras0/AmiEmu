@@ -29,6 +29,7 @@
 #include "state_file.h"
 #include "adf.h"
 #include "dms.h"
+#include "debug_board.h"
 
 namespace {
 
@@ -1053,6 +1054,9 @@ int main(int argc, char* argv[])
             hd = std::make_unique<harddisk>(mem, cpu_active, cmdline_args.hds);
             autoconf.add_device(hd->autoconf_dev());
         }
+
+        debug_board dbg_board { mem };
+        autoconf.add_device(dbg_board.autoconf_dev());
 
         auto handle_machine_state = [&](state_file& sf) {
             mem.handle_state(sf);
