@@ -4967,8 +4967,8 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
     const auto start = get_u32(&data[4]);
     //std::cout << "ROM detected\n";
     //std::cout << "Entry point: $" << hexfmt(start) << "\n";
-    const uint32_t rom_base = start & 0xffff0000;
-    if (rom_base != 0xf80000 && rom_base != 0xfc0000)
+    const uint32_t rom_base = data.size() == 1024 * 1024 ? 0xf00000 : start & 0xffff0000;
+    if (rom_base != 0xf00000 && rom_base != 0xf80000 && rom_base != 0xfc0000)
         throw std::runtime_error { "Unsupported ROM base: $" + hexstring(rom_base) };
     //std::cout << "Base address: $" << hexfmt(rom_base) << "\n";
     if (start - rom_base >= data.size())

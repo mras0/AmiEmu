@@ -281,6 +281,8 @@ private:
                 const uint32_t sectors_per_track = get_u32(&sector[68]);
                 const uint32_t num_heads = get_u32(&sector[72]);
 
+                std::cout << "C/H/S = " << num_cylinders << "/" << num_heads << "/" << sectors_per_track << "\n";
+
                 hd.cylinders = num_cylinders;
                 hd.heads = static_cast<uint8_t>(num_heads);
                 hd.sectors_per_track = static_cast<uint16_t>(sectors_per_track);
@@ -468,7 +470,7 @@ private:
 
     const uint8_t* disk_read(hd_info& hd, uint64_t offset, uint32_t len)
     {
-        assert(len && len % sector_size_bytes == 0 && offset % sector_size_bytes == 0 && offset < hd.size && len < hd.size && offset + len < hd.size);
+        assert(len && len % sector_size_bytes == 0 && offset % sector_size_bytes == 0 && offset < hd.size && len < hd.size && offset + len <= hd.size);
         buffer_.resize(len);
         hd.f.seekg(offset);
         hd.f.read(reinterpret_cast<char*>(&buffer_[0]), len);
