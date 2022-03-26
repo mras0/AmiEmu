@@ -4614,6 +4614,14 @@ private:
             throw std::runtime_error { "Unexpected end of hunk file" };
     }
 
+    uint16_t read_u16()
+    {
+        check_pos(2);
+        auto l = get_u16(&data_[pos_]);
+        pos_ += 2;
+        return l;
+    }
+
     uint32_t read_u32()
     {
         check_pos(4);
@@ -4682,6 +4690,24 @@ private:
                 r.relocs[i] = read_u32();
             relocs.emplace_back(std::move(r));
         }
+        return relocs;
+    }
+
+    std::vector<reloc_info> read_hunk_reloc32short()
+    {
+        std::vector<reloc_info> relocs;
+        for (;;) {
+            const auto num_offsets = read_u16();
+            if (!num_offsets)
+                break;
+            reloc_info r;
+            r.hunk_ref = read_u16();
+            r.relocs.resize(num_offsets);
+            for (uint32_t i = 0; i < num_offsets; ++i)
+                r.relocs[i] = read_u16();
+            relocs.emplace_back(std::move(r));
+        }
+        pos_ = (pos_+3) & -4; // Ensure long word alignment
         return relocs;
     }
 
@@ -4797,6 +4823,20 @@ void hunk_file::read_hunk_exe()
                 }
                 break;
             }
+            case HUNK_RELOC32SHORT:
+            case HUNK_DREL32:
+                for (const auto& r : read_hunk_reloc32short()) {
+                    if (r.hunk_ref > last_hunk)
+                        throw std::runtime_error { "Invalid " + hunk_type_string(ht) + " refers to unknown hunk " + std::to_string(r.hunk_ref) };
+                    auto& hd = hunks[hunk_num].data;
+                    for (const auto ofs : r.relocs) {
+                        if (ofs > hd.size() - 4)
+                            throw std::runtime_error { "Invalid relocation in " + hunk_type_string(ht) };
+                        auto c = &hd[ofs];
+                        put_u32(c, get_u32(c) + hunks[r.hunk_ref].addr);
+                    }
+                }
+                break;
             case HUNK_END:
                 break;
             case HUNK_OVERLAY: {
@@ -4836,8 +4876,9 @@ void hunk_file::read_hunk_exe()
         bool has_code = false;
         for (const auto& h : hunks) {
             a_->write_data(h.addr, h.data.data(), static_cast<uint32_t>(h.data.size()));
-            if (!has_code && h.type == HUNK_CODE) {
-                a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
+            if (h.type == HUNK_CODE) {
+                if (!has_code)
+                    a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
                 a_->add_root(h.addr, simregs {});
                 has_code = true;
             } else {

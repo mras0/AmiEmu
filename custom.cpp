@@ -798,6 +798,7 @@ struct custom_state {
     uint16_t dsksync;
     bool dsksync_passed;
     bool dskread;
+    uint16_t dskbyt;
     uint16_t dskpos;
     uint16_t mfm_pos;
     uint8_t mfm_track[MFM_TRACK_SIZE_WORDS * 2];
@@ -1709,6 +1710,7 @@ public:
                     // XXX: FIXME: Shouldn't be done here
                     s_.intreq |= INTF_DSKSYNC;
                     s_.dsksync_passed = true;
+                    s_.dskbyt = 1 << 15 | 1 << 12 | (s_.dsksync & 0xff); // XXX
                     s_.dskwait = 10; // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
                     return false;
                 }
@@ -1722,7 +1724,9 @@ public:
 
         // 400% floppy speed corrupts display at start of "flower"/Anarchy Germany (https://www.pouet.net/prod.php?which=3037)
         for (uint32_t i = 0; i < floppy_speed_ && s_.dskpos < nwords; ++i) {
-            chip_write(s_.dskpt, get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]));
+            const auto data = get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]);
+            chip_write(s_.dskpt, data);
+            s_.dskbyt = 1 << 15 | (data == s_.dsksync ? 1 << 12 : 0) | (data & 0xff); // XXX
             s_.dskpt += 2;
             ++s_.mfm_pos;
             ++s_.dskpos;
@@ -2506,12 +2510,13 @@ public:
             return 0xFF00 & ~(s_.rmb_pressed[0] ? 0x400 : 0) & ~(s_.rmb_pressed[1] ? 0x4000 : 0);
         case SERDATR: // $018
             return (3<<12); // Just return transmit buffer empty
-        case DSKBYTR: {
-            static int warn = 0;
-            if (warn > 50)
-                return 0xffff;
-            ++warn;
-            break;
+        case DSKBYTR: { // $01A
+            // Not properly emulated yet, but whdload doesn't like $ffff always being returned
+            uint16_t val = s_.dskbyt;
+            if ((s_.dmacon & DMAF_DISK) && (s_.dsklen & 0x8000) && s_.dsklen_act)
+                val |= 1 << 14;
+            s_.dskbyt &= ~(1 << 15); // clear DSKBYT
+            return val;
         }
         case INTENAR: // $01C
             return s_.intena;
@@ -2973,6 +2978,13 @@ uint16_t custom_handler::impl::internal_read(uint16_t reg)
     switch (reg) {
     case BLTDDAT:
         return s_.bltdat[3];
+    case DSKBYTR: {
+        const auto val = read_u16(0xdff000 + DSKBYTR, DSKBYTR);
+        // HACK: Restore DSKBYT bit
+        if (val & 0x8000)
+            s_.dskbyt |= 0x8000;
+        return val;
+    }
     case DMACONR:
     case VPOSR:
     case VHPOSR:
