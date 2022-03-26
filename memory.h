@@ -42,19 +42,8 @@ class memory_area_handler {
 public:
     virtual uint8_t read_u8(uint32_t addr, uint32_t offset) = 0;
     virtual uint16_t read_u16(uint32_t addr, uint32_t offset) = 0;
-    uint32_t read_u32(uint32_t addr, uint32_t offset)
-    {
-        const uint32_t hi = read_u16(addr, offset) << 16;        
-        return hi | read_u16(addr + 2, offset + 2);
-    }
-
     virtual void write_u8(uint32_t addr, uint32_t offset, uint8_t val) = 0;
     virtual void write_u16(uint32_t addr, uint32_t offset, uint16_t val) = 0;
-    void write_u32(uint32_t addr, uint32_t offset, uint32_t val)
-    {
-        write_u16(addr, offset, val >> 16);
-        write_u16(addr + 2, offset + 2, val & 0xffff);
-    }
 
     virtual void reset() = 0;
 };

@@ -226,15 +226,8 @@ uint16_t memory_handler::read_u16(uint32_t addr)
 
 uint32_t memory_handler::read_u32(uint32_t addr)
 {
-    addr &= 0xffffff;
-    // TODO: Handle if write to two different areas...
-    if (addr & 1) {
-        track(addr, 0, 4, false);
-        throw std::runtime_error { "Long read from odd address " + hexstring(addr) };
-    }
-    auto& a = find_area(addr);
-    track(addr, 0, 4, false);
-    return a.handler->read_u32(addr, addr - a.base);
+    uint32_t val = read_u16(addr);
+    return val << 16 | read_u16(addr + 2);
 }
 
 uint16_t memory_handler::hack_peek_u16(uint32_t addr)
@@ -265,15 +258,8 @@ void memory_handler::write_u16(uint32_t addr, uint16_t val)
 
 void memory_handler::write_u32(uint32_t addr, uint32_t val)
 {
-    addr &= 0xffffff;
-    track(addr, val, 4, true);
-    
-    // TODO: Handle if write to two different areas...
-    if (addr & 1)
-        throw std::runtime_error { "Long write to odd address " + hexstring(addr) };
-
-    auto& a = find_area(addr);
-    return a.handler->write_u32(addr, addr - a.base, val);
+    write_u16(addr, static_cast<uint16_t>(val >> 16));
+    write_u16(addr  + 2, static_cast<uint16_t>(val));
 }
 
 memory_handler::area& memory_handler::find_area(uint32_t& addr)

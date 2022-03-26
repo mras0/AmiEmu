@@ -46,13 +46,12 @@ _LVOAddHead=-240
 _LVOAddTail=-246
 _LVOEnqueue=-270
 _LVOAddTask=-282
+_LVORemTask=-288
 _LVOReplyMsg=-378
 _LVOCloseLibrary=-414
 _LVOAddResource=-486
 _LVOOpenResource=-498
 _LVOOpenLibrary=-552
-
-AddTaskJump=-280 ;_LVOAddTask+2
 
 ResourceList=$150
 
@@ -137,18 +136,14 @@ Continue:
         move.l  a0, -(sp) ; Save our board base
         move.l  a0, -(sp) ; Again...
 
-        move.l  #PatchCodeEnd, d0
-        sub.l   #PatchCode, d0
+        move.l  #PatchCodeEnd-PatchCode, d0
         moveq   #0, d1
         jsr     _LVOAllocMem(a6)
         ; Don't handle failure
         move.l  d0, a0
 
         ; Copy patch code
-        move.l  #PatchCodeEnd, d1
-        sub.l   #PatchCode, d1
-        subq.l  #1, d1
-
+        move.l  #PatchCodeEnd-PatchCode-1, d1
         move.l  (sp)+, a1 ; board address
         add.l   #PatchCode, a1
 .copy:
@@ -161,9 +156,10 @@ Continue:
         add.l   #DiagStart, a1
         move.l  a1, 6(a0) ; Save out board address
 
-        lea     AddTaskJump(a6), a1
-        move.l  (a1), 2(a0) ; Save old AddTask vector
-        lea     PatchDataSize(a0), a0
+        lea     _LVOAddTask+2(a6), a1
+        dc.w    $abcd
+        move.l  (a1), OldAddTask-PatchCode(a0) ; Save old AddTask vector
+        lea     NewAddTask-PatchCode(a0), a0
         move.l  a0, (a1) ; Install new one
 
         moveq   #0, d0
@@ -171,11 +167,11 @@ Continue:
 
 PatchCode:
         dc.w    $4ef9 ; JMP ABS.L
+OldAddTask:
         dc.l    0 ; Old AddTask vector stored here
 CommAddress:
         dc.l    0
-; PatchDataSize bytes here
-        ; Patched code starts here
+NewAddTask:
         move.l  a0, -(sp)
         move.l  CommAddress(pc), a0
         move.l  a1, (a0) ; Communicate new task to exprom

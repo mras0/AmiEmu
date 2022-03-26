@@ -90,7 +90,11 @@ private:
             const uint8_t b = mem_.read_u8(ptr + i);
             if (!b)
                 break;
-            s.push_back(b);
+            if (b >= 0x20 && b <= 0x7f) {
+                s.push_back(b);
+                continue;
+            }
+            s += "\\x" + hexstring(b);
         }
         return s;
     }
@@ -99,15 +103,19 @@ private:
     {
         constexpr uint32_t ln_Type = 0x0008;
         constexpr uint32_t ln_Name = 0x000a;
-        //constexpr uint8_t NT_TASK    = 1; // Exec task
+        constexpr uint8_t NT_TASK    = 1; // Exec task
         constexpr uint8_t NT_PROCESS = 13; // AmigaDOS Process
         //constexpr uint32_t pr_CLI = 0x00ac;
         constexpr uint32_t pr_ReturnAddr = 0x00b0;
         //constexpr uint32_t cli_CommandName = 0x0010;
 
         const auto type = mem_.read_u8(task_ptr + ln_Type);
+        if (type != NT_TASK && type != NT_PROCESS) {
+            std::cout << "debug_board: Warning AddTask called with wrong node type $" << hexfmt(type) << " address $" << hexfmt(task_ptr) << "\n";
+            return;
+        }
 
-        std::cout << "debug_board: New task start at $" << hexfmt(task_ptr) << " TYPE=$" << hexfmt(type) << " Name=\"" << read_string(mem_.read_u32(task_ptr + ln_Name)) << "\"\n";
+        std::cout << "debug_board: New " << (type == NT_TASK ? "task" : "process") << " started $" << hexfmt(task_ptr) << " Name=\"" << read_string(mem_.read_u32(task_ptr + ln_Name)) << "\"\n";
         if (type != NT_PROCESS)
             return;
         std::cout << "Maybe add breakpoint at $" << hexfmt(task_ptr + pr_ReturnAddr) << "\n";

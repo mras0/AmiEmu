@@ -355,12 +355,28 @@ EndCopy:
         { " version=2\n dc.b version+48,0\n", { 0x3200 } },
         { " blah=$1234\n dc.w blah\n", { 0x1234 } },
         { "x=4\ny=7\nz=5\ndc.w x+y-z+x\n", { 0x000a } },
+        { "_LVOAddTask=-282\nAddTaskJump=_LVOAddTask+2\n\tdc.w AddTaskJump", { (uint16_t)-280 } },
+        { "x=42\ny=x-40\n\tdc.l y", { 0, 2 } },
+        { "moveq #44-2, d0", { 0x702A } },
+        { "LAB: move.l #LAB-$100, d0\n", { 0x203c, 0x0000, 0x0f00 } },
+        { "LAB1: dc.w $abcd\nLAB2: move.l #LAB2-LAB1, d0\n", { 0xabcd, 0x203c, 0x0000, 0x0002 } },
+        { "Blah: dc.l Lab2-Lab\nLab: dc.l 1\nLab2: dc.l 2\n", { 0, 4, 0, 1, 0, 2 } },
+        { R"(
+        move.l  (a1), OldAddTask-PatchCode(a0) ; Save old AddTask vector
+PatchCode:
+        dc.w    $4ef9 ; JMP ABS.L
+OldAddTask:
+        dc.l    0 ; Old AddTask vector stored here
+)", {0x2151, 0x0002, 0x4ef9, 0x0000, 0x0000} },
+        { "move.w (a2,d3.w), d4", { 0x3832, 0x3000 } },
     };
 
     for (const auto& tc : test_cases) {
         const uint32_t start_pc = 0x1000;
         std::vector<uint16_t> code;
         try {
+            //std::cout << "---------------------------\n";
+            //std::cout << tc.text << "\n";
             auto res = assemble(start_pc, tc.text);
             if (res.size() & 1)
                 throw std::runtime_error("Odd number of bytes");

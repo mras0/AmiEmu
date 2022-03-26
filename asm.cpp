@@ -6,10 +6,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <map>
 #include <vector>
 #include <string>
 #include <cassert>
 #include <iostream>
+#include <algorithm>
 
 constexpr uint8_t opsize_mask_none = 0;
 constexpr uint8_t opsize_mask_b    = 1 << 0;
@@ -139,13 +141,45 @@ constexpr bool range16(uint32_t val)
     X(dc     , "DC"   ) \
     X(even   , "EVEN" ) \
 
+enum class token_type {
+    eof,
+    whitespace,
+    newline,
+    number,
+    // 33 ... 127 reserved for operators
+    hash = '#',
+    quote = '\'',
+    lparen = '(',
+    rparen = ')',
+    plus = '+',
+    comma = ',',
+    minus = '-',
+    slash = '/',
+    colon = ':',
+    equal = '=',
+
+    last_operator = 127,
+
+#define DEF_TOKEN(n, t) n,
+    TOKENS(DEF_TOKEN)
+#undef DEF_TOKEN
+
+    instruction_start_minus_1,
+#define TOKEN_INST(n, m, d, no) n,
+    INSTRUCTIONS(TOKEN_INST)
+#undef TOKEN_INST
+
+    identifier_start,
+};
+
 constexpr struct instruction_info_type {
+    token_type type;
     const char* const name;
     uint8_t opsize_mask;
     opsize default_size;
     uint8_t num_operands;
 } instruction_info[] = {
-#define INSTRUCTION_INFO(name, osize_mask, def_size, num_oper) { #name, opsize_mask_##osize_mask, opsize::def_size, num_oper },
+#define INSTRUCTION_INFO(name, osize_mask, def_size, num_oper) { token_type::name, #name, opsize_mask_##osize_mask, opsize::def_size, num_oper },
     INSTRUCTIONS(INSTRUCTION_INFO)
 #undef INSTRUCTION_INFO
 };
@@ -153,7 +187,7 @@ constexpr struct instruction_info_type {
 #define ASSEMBLER_ERROR(...)                                                                                                                   \
     do {                                                                                                                                       \
         std::ostringstream oss;                                                                                                                \
-        oss << "In function " << __func__ << " line " << __LINE__ << ": Error in line " << line_ << " column " << col_ << ": " << __VA_ARGS__; \
+        oss << "Error in line " << line_ << " column " << col_ << ": " << __VA_ARGS__ << " in function " << __func__ << " line " << __LINE__;  \
         throw std::runtime_error { oss.str() };                                                                                                \
     } while (0)
 
@@ -199,7 +233,7 @@ public:
                         ASSEMBLER_ERROR("Invalid definition for " << ii.id << " (previously referenced)");
                     ii.has_value = true;
                     auto val = process_number();
-                    if (val.fixup)
+                    if (val.has_fixups())
                         ASSEMBLER_ERROR("Invalid definition for " << ii.id << "(needs fixups)");
                     ii.value = val.val;
                     skip_to_eol();
@@ -214,26 +248,12 @@ public:
                 ii.has_value = true;
                 ii.value = pc_;
                 for (const auto& f : ii.fixups) {
-                    // TODO: Check range
-                    assert(f.offset < result_.size());
-                    auto p = &result_[f.offset];
-                    switch (f.size) {
-                    case opsize::none:
-                        ASSEMBLER_ERROR("Invalid fixup");
-                    case opsize::b: {
-                        assert(f.offset & 1);
-                        *p += ii.value & 0xff;
-                        break;
-                    }
-                    case opsize::w: {
-                        put_u16(p, get_u16(p) + static_cast<uint16_t>(ii.value));
-                        break;
-                    }
-                    case opsize::l: {
-                        put_u32(p, get_u32(p) + ii.value);
-                        break;
-                    }
-                    }
+                    auto it = pending_fixups_.find(f.offset);
+                    if (it == pending_fixups_.end())
+                        ASSEMBLER_ERROR("Invalid fixup for " << ii.id);
+                    if (it->second.size != f.size)
+                        ASSEMBLER_ERROR("Size mismatch for " << ii.id << " expected size " << opsize_bytes(it->second.size) << " got " << opsize_bytes(f.size));
+                    it->second.value += f.negate ? -static_cast<int32_t>(ii.value) : ii.value;
                 }
                 ii.fixups.clear();
             } else if (is_instruction(token_type_)) {
@@ -253,8 +273,31 @@ public:
         } while (token_type_ != token_type::eof);
 
         for (const auto& i : identifier_info_) {
-            if (!i.has_value || !i.fixups.empty()) {
-                ASSEMBLER_ERROR(i.id << " referenced but not defined");
+            if (!i->has_value || !i->fixups.empty()) {
+                ASSEMBLER_ERROR(i->id << " referenced but not defined");
+            }
+        }
+
+        // Apply fixups. Delayed until here to allow full 32-bit intermediate values.
+        for (const auto& [offset, f] : pending_fixups_) {
+            //std::cout << "Applying fixup offset=$" << hexfmt(offset) << " " << token_type_string(f.inst) << " line " << f.line << " value $" << hexfmt(f.value) << "\n";
+            switch (f.size) {
+            case opsize::b:
+                assert(offset & 1);
+                if (!range8(f.value))
+                    ASSEMBLER_ERROR("Value ($" << hexfmt(f.value) << ") of out 8-bit range in line " << f.line << " for " << token_type_string(f.inst) );
+                result_[offset] = static_cast<uint8_t>(f.value);
+                break;
+            case opsize::w:
+                assert(!(offset & 1));
+                if (!range16(f.value))
+                    ASSEMBLER_ERROR("Value ($" << hexfmt(f.value) << ") of out 16-bit range in line " << f.line << " for " << token_type_string(f.inst));
+                put_u16(&result_[offset], static_cast<uint16_t>(f.value));
+                break;
+            case opsize::l:
+                assert(!(offset & 1));
+                put_u32(&result_[offset], f.value);
+                break;
             }
         }
 
@@ -262,37 +305,6 @@ public:
     }
 
 private:
-    enum class token_type {
-        eof,
-        whitespace,
-        newline,
-        number,
-        // 33 ... 127 reserved for operators
-        hash = '#',
-        quote = '\'',
-        lparen = '(',
-        rparen = ')',
-        plus = '+',
-        comma = ',',
-        minus = '-',
-        slash = '/',
-        colon = ':',
-        equal = '=',
-
-        last_operator=127,
-
-        #define DEF_TOKEN(n, t) n,
-        TOKENS(DEF_TOKEN)
-        #undef DEF_TOKEN
-
-        instruction_start_minus_1,
-        #define TOKEN_INST(n, m, d, no) n,
-        INSTRUCTIONS(TOKEN_INST)
-        #undef TOKEN_INST
-
-        identifier_start,
-    };
-
     std::unordered_map<std::string, token_type> id_map_ = {
         #define INST_ID_INIT(n, m, d, no) { #n, token_type::n },
         INSTRUCTIONS(INST_ID_INIT)
@@ -306,7 +318,15 @@ private:
 
     struct fixup_type {
         opsize size;
+        bool negate;
         uint32_t offset;
+    };
+
+    struct pending_fixup {
+        token_type inst;
+        uint32_t line;
+        opsize size;
+        uint32_t value;
     };
 
     struct identifier_info_type {
@@ -316,7 +336,8 @@ private:
         std::vector<fixup_type> fixups;
     };
 
-    std::vector<identifier_info_type> identifier_info_;
+    std::vector<std::unique_ptr<identifier_info_type>> identifier_info_;
+    std::map<uint32_t, pending_fixup> pending_fixups_;
 
     std::vector<uint8_t> result_;
     uint32_t pc_;
@@ -357,7 +378,7 @@ private:
     {
         const auto id_idx = static_cast<uint32_t>(t) - static_cast<uint32_t>(token_type::identifier_start);
         assert(id_idx < identifier_info_.size());
-        return identifier_info_[id_idx];
+        return *identifier_info_[id_idx];
     }
 
     std::string token_type_string(token_type tt)
@@ -387,7 +408,7 @@ private:
             const auto id_idx = ti - static_cast<uint32_t>(token_type::identifier_start);
             if (id_idx < identifier_info_.size()) {
                 std::ostringstream oss;
-                oss << "INDENTIFIER \"" << identifier_info_[id_idx].id << "\"";
+                oss << "INDENTIFIER \"" << identifier_info_[id_idx]->id << "\"";
                 return oss.str();
             }
             ASSEMBLER_ERROR("Unknown token type: " << ti);
@@ -404,10 +425,10 @@ private:
             return it->second;
 
         const uint32_t id = static_cast<uint32_t>(identifier_info_.size()) + static_cast<uint32_t>(token_type::identifier_start);
-        identifier_info_type ii {};
-        ii.id = uc;
-        identifier_info_.push_back(ii);
-        id_map_[ii.id] = static_cast<token_type>(id);
+        id_map_[uc] = static_cast<token_type>(id);
+        auto ii = std::make_unique<identifier_info_type>();
+        ii->id = uc;
+        identifier_info_.push_back(std::move(ii));
         return static_cast<token_type>(id);
     }
 
@@ -545,12 +566,32 @@ private:
     struct ea_result {
         uint8_t type;
         uint32_t val = 0;
-        identifier_info_type* fixup = nullptr;
+        uint32_t saved_val = 0;
+        std::vector<std::pair<identifier_info_type*,bool>> fixups;
+
+        bool has_fixups() const
+        {
+            return !fixups.empty();
+        }
     };
+
+    void add_fixups(const ea_result& r, token_type inst, opsize osize, uint32_t offset)
+    {
+        if (r.fixups.empty())
+            return;
+
+        if (!pending_fixups_.insert({ offset, pending_fixup { inst, line_, osize, r.saved_val } }).second)
+            ASSEMBLER_ERROR("Fixups already exist");
+
+        assert(!!(offset & 1) == (osize == opsize::b));
+        for (auto [ii, negate] : r.fixups)
+            ii->fixups.push_back(fixup_type { osize, negate, offset });
+    }
+
 
     ea_result process_number(bool neg = false)
     {
-        // TODO: Aritmetic etc.
+        // TODO: More aritmetic
         ea_result res {};
 
         if (token_type_ == token_type::minus) {
@@ -561,26 +602,48 @@ private:
         }
 
         if (token_type_ == token_type::number) {
-            res.val = token_number_;
+            res.val = neg ? -static_cast<int32_t>(token_number_) : token_number_;
             get_token();
         } else if (is_identifier(token_type_)) {
             auto& ii = identifier_info(token_type_);
-            get_token();
             if (ii.has_value) {
                 res.val = ii.value;
             }  else {
-                res.fixup = &ii;
+                res.val = 0;
+                res.fixups.push_back({ &ii, neg });
             }
+            get_token();
         } else {
             ASSEMBLER_ERROR("Invalid number");
         }
 
-        if (neg) {
-            if (res.fixup)
-                ASSEMBLER_ERROR("Not supported: Negating with fixup");
-            res.val = -static_cast<int32_t>(res.val);
-        }
+        // Only support very simple aritmetic for now
+        while (token_type_ == token_type::minus || token_type_ == token_type::plus) {
+            const auto saved_token = token_type_;
+            get_token();
 
+            uint32_t val = 0;
+            if (token_type_ == token_type::number) {
+                val = token_number_;
+                get_token();
+            } else if (is_identifier(token_type_)) {
+                auto& ii = identifier_info(token_type_);
+                if (ii.has_value) {
+                    val = ii.value;
+                } else {
+                    res.fixups.push_back({ &ii, saved_token == token_type::minus });
+                }
+                get_token();
+            } else {
+                ASSEMBLER_ERROR("Expected number of identifier");
+            }
+
+            if (saved_token == token_type::minus)
+                res.val -= val;
+            else
+                res.val += val;
+        }
+        res.saved_val = res.val;
         return res;
     }
 
@@ -607,9 +670,11 @@ private:
         skip_whitespace();
 
         bool neg = false;
+        uint8_t reg = 0;
+        ea_result res {};
         if (token_type_ == token_type::hash) {
             get_token();
-            auto res = process_number();
+            res = process_number();
             res.type = ea_immediate;
             return res;
         } else if (token_type_ == token_type::minus) {
@@ -620,14 +685,15 @@ private:
             }
 
             get_token();
-            ea_result res {};
             res.type = ea_m_A_ind_pre << ea_m_shift | process_areg();
             expect(token_type::rparen);
             return res;
         } else if (token_type_ == token_type::lparen) {
             get_token();
-            ea_result res {};
-            res.type = ea_m_A_ind << ea_m_shift | process_areg();
+            reg = process_areg();
+            if (token_type_ == token_type::comma)
+                goto has_reg;
+            res.type = ea_m_A_ind << ea_m_shift | reg;
             expect(token_type::rparen);
             if (token_type_ == token_type::plus) {
                 res.type = ea_m_A_ind_post << ea_m_shift | (res.type & 7);
@@ -636,19 +702,20 @@ private:
             return res;
         } else if (token_type_ == token_type::number || is_identifier(token_type_)) {
 number:
-            auto res = process_number(neg);
+            res = process_number(neg);
             if (token_type_ == token_type::lparen) {
                 get_token();
-                uint8_t reg;
                 if (token_type_ == token_type::pc) {
                     reg = 0xff;
                     res.val -= pc_ + 2;
+                    res.saved_val = res.val;
                     get_token();
                 } else {
                     reg = process_areg();
-                    if (!range16(res.val))
+                    if (!res.has_fixups() && !range16(res.val))
                         ASSEMBLER_ERROR(static_cast<int32_t>(res.val) << " is out of range for 16-bit displacement");
                 }
+has_reg:
                 if (token_type_ == token_type::rparen) {
                     get_token();
                     if (reg == 0xff)
@@ -667,9 +734,9 @@ number:
                     res.type = ea_m_Other << ea_m_shift | ea_other_pc_index;
                 else {
                     res.type = ea_m_A_ind_index << ea_m_shift | reg;
-                    if (!range8(res.val))
-                        ASSEMBLER_ERROR(static_cast<int32_t>(res.val) << " is out of range for 8-bit displacement");
                 }
+                if (!res.has_fixups() && !range8(res.val))
+                    ASSEMBLER_ERROR(static_cast<int32_t>(res.val) << " is out of range for 8-bit displacement");
                 res.val = (res.val & 0xff) | (reg2 & 8 ? 0x8000 : 0) | (reg2 & 7) << 12 | (l ? 0x800 : 0);
                 return res;
             }
@@ -685,7 +752,6 @@ number:
             }
             return res;
         } else if (is_register(token_type_)) {
-            ea_result res {};
             res.type = static_cast<uint8_t>(static_cast<uint32_t>(token_type_) - static_cast<uint32_t>(token_type::d0));
             get_token();
             if (token_type_ == token_type::minus || token_type_ == token_type::slash) {
@@ -920,8 +986,9 @@ operands_done:
             if (ea[1].type >> ea_m_shift != ea_m_Other || (ea[1].type & 7) != ea_other_abs_l)
                 ASSEMBLER_ERROR("Unsupported operand to " << info.name << ": " << ea_string(ea[1].type));
             const int32_t disp = ea[1].val - (pc_ + 2);
-            if (ea[1].fixup)
-                ea[1].fixup->fixups.push_back(fixup_type { opsize::w, static_cast<uint32_t>(result_.size() + 2) });
+            ea[1].saved_val = disp;
+            if (ea[1].has_fixups())
+                add_fixups(ea[1], inst, opsize::w, static_cast<uint32_t>(result_.size() + 2));
             else if (!range16(disp))
                 ASSEMBLER_ERROR("Displacement " << disp << " is out of range");
             iwords[0] = 0x50c8 | (static_cast<uint16_t>(inst) - static_cast<uint16_t>(token_type::DBT)) << 8 | (ea[0].type & 7);
@@ -1088,7 +1155,7 @@ operands_done:
             break;
         }
         case token_type::MOVEQ: {
-            if (ea[0].type != ea_immediate || ea[0].fixup || ea[1].type >> ea_m_shift != ea_m_Dn)
+            if (ea[0].type != ea_immediate || ea[0].has_fixups() || ea[1].type >> ea_m_shift != ea_m_Dn)
                 ASSEMBLER_ERROR("Invalid operands to MOVEQ");
             if (!range8(ea[0].val))
                 ASSEMBLER_ERROR("Immediate out of 8-bit range for MOVEQ: " << ea[0].val);
@@ -1227,49 +1294,48 @@ operands_done:
         }
 
         for (uint8_t arg = 0; arg < info.num_operands; ++arg) {
+            uint32_t ofs = static_cast<uint32_t>(result_.size() + iword_cnt * 2);
             switch (ea[arg].type >> ea_m_shift) {
             case ea_m_Dn:
             case ea_m_An:
             case ea_m_A_ind:
             case ea_m_A_ind_post:
             case ea_m_A_ind_pre:
-                assert(!ea[arg].fixup);
+                assert(!ea[arg].has_fixups());
                 break;
             case ea_m_A_ind_disp16: // (d16, An)
-            case ea_m_A_ind_index: // (d8, An, Xn)
-                assert(!ea[arg].fixup);
+                add_fixups(ea[arg], inst, opsize::w, ofs);
                 iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                 break;
-            case ea_m_Other: {
-                uint32_t ofs = static_cast<uint32_t>(result_.size() + iword_cnt * 2);
+            case ea_m_A_ind_index: // (d8, An, Xn)
+                assert(!ea[arg].has_fixups());
+                iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
+                break;
+            case ea_m_Other:
                 switch (ea[arg].type & 7) {
                 case ea_other_abs_w:
-                    if (ea[arg].fixup)
-                        ea[arg].fixup->fixups.push_back(fixup_type { opsize::w, ofs });
+                    add_fixups(ea[arg], inst, opsize::w, ofs);
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                     break;
                 case ea_other_abs_l:
-                    if (ea[arg].fixup)
-                        ea[arg].fixup->fixups.push_back(fixup_type { opsize::l, ofs });
+                    add_fixups(ea[arg], inst, opsize::l, ofs);
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val >> 16);
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                     break;
                 case ea_other_pc_disp16: // (d16, PC)
-                    if (ea[arg].fixup)
-                        ea[arg].fixup->fixups.push_back(fixup_type { opsize::w, ofs });
+                    add_fixups(ea[arg], inst, opsize::w, ofs);
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                     break;
                 case ea_other_pc_index:  // (d8, PC, Xn)
-                    if (ea[arg].fixup)
-                        ea[arg].fixup->fixups.push_back(fixup_type { opsize::b, ofs+1 });
+                    add_fixups(ea[arg], inst, opsize::b, ofs + 1);
                     iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val);
                     break;
                 case ea_other_imm:
-                    if (ea[arg].fixup) {
+                    if (ea[arg].has_fixups()) {
                         assert(osize != opsize::none);
                         if (osize == opsize::b)
                             ++ofs;
-                        ea[arg].fixup->fixups.push_back(fixup_type { osize, ofs });
+                        add_fixups(ea[arg], inst, osize, ofs);
                     }
                     if (osize == opsize::l)
                         iwords[iword_cnt++] = static_cast<uint16_t>(ea[arg].val >> 16);
@@ -1281,7 +1347,6 @@ operands_done:
                     ASSEMBLER_ERROR("TODO: Encoding for " << ea_string(ea[arg].type));
                 }
                 break;
-            }
             default:
                 if (ea[arg].type == ea_sr || ea[arg].type == ea_ccr || ea[arg].type == ea_usp || ea[arg].type == ea_reglist)
                     break;
@@ -1328,21 +1393,7 @@ done:
                 get_token();
             } else {
                 auto num = process_number();
-                if (num.fixup)
-                    num.fixup->fixups.push_back(fixup_type { osize, static_cast<uint32_t>(result_.size()) });
-
-                // Only support very simple aritmetic for now
-                while (token_type_ == token_type::minus || token_type_ == token_type::plus) {
-                    const auto saved_token = token_type_;
-                    get_token();
-                    auto num2 = process_number();
-                    if (num2.fixup)
-                        ASSEMBLER_ERROR("Not supported: minus/plus with fixup (num2)");
-                    if (saved_token == token_type::minus)
-                        num.val -= num2.val;
-                    else
-                        num.val += num2.val;
-                }
+                add_fixups(num, token_type::dc, osize, static_cast<uint32_t>(result_.size()));
 
                 if (osize == opsize::b) {
                     result_.push_back(static_cast<uint8_t>(num.val));
@@ -1480,17 +1531,18 @@ done:
         return 0x5000 | (ea[0].val & 7) << 9 | is_sub << 8 | size_encoding[static_cast<uint8_t>(osize)] << 6 | (ea[1].type & 0x3f);
     }
 
-    int32_t handle_disp_bw(const instruction_info_type& info, const ea_result& ea, opsize& osize)
+    int32_t handle_disp_bw(const instruction_info_type& info, ea_result& ea, opsize& osize)
     {
         if (ea.type >> ea_m_shift != ea_m_Other || (ea.type & 7) != ea_other_abs_l)
             ASSEMBLER_ERROR("Unsupported operand to " << info.name << ": " << ea_string(ea.type));
         const int32_t disp = ea.val - (pc_ + 2);
-        if (ea.fixup) {
+        if (ea.has_fixups()) {
             const uint32_t ofs = static_cast<uint32_t>(result_.size());
+            ea.saved_val = disp;
             if (osize == opsize::none || osize == opsize::w)
-                ea.fixup->fixups.push_back(fixup_type { opsize::w, ofs + 2 });
-            else
-                ea.fixup->fixups.push_back(fixup_type { opsize::b, ofs + 1 });
+                add_fixups(ea, info.type, opsize::w, ofs + 2);
+            else 
+                add_fixups(ea, info.type, opsize::b, ofs + 1);
         } else {
             if (disp == 0 || !range8(disp)) {
                 if (osize == opsize::b)
