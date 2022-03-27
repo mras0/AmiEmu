@@ -3,11 +3,9 @@ RomStart=0
 VERSION=0
 REVISION=1
 
-OP_INIT=$fedf
-OP_IOREQ=$fede
-OP_SETFSRES=$fee0
-OP_FSINFO=$fee1
-OP_FSINITSEG=$fee2
+OP_INIT=1
+OP_ADDTASK=2
+OP_REMTASK=3
 
 RT_MATCHWORD=$00		; UWORD word to match on (ILLEGAL)
 RT_MATCHTAG=$02			; APTR  pointer to the above (RT_MATCHWORD)
@@ -125,13 +123,15 @@ DiagStart:
 DevName:    dc.b 'debugdev', 0
     even
 
+OFS_PTR=DiagStart
+OFS_OP=DiagStart+4
+
 BootEntry: ; Not needed
 DiagEntry:
         move.l  #Continue, d0
         jmp     0(a0,d0.l) ; Continue in rom! (a0 = board address)
 EndCopy:
 
-PatchDataSize=10
 Continue:
         move.l  a0, -(sp) ; Save our board base
         move.l  a0, -(sp) ; Again...
@@ -151,33 +151,57 @@ Continue:
         dbf.w   d1, .copy
 
         move.l  d0, a0 ; RAM area
+        move.l  (sp)+, a1 ; Board address
+        move.l  a1, BoardAddress-PatchCode(a0) ; Save it for patched code
 
-        move.l  (sp)+, a1
-        add.l   #DiagStart, a1
-        move.l  a1, 6(a0) ; Save out board address
+        move.l  a6, OFS_PTR(a1)
+        move.w  #OP_INIT, OFS_OP(a1)
 
         lea     _LVOAddTask+2(a6), a1
-        dc.w    $abcd
-        move.l  (a1), OldAddTask-PatchCode(a0) ; Save old AddTask vector
+        move.l  (a1), OldAddTask-PatchCode+2(a0) ; Save old AddTask vector
         lea     NewAddTask-PatchCode(a0), a0
+        move.l  a0, (a1) ; Install new one
+
+        move.l  d0, a0 ; RAM area
+        lea     _LVORemTask+2(a6), a1
+        move.l  (a1), OldRemTask-PatchCode+2(a0) ; Save old AddTask vector
+        lea     NewRemTask-PatchCode(a0), a0
         move.l  a0, (a1) ; Install new one
 
         moveq   #0, d0
         rts
 
+
+ThisTask=276
+
 PatchCode:
-        dc.w    $4ef9 ; JMP ABS.L
-OldAddTask:
-        dc.l    0 ; Old AddTask vector stored here
-CommAddress:
+BoardAddress:
         dc.l    0
+OldAddTask:
+        dc.w    $4ef9 ; JMP ABS.L
+        dc.l    0 ; Old AddTask vector stored here
 NewAddTask:
         move.l  a0, -(sp)
-        move.l  CommAddress(pc), a0
-        move.l  a1, (a0) ; Communicate new task to exprom
+        move.l  BoardAddress(pc), a0
+        move.l  a1, OFS_PTR(a0) ; Communicate new task to exprom
+        move.w  #OP_ADDTASK, OFS_OP(a0)
         move.l  (sp)+, a0
-;        dc.w    $abcd
-        bra     PatchCode ; Call old vector
+        bra     OldAddTask
+OldRemTask:
+        dc.w    $4ef9 ; JMP ABS.L
+        dc.l    0 ; Old AddTask vector stored here
+NewRemTask:
+        movem.l a0/a1, -(sp)
+        cmp.l   #0, a1
+        bne.b   NotCurTask
+        move.l  $4.w, a1
+        move.l  ThisTask(a1), a1
+NotCurTask:
+        move.l  BoardAddress(pc), a0
+        move.l  a1, OFS_PTR(a0) ; Communicate new task to exprom
+        move.w  #OP_REMTASK, OFS_OP(a0)
+        movem.l (sp)+, a0/a1
+        bra     OldRemTask
 
 PatchCodeEnd:
 

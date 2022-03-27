@@ -129,3 +129,13 @@ std::pair<bool, uint32_t> number_from_string(const char* s, uint8_t base)
     }
     return { true, val };
 }
+
+std::string toupper_str(const std::string& s)
+{
+    auto res = s;
+    for (auto& c : res) {
+        if (c >= 'a' && c <= 'z')
+            c -= 'a' - 'A';
+    }
+    return res;
+}

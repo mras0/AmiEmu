@@ -796,10 +796,10 @@ private:
         case TD_FORMAT:
             // TODO: Maybe check against partition offset/size?
             if (ofs > hd.size || len > hd.size || ofs > hd.size - len || ofs % sector_size_bytes) {
-                std::cerr << "Test board: Invalid offset $" << hexfmt(ofs) << " length=$" << hexfmt(len) << "\n";
+                std::cerr << "[HD] Invalid offset $" << hexfmt(ofs) << " length=$" << hexfmt(len) << "\n";
                 mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
             } else if (len % sector_size_bytes) {
-                std::cerr << "Test board: Invalid length $" << hexfmt(len) << "\n";
+                std::cerr << "[HD] Invalid length $" << hexfmt(len) << "\n";
                 mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
             } else {
                 if (cmd == CMD_READ) {
@@ -850,7 +850,7 @@ private:
             constexpr uint16_t scsi_SenseActual   = 0x1c;
             constexpr uint16_t scsi_SizeOf        = 0x1e;
             if (ofs || (len != scsi_SizeOf && len != 0x22)) { // HdToolBox seems to set length to $22?
-                std::cerr << "Test board: Bad HD_SCSICMD offset $" << hexfmt(ofs) << " length=$" << hexfmt(len) << "\n";
+                std::cerr << "[HD] Bad HD_SCSICMD offset $" << hexfmt(ofs) << " length=$" << hexfmt(len) << "\n";
                 mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_BADADDRESS));
                 break;
             }
@@ -874,7 +874,7 @@ private:
             break;
         }
         default:
-            std::cerr << "Test board: Unsupported command $" << hexfmt(cmd) << "\n";
+            std::cerr << "[HD] Unsupported command $" << hexfmt(cmd) << "\n";
             mem_.write_u8(ptr_hold_ + IO_ERROR, static_cast<uint8_t>(IOERR_NOCMD));
         }
     }

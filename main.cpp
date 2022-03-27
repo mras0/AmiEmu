@@ -661,6 +661,32 @@ void mem_search(const std::vector<uint8_t>& ram, uint32_t base_address, const st
     }
 }
 
+constexpr uint32_t ln_Type = 0x0008;
+constexpr uint32_t ln_Name = 0x000a;
+constexpr uint8_t NT_TASK = 1; // Exec task
+constexpr uint8_t NT_PROCESS = 13; // AmigaDOS Process
+constexpr uint32_t pr_SegList = 0x0080;
+constexpr uint32_t pr_CLI = 0x00ac;
+constexpr uint32_t pr_ReturnAddr = 0x00b0;
+constexpr uint32_t cli_CommandName = 0x0010;
+constexpr uint32_t cli_Module = 0x003c;
+
+std::string read_string(memory_handler& mem, uint32_t ptr)
+{
+    std::string s;
+    for (uint32_t i = 0; i < 64; ++i) {
+        const uint8_t b = mem.read_u8(ptr + i);
+        if (!b)
+            break;
+        if (b >= 0x20 && b <= 0x7f) {
+            s.push_back(b);
+            continue;
+        }
+        s += "\\x" + hexstring(b);
+    }
+    return s;
+}
+
 constexpr int default_disk_insertion_delay = 2 * 50;
 
 } // unnamed namespace
@@ -850,7 +876,7 @@ int main(int argc, char* argv[])
             state = std::make_unique<state_file>(state_file::dir::load, cmdline_args.state_filename);
             cmdline_args.handle_state(*state);
         }
-        disk_drive df0 {"DF0:"}, df1 {"DF1:"};
+        disk_drive df0 { "DF0:" }, df1 { "DF1:" };
         disk_drive* drives[max_drives] = { &df0, &df1 };
         std::unique_ptr<ram_handler> slow_ram;
         std::unique_ptr<fastmem_handler> fast_ram;
@@ -863,7 +889,7 @@ int main(int argc, char* argv[])
         if (cmdline_args.slow_size) {
             slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
             mem.register_handler(*slow_ram, slow_base, cmdline_args.slow_size);
-            #if 0 // XXX: Figure out behavior for custom mirror..
+#if 0 // XXX: Figure out behavior for custom mirror..
             // Mirror up to 0xd80000
             const uint32_t slow_end = slow_base + max_slow_size;
             for (uint32_t addr = slow_base + cmdline_args.slow_size; addr < slow_end; addr += cmdline_args.slow_size) {
@@ -872,7 +898,7 @@ int main(int argc, char* argv[])
                     size = slow_end - addr;
                 mem.register_handler(*slow_ram, addr, size);
             }
-            #endif
+#endif
         }
         if (cmdline_args.fast_size) {
             fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
@@ -890,7 +916,7 @@ int main(int argc, char* argv[])
 
         std::cout << "Memory configuration: Chip: " << (cmdline_args.chip_size >> 10) << " KB, Slow: " << (cmdline_args.slow_size >> 10) << " KB, Fast: " << (cmdline_args.fast_size >> 10) << " KB\n";
 
-        //rom_tag_scan(rom.rom());
+        // rom_tag_scan(rom.rom());
 
         // Serial data handler
         std::vector<uint8_t> serdata;
@@ -911,7 +937,7 @@ int main(int argc, char* argv[])
                     return;
                 }
                 escape_sequence[escape_sequence_pos++] = data;
-                
+
                 if (isalpha(data)) {
                     if (data == 'm') {
                         // ESC CSI 'n' m -> SGR (Select Graphic Rendition)
@@ -927,7 +953,7 @@ int main(int argc, char* argv[])
                 }
                 return;
             }
-            //std::cout << "Serdata: $" << hexfmt(data) << ": " << (char)(isprint(data) ? data : ' ') << "\n";
+            // std::cout << "Serdata: $" << hexfmt(data) << ": " << (char)(isprint(data) ? data : ' ') << "\n";
             if (data == '\r') {
                 if (crlf & 1) {
                     // LF CR
@@ -957,11 +983,11 @@ int main(int argc, char* argv[])
                 crlf = 0;
             }
             serdata.push_back(data ? data : ' ');
-            });
+        });
 
         std::unique_ptr<gui> g;
         if (!cmdline_args.test_mode)
-            g = std::make_unique<gui>(graphics_width, graphics_height, std::array<std::string, 4>{ cmdline_args.df0, cmdline_args.df1, "", "" });
+            g = std::make_unique<gui>(graphics_width, graphics_height, std::array<std::string, 4> { cmdline_args.df0, cmdline_args.df1, "", "" });
 
         signal(SIGINT, &ctrl_c_handler);
 
@@ -990,8 +1016,18 @@ int main(int argc, char* argv[])
         std::vector<uint8_t> pending_disk;
         uint8_t pending_disk_drive = 0xff;
         uint32_t disk_chosen_countdown = 0;
-        enum {wait_none, wait_next_inst, wait_exact_pc, wait_exact_inst, wait_rtx, wait_non_rom_pc, wait_vpos, wait_frames } wait_mode = wait_none;
+        enum { wait_none,
+            wait_next_inst,
+            wait_exact_pc,
+            wait_exact_inst,
+            wait_rtx,
+            wait_non_rom_pc,
+            wait_vpos,
+            wait_frames,
+            wait_process,
+        } wait_mode = wait_none;
         uint32_t wait_arg = 0;
+        std::string wait_process_name;
         uint32_t chip_cycles_count = 0, cpu_cycles_count = 0;
         uint32_t last_vhpos = 0;
         std::vector<uint32_t> breakpoints;
@@ -1010,7 +1046,10 @@ int main(int argc, char* argv[])
         bool audio_buffer_ready[2] = { false, false };
         int audio_next_to_play = 0;
         int audio_next_to_fill = 0;
-        enum { no_reset, cpu_reset, keyboard_reset } reset = no_reset;
+        enum { no_reset,
+            cpu_reset,
+            keyboard_reset } reset
+            = no_reset;
 
         if (!cmdline_args.debug_script.empty()) {
             debug_script = std::make_unique<std::ifstream>(cmdline_args.debug_script);
@@ -1044,10 +1083,10 @@ int main(int argc, char* argv[])
 
         std::unique_ptr<wavedev> audio;
 
-        //#define WRITE_SOUND
-        #ifdef WRITE_SOUND
+//#define WRITE_SOUND
+#ifdef WRITE_SOUND
         std::ofstream sound_out { "c:/temp/sound.raw" };
-        #endif
+#endif
 
         std::unique_ptr<harddisk> hd;
         if (!cmdline_args.hds.empty()) {
@@ -1100,9 +1139,8 @@ int main(int argc, char* argv[])
                     active_debugger();
                     wait_mode = wait_none;
                 }
-                
-                if (audio)
-                {
+
+                if (audio) {
                     std::unique_lock<std::mutex> lock { audio_mutex_ };
                     if (audio_buffer_ready[audio_next_to_fill]) {
                         audio_buffer_played_cv.wait(lock, [&]() { return !audio_buffer_ready[audio_next_to_fill]; });
@@ -1112,12 +1150,12 @@ int main(int argc, char* argv[])
                     audio_next_to_fill = !audio_next_to_fill;
                 }
                 audio_buffer_ready_cv.notify_one();
-                #ifdef WRITE_SOUND
+#ifdef WRITE_SOUND
                 for (int i = 0; i < audio_samples_per_frame; ++i) {
                     sound_out.write((const char*)&custom_step.audio[i * 2], 2);
                 }
-                #endif
-                #if 0
+#endif
+#if 0
                 static auto last_time = std::chrono::high_resolution_clock::now();
                 static int frame_cnt = 0;
                 if (++frame_cnt == 100) {
@@ -1127,7 +1165,7 @@ int main(int argc, char* argv[])
                     last_time = now;
                     frame_cnt = 0;
                 }
-                #endif
+#endif
             }
         };
 
@@ -1153,7 +1191,7 @@ int main(int argc, char* argv[])
                         ++num_warnings;
                         memset(buf, 0, sz * 2 * sizeof(int16_t));
                         // Deadlocks with SDL
-                        //audio_buffer_ready_cv.wait(lock, [&]() { return audio_buffer_ready[audio_next_to_play]; });
+                        // audio_buffer_ready_cv.wait(lock, [&]() { return audio_buffer_ready[audio_next_to_play]; });
                     } else {
                         memcpy(buf, audio_buffer[audio_next_to_play], sz * 2 * sizeof(int16_t));
                     }
@@ -1191,8 +1229,6 @@ int main(int argc, char* argv[])
             audio_buffer_ready_cv.notify_all();
         });
 
-
-
         if (g) {
             g->set_on_pause_callback([&](bool pause) {
                 if (audio)
@@ -1203,8 +1239,111 @@ int main(int argc, char* argv[])
         constexpr uint32_t min_rom_addr = 0x00e0'0000;
 
         std::vector<memwatch> memwatches;
+        std::vector<uint32_t> tasks;
+
+        struct disable_bool {
+            disable_bool(bool& val) : val_(val), orig_val_(val)
+            {
+                val_ = false;
+            }
+            ~disable_bool()
+            {
+                val_ = orig_val_;
+            }
+            bool& val_;
+            const bool orig_val_;
+        };
+
+        auto check_wait_process = [&](uint32_t process_ptr, const std::string& process_name) {
+            if (wait_mode != wait_process)
+                return;
+            auto end_pos = process_name.find_last_of(":/");
+            auto prname = toupper_str(end_pos != std::string::npos ? process_name.substr(end_pos + 1) : process_name);
+            if (prname != toupper_str(wait_process_name))
+                return;
+            assert(!cpu_active); // should already be disabled
+            wait_process_name.clear();
+            std::cout << "Process we're waiting for started!\n";
+            uint32_t seglist = 0;
+            if (auto cli_ptr = mem.read_u32(process_ptr + pr_CLI) << 2; cli_ptr) {
+                seglist = mem.read_u32(cli_ptr + cli_Module) << 2;
+            } else if (auto seglist_array = mem.read_u32(process_ptr + pr_SegList) << 2; seglist_array) {
+                // HACK HACK HACK
+                // Ignore the size in the seglist array. It seems to report 2 for programs started from the WB
+                // even though entry 3 works fine..
+                //auto sz = mem.read_u32(seglist_array);
+                seglist = mem.read_u32(seglist_array + 4 * 3) << 2; // Entry 3
+            }
+
+            if (!seglist) {
+                std::cerr << "Unable to find seglist for process \"" << process_name << "\"\n";
+                wait_mode = wait_none;
+                active_debugger();
+                return;
+            }
+
+            std::cout << "Setting breakpoint at $" << hexfmt(seglist + 4) << "\n";
+
+            wait_mode = wait_exact_pc;
+            wait_arg = seglist + 4;
+        };
+
+        auto task_init = [&](const uint32_t exec_base) {
+            disable_bool db { cpu_active };
+            constexpr uint32_t ThisTask = 276;
+            // Bit of a hack, but add initial process (could scan task lists instead, but doesn't seem to be necessary)
+            tasks.push_back(mem.read_u32(exec_base + ThisTask));
+        };
+        auto task_added = [&](const uint32_t task_ptr) {
+            disable_bool db { cpu_active };
+            const auto type = mem.read_u8(task_ptr + ln_Type);
+            if (type != NT_TASK && type != NT_PROCESS) {
+                std::cerr << "Warning AddTask called with wrong node type $" << hexfmt(type) << " address $" << hexfmt(task_ptr) << "\n";
+                return;
+            }
+            if (auto it = std::find(tasks.begin(), tasks.end(), task_ptr); it != tasks.end()) {
+                std::cerr << "Task with address $" << hexfmt(task_ptr) << " already added!\n";
+                return;
+            }
+            tasks.push_back(task_ptr);
+            const auto task_name = read_string(mem, mem.read_u32(task_ptr + ln_Name));
+            //std::cout << (type == NT_TASK ? "Task" : "Process") << " \"" << task_name << "\" started address $" << hexfmt(task_ptr) << "\n";
+            if (type == NT_PROCESS)
+                check_wait_process(task_ptr, task_name);
+        };
+        auto task_removed = [&](const uint32_t task_ptr) {
+            disable_bool db { cpu_active };
+            auto it = std::find(tasks.begin(), tasks.end(), task_ptr);
+            const auto type = mem.read_u8(task_ptr + ln_Type);
+            const char* type_name = (type == NT_TASK ? "Task" : "Process");
+            if (it == tasks.end()) {
+                std::cerr << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" with address $" << hexfmt(task_ptr) << " removed but not previously known!\n";
+                return;
+            }
+            tasks.erase(it);
+            //std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
+        };
+
+        dbg_board.set_callbacks(task_init, task_added, task_removed);
+        
 
         mem.set_memory_interceptor([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
+            if (wait_mode == wait_process && cpu_active && write) {
+                // A write to pr_ReturnAddress means a process is being started (or is exiting) in the CLI
+                if (auto it = std::find(tasks.begin(), tasks.end(), addr - pr_ReturnAddr); it != tasks.end()) {
+                    disable_bool db { cpu_active };
+                    const uint32_t task_ptr = *it;
+                    if (mem.read_u8(task_ptr + ln_Type) == NT_PROCESS) {
+                        if (const uint32_t cli = mem.read_u32(task_ptr + pr_CLI) << 2; cli) {
+                            const auto process_name = read_string(mem, mem.read_u32(cli + cli_CommandName) * 4 + 1);
+                            //std::cout << "Process \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" pr_ReturnAddress write cli_CommandName=\"" << process_name << "\"\n";
+                            check_wait_process(task_ptr, process_name);
+                        }
+                    }
+                }
+            }
+
+
             for (const auto& mw : memwatches) {
                 if (!mw.enabled)
                     continue;
@@ -1918,6 +2057,14 @@ int main(int argc, char* argv[])
                                 wait_arg = 0;
                                 break;
                             }
+                        } else if (args[0] == "zp") {
+                            if (args.size() > 1 && !args[1].empty() && args[1][0] == '"') {
+                                // TODO: WinUAE also supports process address
+                                wait_mode = wait_process;
+                                wait_process_name = unquote(args[1]);
+                            } else {
+                                std::cerr << "Missing or invalid argument for zp (quoted process name)\n";
+                            }
                         } else if (args[0] == "zv") {
                             // Wait for video position
                             if (args.size() > 1) {
@@ -2011,6 +2158,7 @@ unknown_command:
                         break;
                     case wait_vpos: // Handled in cstep
                     case wait_frames:
+                    case wait_process: // Handled elsewhere
                         goto check_breakpoint;
                     }
 
@@ -2032,6 +2180,7 @@ check_breakpoint:
                 if (reset != no_reset) {
                     std::cout << (reset == cpu_reset ? "CPU reset" : "Keyboard reset") << "\n";
                     if (!debug_mode) {
+                        tasks.clear();
                         mem.reset();
                         if (reset != cpu_reset)
                             cpu.reset();

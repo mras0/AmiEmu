@@ -22,6 +22,13 @@ public:
     {
     }
 
+    void set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task)
+    {
+        init_ = init;
+        add_task_ = add_task;
+        rem_task_ = rem_task;
+    }
+
 private:
     static constexpr board_config config {
         .type = ERTF_DIAGVALID,
@@ -33,6 +40,10 @@ private:
     };
 
     memory_handler& mem_;
+    task_info_callback init_;
+    task_info_callback add_task_;
+    task_info_callback rem_task_;
+    uint32_t ptr_ = 0;
 
     void reset() override
     {
@@ -69,56 +80,31 @@ private:
         std::cerr << "debug_board: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
     }
 
-    uint16_t ptr_hi_ = 0;
-
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
         if (offset == EXPROM_BASE) {
-            ptr_hi_ = val;
+            ptr_ = val << 16;
             return;
         } else if (offset == EXPROM_BASE + 2) {
-            print_task(ptr_hi_ << 16 | val);
+            ptr_ |= val;
             return;
+        } else if (offset == EXPROM_BASE + 4) {
+            switch (val) {
+            case 1:
+                if (init_)
+                    init_(ptr_);
+                return;
+            case 2:
+                if (add_task_)
+                    add_task_(ptr_);
+                return;
+            case 3:
+                if (rem_task_)
+                    rem_task_(ptr_);
+                return;
+            }
         }
         std::cerr << "debug_board: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";
-    }
-
-    std::string read_string(uint32_t ptr)
-    {
-        std::string s; 
-        for (uint32_t i = 0; i < 64; ++i) {
-            const uint8_t b = mem_.read_u8(ptr + i);
-            if (!b)
-                break;
-            if (b >= 0x20 && b <= 0x7f) {
-                s.push_back(b);
-                continue;
-            }
-            s += "\\x" + hexstring(b);
-        }
-        return s;
-    }
-
-    void print_task(uint32_t task_ptr)
-    {
-        constexpr uint32_t ln_Type = 0x0008;
-        constexpr uint32_t ln_Name = 0x000a;
-        constexpr uint8_t NT_TASK    = 1; // Exec task
-        constexpr uint8_t NT_PROCESS = 13; // AmigaDOS Process
-        //constexpr uint32_t pr_CLI = 0x00ac;
-        constexpr uint32_t pr_ReturnAddr = 0x00b0;
-        //constexpr uint32_t cli_CommandName = 0x0010;
-
-        const auto type = mem_.read_u8(task_ptr + ln_Type);
-        if (type != NT_TASK && type != NT_PROCESS) {
-            std::cout << "debug_board: Warning AddTask called with wrong node type $" << hexfmt(type) << " address $" << hexfmt(task_ptr) << "\n";
-            return;
-        }
-
-        std::cout << "debug_board: New " << (type == NT_TASK ? "task" : "process") << " started $" << hexfmt(task_ptr) << " Name=\"" << read_string(mem_.read_u32(task_ptr + ln_Name)) << "\"\n";
-        if (type != NT_PROCESS)
-            return;
-        std::cout << "Maybe add breakpoint at $" << hexfmt(task_ptr + pr_ReturnAddr) << "\n";
     }
 };
 
@@ -132,4 +118,9 @@ debug_board::~debug_board() = default;
 autoconf_device& debug_board::autoconf_dev()
 {
     return *impl_;
+}
+
+void debug_board::set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task)
+{
+    impl_->set_callbacks(init, add_task, rem_task);
 }

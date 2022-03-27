@@ -65,4 +65,6 @@ inline std::pair<bool, uint32_t> from_hex(const std::string& s)
     return number_from_string(s.c_str(), 16);
 }
 
+std::string toupper_str(const std::string& s);
+
 #endif

@@ -417,9 +417,7 @@ private:
 
     token_type make_identifier(const char* text)
     {
-        std::string uc { text };
-        for (auto& ch : uc)
-            ch = static_cast<char>(toupper(ch));
+        std::string uc = toupper_str(text);
 
         if (auto it = id_map_.find(uc); it != id_map_.end())
             return it->second;
@@ -427,7 +425,7 @@ private:
         const uint32_t id = static_cast<uint32_t>(identifier_info_.size()) + static_cast<uint32_t>(token_type::identifier_start);
         id_map_[uc] = static_cast<token_type>(id);
         auto ii = std::make_unique<identifier_info_type>();
-        ii->id = uc;
+        ii->id = std::move(uc);
         identifier_info_.push_back(std::move(ii));
         return static_cast<token_type>(id);
     }

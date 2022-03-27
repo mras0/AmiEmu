@@ -4419,15 +4419,6 @@ void analyzer::do_system_scan()
     }
 
     const uint32_t this_task_ptr = get_u32(&data_[exec_base_ + 0x0114]);
-    if (!pointer_ok(this_task_ptr)) {
-        std::cerr << "ThisTask not valid\n";
-        return;
-    }
-
-    if (data_[this_task_ptr + 0x08] != NT_PROCESS) {
-        std::cerr << "ThisTask is not a process (type=" << static_cast<int>(data_[this_task_ptr + 0x08]) << ")\n";
-        return;
-    }
 
     auto process_seg_list = [this](uint32_t seg_list_ptr) {
         if (!pointer_ok(seg_list_ptr))
@@ -4440,6 +4431,16 @@ void analyzer::do_system_scan()
                 add_start_root(seg_list_ptr + 4);
         }
     };
+
+    if (!pointer_ok(this_task_ptr)) {
+        std::cerr << "ThisTask not valid\n";
+        goto finish;
+    }
+
+    if (data_[this_task_ptr + 0x08] != NT_PROCESS) {
+        std::cerr << "ThisTask is not a process (type=" << static_cast<int>(data_[this_task_ptr + 0x08]) << ")\n";
+        goto finish;
+    }
 
     if (const auto pr_cli = get_u32(&data_[this_task_ptr + 0xac]); pointer_ok(pr_cli * 4)) {
         if (const uint32_t cli_name_addr = get_u32(&data_[pr_cli * 4 + 0x10]) * 4; cli_name_addr + 256 < max_mem && written_[cli_name_addr]) {
@@ -4467,6 +4468,7 @@ void analyzer::do_system_scan()
         process_seg_list(get_u32(&data_[seg_list_array + 4 * 4]) * 4);
     }
 
+finish:
     add_label(exec_base_, "SysBase", make_struct_type(ExecBase));
     handle_data_at(exec_base_, make_struct_type(ExecBase));
 }
