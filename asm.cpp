@@ -12,6 +12,7 @@
 #include <cassert>
 #include <iostream>
 #include <algorithm>
+#include <memory>
 
 constexpr uint8_t opsize_mask_none = 0;
 constexpr uint8_t opsize_mask_b    = 1 << 0;
@@ -282,6 +283,9 @@ public:
         for (const auto& [offset, f] : pending_fixups_) {
             //std::cout << "Applying fixup offset=$" << hexfmt(offset) << " " << token_type_string(f.inst) << " line " << f.line << " value $" << hexfmt(f.value) << "\n";
             switch (f.size) {
+            case opsize::none:
+                assert(false);
+                ASSEMBLER_ERROR("Internal error");
             case opsize::b:
                 assert(offset & 1);
                 if (!range8(f.value))
