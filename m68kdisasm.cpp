@@ -1232,6 +1232,7 @@ constexpr int32_t _LVOFindResident = -96;
 constexpr int32_t _LVOSetIntVector = -162;
 constexpr int32_t _LVOAddIntServer = -168;
 constexpr int32_t _LVOAllocMem = -198;
+constexpr int32_t _LVOAddTask = -282;
 constexpr int32_t _LVOFindTask = -294;
 constexpr int32_t _LVOPutMsg = -366;
 constexpr int32_t _LVOGetMsg = -372;
@@ -1354,7 +1355,7 @@ const structure_definition ExecBase {
         { "_LVORemTail", libvec_code, -264 },
         { "_LVOEnqueue", libvec_code, -270 },
         { "_LVOFindName", libvec_code, -276 },
-        { "_LVOAddTask", libvec_code, -282 },
+        { "_LVOAddTask", libvec_code, _LVOAddTask },
         { "_LVORemTask", libvec_code, -288 },
         { "_LVOFindTask", libvec_code, _LVOFindTask },
         { "_LVOSetTaskPri", libvec_code, -300 },
@@ -2148,6 +2149,100 @@ const structure_definition IntuitionBase {
     }
 };
 
+// expansion
+const structure_definition ExpansionRom {
+    "ExpansionRom",
+    {
+        { "er_Type", byte_type },
+        { "er_Product", byte_type },
+        { "er_Flags", byte_type },
+        { "er_Reserved03", byte_type },
+        { "er_Manufacturer", word_type },
+        { "er_SerialNumber", long_type },
+        { "er_InitDiagVec", word_type },
+        { "er_Reserved0c", byte_type },
+        { "er_Reserved0d", byte_type },
+        { "er_Reserved0e", byte_type },
+        { "er_Reserved0f", byte_type },
+    }
+};
+
+const structure_definition ConfigDev {
+    "ConfigDev",
+    {
+        { "cd_Node", make_struct_type(Node) },
+        { "cd_Flags", byte_type },
+        { "cd_Pad", byte_type },
+        { "cd_Rom", make_struct_type(ExpansionRom) },
+        { "cd_BoardAddr", unknown_ptr },
+        { "cd_BoardSize", long_type },
+        { "cd_SlotAddr", word_type },
+        { "cd_SlotSize", word_type },
+        { "cd_Driver", unknown_ptr },
+        { "", make_pointer_type(make_struct_type(ConfigDev)) },
+        { "cd_Unused", make_array_type(long_type, 4) },
+    }
+};
+const structure_definition CurrentBinding
+{
+    "CurrentBinding",
+    {
+        { "cb_ConfigDev", make_pointer_type(make_struct_type(ConfigDev)) },
+        { "cb_FileName", char_ptr },
+        { "cb_ProductString", char_ptr },
+        { "cb_ToolTypes", make_pointer_type(char_ptr) },
+    }
+};
+
+const structure_definition BootNode {
+    "BootNode",
+    {
+        { "bn_Node", make_struct_type(Node) },
+        { "bn_Flags", word_type },
+        { "bn_DeviceNode", unknown_ptr },
+    }
+};
+const structure_definition ExpansionBase {
+    "ExpansionBase",
+    {
+        { "LibNode", make_struct_type(Library) },
+        { "Flags", byte_type },
+        { "eb_Private01", byte_type },
+        { "eb_Private02", long_type },
+        { "eb_Private03", long_type },
+        { "eb_Private04", make_struct_type(CurrentBinding) },
+        { "eb_Private05", make_struct_type(List) },
+        { "MountList", make_struct_type(List) },
+
+        { "_LVOOpenLib", libvec_code, -6 },
+        { "_LVOCloseLib", libvec_code, -12 },
+        { "_LVOExpungeLib", libvec_code, -18 },
+        { "_LVOReservedFuncLib", libvec_code, -24 },
+        { "_LVOAddConfigDev", libvec_code, -30 },
+
+        { "_LVOAddBootNode", libvec_code, -36 },
+        { "_LVOAllocBoardMem", libvec_code, -42 },
+        { "_LVOAllocConfigDev", libvec_code, -48 },
+        { "_LVOAllocExpansionMem", libvec_code, -54 },
+        { "_LVOConfigBoard", libvec_code, -60 },
+        { "_LVOConfigChain", libvec_code, -66 },
+        { "_LVOFindConfigDev", libvec_code, -72 },
+        { "_LVOFreeBoardMem", libvec_code, -78 },
+        { "_LVOFreeConfigDev", libvec_code, -84 },
+        { "_LVOFreeExpansionMem", libvec_code, -90 },
+        { "_LVOReadExpansionByte", libvec_code, -96 },
+        { "_LVOReadExpansionRom", libvec_code, -102 },
+        { "_LVORemConfigDev", libvec_code, -108 },
+        { "_LVOWriteExpansionByte", libvec_code, -114 },
+        { "_LVOObtainConfigBinding", libvec_code, -120 },
+        { "_LVOReleaseConfigBinding", libvec_code, -126 },
+        { "_LVOSetCurrentBinding", libvec_code, -132 },
+        { "_LVOGetCurrentBinding", libvec_code, -138 },
+        { "_LVOMakeDosNode", libvec_code, -144 },
+        { "_LVOAddDosNode", libvec_code, -150 },
+    }
+};
+
 
 void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simval& aval)
 {
@@ -2589,6 +2684,7 @@ public:
         add_library("graphics.library", "GfxBase", GfxBase);
         const auto dos_base = add_library("dos.library", "DosBase", DosBase);
         add_library("intuition.library", "IntuitionBase", IntuitionBase);
+        add_library("expansion.library", "ExpansionBase", ExpansionBase);
 
         // exec.library
         auto add_int = [this]() { do_add_int(); };
@@ -2623,6 +2719,17 @@ public:
         functions_.insert({ exec_base_ + _LVOAllocMem, function_description { {}, { { regname::D0, "byteSize", &long_type }, { regname::D1, "attributes", &long_type } }, [this]() {
                                                                                  do_alloc_mem();
                                                                              } } });
+        functions_.insert({exec_base_ + _LVOAddTask, function_description
+            {
+                {}, {
+                    { regname::A1, "task", &make_pointer_type(make_struct_type(Task)) },
+                    { regname::A2, "initialPC", &code_ptr },
+                    { regname::A3, "finalPC", &code_ptr }
+                },
+                [this]() {
+                    regs_.d[0] = simval { fake_process_ };
+                }
+            }});
         functions_.insert({ exec_base_ + _LVOFindTask, function_description { {}, { { regname::A1, "name", &char_ptr } }, [this]() {
                                                                                  regs_.d[0] = simval { fake_process_ };
                                                                              } } });

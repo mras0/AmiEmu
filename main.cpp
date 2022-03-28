@@ -1254,16 +1254,17 @@ int main(int argc, char* argv[])
             const bool orig_val_;
         };
 
-        auto check_wait_process = [&](uint32_t process_ptr, const std::string& process_name) {
-            if (wait_mode != wait_process)
-                return;
+        auto check_wait_process_name = [&](const std::string& process_name) {
+            assert(!cpu_active); // should already be disabled
             auto end_pos = process_name.find_last_of(":/");
             auto prname = toupper_str(end_pos != std::string::npos ? process_name.substr(end_pos + 1) : process_name);
-            if (prname != toupper_str(wait_process_name))
+            return prname == toupper_str(wait_process_name);
+        };
+
+        auto check_wait_process = [&](uint32_t process_ptr, const std::string& process_name) {
+            if (wait_mode != wait_process || !check_wait_process_name(process_name))
                 return;
-            assert(!cpu_active); // should already be disabled
             wait_process_name.clear();
-            std::cout << "Process we're waiting for started!\n";
             uint32_t seglist = 0;
             if (auto cli_ptr = mem.read_u32(process_ptr + pr_CLI) << 2; cli_ptr) {
                 seglist = mem.read_u32(cli_ptr + cli_Module) << 2;
@@ -1282,7 +1283,7 @@ int main(int argc, char* argv[])
                 return;
             }
 
-            std::cout << "Setting breakpoint at $" << hexfmt(seglist + 4) << "\n";
+            std::cout << "Setting breakpoint for \"" << process_name << "\" at $" << hexfmt(wait_arg) << "\n";
 
             wait_mode = wait_exact_pc;
             wait_arg = seglist + 4;
@@ -1323,27 +1324,27 @@ int main(int argc, char* argv[])
             tasks.erase(it);
             //std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
         };
+        auto load_seg = [&](const uint32_t name_ptr, const uint32_t seg_list_bptr) {
+            
+            if (wait_mode != wait_process)
+                return;
 
-        dbg_board.set_callbacks(task_init, task_added, task_removed);
+            disable_bool db { cpu_active };
+            const auto name = read_string(mem, name_ptr);
+            // std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
+
+            if (check_wait_process_name(name)) {
+                wait_mode = wait_exact_pc;
+                wait_arg = (seg_list_bptr + 1) << 2;
+                wait_process_name.clear();
+                std::cout << "Setting breakpoint for \"" << name << "\" at $" << hexfmt(wait_arg) << "\n";
+            }
+        };
+
+        dbg_board.set_callbacks(task_init, task_added, task_removed, load_seg);
         
 
         mem.set_memory_interceptor([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
-            if (wait_mode == wait_process && cpu_active && write) {
-                // A write to pr_ReturnAddress means a process is being started (or is exiting) in the CLI
-                if (auto it = std::find(tasks.begin(), tasks.end(), addr - pr_ReturnAddr); it != tasks.end()) {
-                    disable_bool db { cpu_active };
-                    const uint32_t task_ptr = *it;
-                    if (mem.read_u8(task_ptr + ln_Type) == NT_PROCESS) {
-                        if (const uint32_t cli = mem.read_u32(task_ptr + pr_CLI) << 2; cli) {
-                            const auto process_name = read_string(mem, mem.read_u32(cli + cli_CommandName) * 4 + 1);
-                            //std::cout << "Process \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" pr_ReturnAddress write cli_CommandName=\"" << process_name << "\"\n";
-                            check_wait_process(task_ptr, process_name);
-                        }
-                    }
-                }
-            }
-
-
             for (const auto& mw : memwatches) {
                 if (!mw.enabled)
                     continue;

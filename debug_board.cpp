@@ -22,11 +22,12 @@ public:
     {
     }
 
-    void set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task)
+    void set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task, const load_seg_callback& load_seg)
     {
         init_ = init;
         add_task_ = add_task;
         rem_task_ = rem_task;
+        load_seg_ = load_seg;
     }
 
 private:
@@ -43,7 +44,9 @@ private:
     task_info_callback init_;
     task_info_callback add_task_;
     task_info_callback rem_task_;
-    uint32_t ptr_ = 0;
+    load_seg_callback load_seg_;
+    uint32_t ptr1_ = 0;
+    uint32_t ptr2_ = 0;
 
     void reset() override
     {
@@ -83,24 +86,34 @@ private:
     void write_u16(uint32_t, uint32_t offset, uint16_t val) override
     {
         if (offset == EXPROM_BASE) {
-            ptr_ = val << 16;
+            ptr1_ = val << 16;
             return;
         } else if (offset == EXPROM_BASE + 2) {
-            ptr_ |= val;
+            ptr1_ |= val;
             return;
         } else if (offset == EXPROM_BASE + 4) {
+            ptr2_ = val << 16;
+            return;
+        } else if (offset == EXPROM_BASE + 6) {
+            ptr2_ |= val;
+            return;
+        } else if (offset == EXPROM_BASE + 16) {
             switch (val) {
             case 1:
                 if (init_)
-                    init_(ptr_);
+                    init_(ptr1_);
                 return;
             case 2:
                 if (add_task_)
-                    add_task_(ptr_);
+                    add_task_(ptr1_);
                 return;
             case 3:
                 if (rem_task_)
-                    rem_task_(ptr_);
+                    rem_task_(ptr1_);
+                return;
+            case 4:
+                if (load_seg_)
+                    load_seg_(ptr1_, ptr2_);
                 return;
             }
         }
@@ -120,7 +133,7 @@ autoconf_device& debug_board::autoconf_dev()
     return *impl_;
 }
 
-void debug_board::set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task)
+void debug_board::set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task, const load_seg_callback& load_seg)
 {
-    impl_->set_callbacks(init, add_task, rem_task);
+    impl_->set_callbacks(init, add_task, rem_task, load_seg);
 }

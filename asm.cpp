@@ -952,6 +952,9 @@ operands_done:
             iwords[0] = encode_unary(info, ea[0], osize, 0x4200);
             break;
         case token_type::CMP:
+            if ((ea[1].type >> ea_m_shift > ea_m_An) && ea[0].type != ea_immediate) {
+                ASSEMBLER_ERROR("Destination of CMP must be register");
+            }
             iwords[0] = encode_add_sub_cmp(info, ea, osize, 0x0C00, 0xB000);
             break;
         case token_type::CMPM: {
@@ -1063,6 +1066,8 @@ operands_done:
         case token_type::MOVE: {
             // Unlike ANDI/EORI/ORI to CCR, MOVE to/from CCR is word sized
             // Note: MOVE to CCR is 68010+ only
+            if ((ea[1].type >> ea_m_shift == ea_m_Other) && (ea[1].type & ea_xn_mask) > ea_other_abs_l)
+                ASSEMBLER_ERROR("Invalid destination for MOVE");
             if (ea[0].type == ea_sr || ea[0].type == ea_ccr) {
                 if (osize != opsize::w)
                     ASSEMBLER_ERROR("Operation must be word sized");

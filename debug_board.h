@@ -12,13 +12,14 @@ class autoconf_device;
 class debug_board {
 public:
     using task_info_callback = std::function<void (uint32_t)>;
+    using load_seg_callback = std::function<void (uint32_t, uint32_t)>;
 
     explicit debug_board(memory_handler& mem);
     ~debug_board();
 
     autoconf_device& autoconf_dev();
 
-    void set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task);
+    void set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task, const load_seg_callback& load_seg);
 
 private:
     class impl;
