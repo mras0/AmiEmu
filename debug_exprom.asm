@@ -2,6 +2,7 @@ OP_INIT=1
 OP_ADDTASK=2
 OP_REMTASK=3
 OP_LOADSEG=4
+OP_LOADSEG_OLD=5
 
 ; exec.library
 _LVOAllocMem=-198
@@ -30,8 +31,11 @@ pr_GlobVec=$0088
 
 GLOBVEC_LOADSEG=$0144 ; $51*4
 
+DAC_WORDWIDE=$80
+DAC_CONFIGTIME=$10
+
 DiagStart:
-            dc.b $90                 ; da_Config = DAC_WORDWIDE|DAC_CONFIGTIME
+            dc.b DAC_WORDWIDE+DAC_CONFIGTIME ; da_Config
             dc.b $00                 ; da_Flags = 0
             dc.w EndCopy-DiagStart   ; da_Size (in bytes)
             dc.w DiagEntry-DiagStart ; da_DiagPoint (0 = none)
@@ -91,6 +95,7 @@ Continue:
 
 
         ; Don't patch AddLibrary if KS1.x
+        dc.w    $abcd
         cmp.w   #36, lib_Version(a6)
         blt.b   .ks1x
 
@@ -234,10 +239,6 @@ OFT_Out:
 NewLoadSeg1x:
         movem.l d1/a0, -(sp)
         move.l  BoardAddress(pc), a0
-        ; BPTR -> CPTR (assume NUL-terminated)
-        add.l   d1, d1
-        add.l   d1, d1
-        addq.l  #1, d1
         move.l  d1, OFS_PTR1(a0)
         movem.l (sp)+, d1/a0
         ; Follow BCPL caling convention..
@@ -245,11 +246,14 @@ NewLoadSeg1x:
 OldLoadSeg1x:
         dc.l 0 ; Old BCPL LoadSeg stored here
         jsr     (a5)
+        tst.l   d1
+        beq.b   OLS_OUT
         move.l  a0, -(sp)
         move.l  BoardAddress(pc), a0
         move.l  d1, OFS_PTR2(a0)
-        move.w  #OP_LOADSEG, OFS_OP(a0)
+        move.w  #OP_LOADSEG_OLD, OFS_OP(a0)
         move.l  (sp)+, a0
+OLS_OUT:
         jmp     (a6)
 
 PatchCodeEnd:

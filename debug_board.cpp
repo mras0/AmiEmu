@@ -115,6 +115,10 @@ private:
                 if (load_seg_)
                     load_seg_(ptr1_, ptr2_);
                 return;
+            case 5:
+                if (load_seg_)
+                    load_seg_(ptr1_ | 0x80000000, ptr2_);
+                return;
             }
         }
         std::cerr << "debug_board: Invalid write to offset $" << hexfmt(offset) << " val $" << hexfmt(val) << "\n";

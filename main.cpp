@@ -867,6 +867,17 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
     return args;
 }
 
+std::vector<uint8_t> patch(std::vector<uint8_t>&& rom)
+{
+    if (!strcmp(reinterpret_cast<const char*>(&rom[0x18]), "exec 33.192 (8 Oct 1986)\r\n")) {
+        std::cerr << "Patching KS1.2 (33.192) expansion.library/ConfigBoard\n";
+        put_u16(&rom[0x4d9c], 0x426F); // CLR.W 4(A7)
+        put_u16(&rom[0x4d9e], 0x0004);
+        put_u16(&rom[0x4db2], 0x0000); // MOVE.L 2(A7), D0 -> MOVE.L 0(A7), D0
+    }
+    return rom;
+}
+
 int main(int argc, char* argv[])
 {
     try {
@@ -881,7 +892,7 @@ int main(int argc, char* argv[])
         std::unique_ptr<ram_handler> slow_ram;
         std::unique_ptr<fastmem_handler> fast_ram;
         memory_handler mem { cmdline_args.chip_size };
-        rom_area_handler rom { mem, read_file(cmdline_args.rom) };
+        rom_area_handler rom { mem, patch(read_file(cmdline_args.rom)) };
         cia_handler cias { mem, rom, drives };
         custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size, cmdline_args.floppy_speed };
         autoconf_handler autoconf { mem };
@@ -1094,8 +1105,11 @@ int main(int argc, char* argv[])
             autoconf.add_device(hd->autoconf_dev());
         }
 
-        debug_board dbg_board { mem };
-        autoconf.add_device(dbg_board.autoconf_dev());
+        std::unique_ptr<debug_board> dbg_board;
+        if (1) {
+            dbg_board = std::make_unique<debug_board>(mem);
+            autoconf.add_device(dbg_board->autoconf_dev());
+        }
 
         auto handle_machine_state = [&](state_file& sf) {
             mem.handle_state(sf);
@@ -1324,14 +1338,22 @@ int main(int argc, char* argv[])
             tasks.erase(it);
             //std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
         };
-        auto load_seg = [&](const uint32_t name_ptr, const uint32_t seg_list_bptr) {
-            
+        auto load_seg = [&](uint32_t name_ptr, const uint32_t seg_list_bptr) {
             if (wait_mode != wait_process)
                 return;
 
             disable_bool db { cpu_active };
-            const auto name = read_string(mem, name_ptr);
-            // std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
+            std::string name;
+            if (name_ptr & 0x80000000) {
+                // BSTR
+                name_ptr = (name_ptr & ~0x80000000) * 4;
+                int len = mem.read_u8(name_ptr++);
+                for (int i = 0; i < len; ++i)
+                    name.push_back(mem.read_u8(name_ptr++));
+            } else {
+                name = read_string(mem, name_ptr);
+            }
+            //std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
 
             if (check_wait_process_name(name)) {
                 wait_mode = wait_exact_pc;
@@ -1341,7 +1363,8 @@ int main(int argc, char* argv[])
             }
         };
 
-        dbg_board.set_callbacks(task_init, task_added, task_removed, load_seg);
+        if (dbg_board)
+            dbg_board->set_callbacks(task_init, task_added, task_removed, load_seg);
         
 
         mem.set_memory_interceptor([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
@@ -2059,12 +2082,16 @@ int main(int argc, char* argv[])
                                 break;
                             }
                         } else if (args[0] == "zp") {
-                            if (args.size() > 1 && !args[1].empty() && args[1][0] == '"') {
-                                // TODO: WinUAE also supports process address
-                                wait_mode = wait_process;
-                                wait_process_name = unquote(args[1]);
+                            if (dbg_board) {
+                                if (args.size() > 1 && !args[1].empty() && args[1][0] == '"') {
+                                    // TODO: WinUAE also supports process address
+                                    wait_mode = wait_process;
+                                    wait_process_name = unquote(args[1]);
+                                } else {
+                                    std::cerr << "Missing or invalid argument for zp (quoted process name)\n";
+                                }
                             } else {
-                                std::cerr << "Missing or invalid argument for zp (quoted process name)\n";
+                                std::cerr << "Debug board required\n";
                             }
                         } else if (args[0] == "zv") {
                             // Wait for video position

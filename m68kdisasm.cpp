@@ -2213,6 +2213,7 @@ const structure_definition ExpansionBase {
         { "eb_Private04", make_struct_type(CurrentBinding) },
         { "eb_Private05", make_struct_type(List) },
         { "MountList", make_struct_type(List) },
+        { "eb_UnknownData", make_array_type(byte_type, 0x1c8 - 0x58) },
 
         { "_LVOOpenLib", libvec_code, -6 },
         { "_LVOCloseLib", libvec_code, -12 },
@@ -2418,10 +2419,15 @@ public:
             if (parts.size() == 2) {
                 const auto [ok, addr] = from_hex(parts[0]);
                 const auto rn = get_reg_and_equal(parts[1]);
-                if (ok && rn) {
-                    const auto [ok2, val] = from_hex(parts[1].c_str() + 3);
-                    if (ok2) {
-                        forced_values_.insert({ addr, { *rn, val } });
+                if (ok && rn && parts[1].length() >= 4) {
+                    auto lab = parts[1].substr(3);
+                    if (lab[0] >= '0' && lab[0] <= '9') {
+                        if (const auto [ok2, val] = from_hex(lab); ok2) {
+                            forced_values_.insert({ addr, { *rn, val } });
+                            continue;
+                        }
+                    } else {
+                        delayed_forced_values_.push_back({ addr, *rn, lab });
                         continue;
                     }
                 }
@@ -2686,6 +2692,8 @@ public:
         add_library("intuition.library", "IntuitionBase", IntuitionBase);
         add_library("expansion.library", "ExpansionBase", ExpansionBase);
 
+        add_label(alloc_fake_mem(ConfigDev.size()), "FakeConfigDev", make_struct_type(ConfigDev), false);
+
         // exec.library
         auto add_int = [this]() { do_add_int(); };
         auto open_library = [this]() { do_open_library(); };
@@ -2771,6 +2779,14 @@ public:
         handle_predef_info();
         if (!exec_base_)
             add_fakes();
+        for (const auto& [addr, reg, lab] : delayed_forced_values_) {
+            // TODO: This lookup is slow
+            auto it = std::find_if(labels_.begin(), labels_.end(), [&lab](const auto& l) { return l.second.name == lab; });
+            if (it == labels_.end()) {
+                throw std::runtime_error { "Invalid label \"" + lab + "\" used for forced value at address $" + hexstring(addr) };
+            }
+            forced_values_.insert({ addr, { reg, it->first } });
+        }
 
         process_roots();
         // Now add any predefined roots that were not automatically inferred
@@ -3049,6 +3065,11 @@ private:
         uint32_t beg;
         uint32_t end;
     };
+    struct delayed_forced_value {
+        uint32_t addr;
+        regname reg;
+        std::string label;
+    };
     std::vector<bool> written_;
     std::vector<bool> data_handled_at_;
     std::vector<uint8_t> data_;
@@ -3063,6 +3084,8 @@ private:
     std::multimap<uint32_t, std::pair<regname, uint32_t>> forced_values_; 
     uint32_t exec_base_ = 0;
     std::map<std::string, uint32_t> library_bases_;
+    std::vector<delayed_forced_value> delayed_forced_values_;
+
     uint32_t fake_process_ = 0;
 
     uint32_t ea_data_[2];
