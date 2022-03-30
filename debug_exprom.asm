@@ -95,7 +95,6 @@ Continue:
 
 
         ; Don't patch AddLibrary if KS1.x
-        dc.w    $abcd
         cmp.w   #36, lib_Version(a6)
         blt.b   .ks1x
 
