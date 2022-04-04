@@ -265,7 +265,7 @@ private:
             hdfile.seekg(0, std::fstream::end);
             const uint64_t total_size = hdfile.tellg();
 
-            if (!total_size || total_size % sector_size_bytes || total_size < 100 * 1024)
+            if (total_size < 100 * 1024)
                 throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size) };
 
             hds_.push_back(std::unique_ptr<hd_info>(new hd_info{hdfilename, std::move(hdfile), total_size, uint32_t(0), uint8_t(0), uint16_t(0)}));
@@ -420,7 +420,7 @@ private:
             const uint32_t sectors_per_track = 32;
 
             const auto cyl_size = num_heads * sectors_per_track * sector_size_bytes;
-            if (!total_size || total_size % cyl_size || total_size > 504 * 1024 * 1024 || total_size < 8 * 1024 * 1024) // Limit to 504MB for now (probably need more heads)
+            if (total_size > 504 * 1024 * 1024) // Limit to 504MB for now (probably need more heads)
                 throw std::runtime_error { "Invalid size for " + hdfilename + " " + std::to_string(total_size) };
             const uint32_t num_cylinders = static_cast<uint32_t>(total_size / cyl_size);
 
@@ -454,6 +454,7 @@ private:
                     break;
                 }
             }
+            std::cout << "[HD] Plain HDF \"" << hdfilename << "\" will become " << partitions_.back().name << " C/H/S: " << hd.cylinders << "/" << static_cast<int>(hd.heads) << "/" << static_cast<int>(hd.sectors_per_track) << "\n";
         }
     }
 
