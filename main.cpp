@@ -1309,7 +1309,7 @@ int main(int argc, char* argv[])
             // Bit of a hack, but add initial process (could scan task lists instead, but doesn't seem to be necessary)
             tasks.push_back(mem.read_u32(exec_base + ThisTask));
         };
-        auto task_added = [&](const uint32_t task_ptr) {
+        auto task_added = [&](const uint32_t task_ptr, uint32_t initial_pc) {
             disable_bool db { cpu_active };
             const auto type = mem.read_u8(task_ptr + ln_Type);
             if (type != NT_TASK && type != NT_PROCESS) {
@@ -1322,7 +1322,7 @@ int main(int argc, char* argv[])
             }
             tasks.push_back(task_ptr);
             const auto task_name = read_string(mem, mem.read_u32(task_ptr + ln_Name));
-            //std::cout << (type == NT_TASK ? "Task" : "Process") << " \"" << task_name << "\" started address $" << hexfmt(task_ptr) << "\n";
+            std::cout << (type == NT_TASK ? "Task" : "Process") << " \"" << task_name << "\" started address $" << hexfmt(task_ptr) << " initialPC=$" << hexfmt(initial_pc) << "\n";
             if (type == NT_PROCESS)
                 check_wait_process(task_ptr, task_name);
         };
@@ -1336,11 +1336,9 @@ int main(int argc, char* argv[])
                 return;
             }
             tasks.erase(it);
-            //std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
+            std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
         };
         auto load_seg = [&](uint32_t name_ptr, const uint32_t seg_list_bptr) {
-            if (wait_mode != wait_process)
-                return;
 
             disable_bool db { cpu_active };
             std::string name;
@@ -1353,8 +1351,10 @@ int main(int argc, char* argv[])
             } else {
                 name = read_string(mem, name_ptr);
             }
-            //std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
+            std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
 
+            if (wait_mode != wait_process)
+                return;
             if (check_wait_process_name(name)) {
                 wait_mode = wait_exact_pc;
                 wait_arg = (seg_list_bptr + 1) << 2;

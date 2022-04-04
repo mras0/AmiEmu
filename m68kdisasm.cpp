@@ -815,6 +815,15 @@ public:
         return { };
     }
 
+    int32_t field_offset(const std::string& name) const
+    {
+        for (const auto& f : fields_) {
+            if (f.name() == name)
+                return f.offset();
+        }
+        throw std::runtime_error{"Field " + name + " not found in " + name_};
+    }
+
 private:
     const char* const name_;
     std::vector<struct_field> fields_;
@@ -1150,6 +1159,13 @@ const structure_definition Device {
     "Device",
     {
         { "dd_Library", make_struct_type(Library) },
+
+        { "_LVOOpenLib", libvec_code, -6 },
+        { "_LVOCloseLib", libvec_code, -12 },
+        { "_LVOExpungeLib", libvec_code, -18 },
+        { "_LVOReservedFuncLib", libvec_code, -24 },
+        { "_LVODevBeginIO", libvec_code, -30 },
+        { "_LVODevAbortIO", libvec_code, -36 },
     }
 };
 const structure_definition Unit {
@@ -2160,10 +2176,11 @@ const structure_definition ExpansionRom {
         { "er_Manufacturer", word_type },
         { "er_SerialNumber", long_type },
         { "er_InitDiagVec", word_type },
-        { "er_Reserved0c", byte_type },
-        { "er_Reserved0d", byte_type },
-        { "er_Reserved0e", byte_type },
-        { "er_Reserved0f", byte_type },
+        { "er_DiagAreaCopy", long_type },
+        //{ "er_Reserved0c", byte_type },
+        //{ "er_Reserved0d", byte_type },
+        //{ "er_Reserved0e", byte_type },
+        //{ "er_Reserved0f", byte_type },
     }
 };
 
@@ -2208,10 +2225,10 @@ const structure_definition ExpansionBase {
         { "LibNode", make_struct_type(Library) },
         { "Flags", byte_type },
         { "eb_Private01", byte_type },
-        { "eb_Private02", long_type },
-        { "eb_Private03", long_type },
-        { "eb_Private04", make_struct_type(CurrentBinding) },
-        { "eb_Private05", make_struct_type(List) },
+        { "eb_SysBase", long_type }, // eb_Private02
+        { "eb_SegList", long_type }, // eb_Private03
+        { "eb_CurrentBinding", make_struct_type(CurrentBinding) }, // eb_Private04
+        { "eb_ConfigDevList", make_struct_type(List) }, // eb_Private05
         { "MountList", make_struct_type(List) },
         { "eb_UnknownData", make_array_type(byte_type, 0x1c8 - 0x58) },
 
@@ -2244,6 +2261,19 @@ const structure_definition ExpansionBase {
     }
 };
 
+const structure_definition RomBootBase {
+    "RomBootBase",
+    {
+        { "LibNode", make_struct_type(Library) },
+        { "rb_SysBase", long_type },
+
+        { "_LVOOpenLib", libvec_code, -6 },
+        { "_LVOCloseLib", libvec_code, -12 },
+        { "_LVOExpungeLib", libvec_code, -18 },
+        { "_LVOReservedFuncLib", libvec_code, -24 },
+
+    }
+};
 
 void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simval& aval)
 {
@@ -2630,17 +2660,22 @@ public:
         add_label(addr, prefix + "_" + hexstring(addr), t);
     }
 
+    uint32_t alloc_library(const std::string& id, const structure_definition& def)
+    {
+        uint32_t addr = alloc_fake_mem(def.negsize() + def.size());
+        if (!addr)
+            throw std::runtime_error { id + " could not allocate memory" };
+        addr += def.negsize();
+
+        add_label(addr, id, make_struct_type(def));
+        return addr;
+    }
+
     uint32_t add_library(const std::string& name, const std::string& id, const structure_definition& def)
     {
         if (library_bases_.find(name) != library_bases_.end())
             throw std::runtime_error { name + " already added" };
-
-        uint32_t addr = alloc_fake_mem(def.negsize() + def.size());
-        if (!addr)
-            throw std::runtime_error { name + " could not allocate memory" };
-        addr += def.negsize();
-
-        add_label(addr, id,make_struct_type(def));
+        const auto addr = alloc_library(id, def);
         library_bases_.insert({ name, addr });
         return addr;
     }
@@ -2683,7 +2718,7 @@ public:
             saved_pointers_.insert({ 4, exec_base_ });
             fake_process_ = alloc_fake_mem(Process.size());
             add_label(fake_process_, "FakeProcess", make_struct_type(Process));
-            update_mem(opsize::l, exec_base_ + 0x114, simval { fake_process_ }); // ThisTask
+            update_mem(opsize::l, exec_base_ + ExecBase.field_offset("ThisTask"), simval { fake_process_ });
         } else {
             library_bases_.insert({ "exec.library", exec_base_ });
         }
@@ -2691,8 +2726,13 @@ public:
         const auto dos_base = add_library("dos.library", "DosBase", DosBase);
         add_library("intuition.library", "IntuitionBase", IntuitionBase);
         add_library("expansion.library", "ExpansionBase", ExpansionBase);
+        add_library("romboot.library", "RomBootBase", RomBootBase);
 
         add_label(alloc_fake_mem(ConfigDev.size()), "FakeConfigDev", make_struct_type(ConfigDev), false);
+        const auto fake_dev = alloc_library("FakeDevice", Device);
+        const auto fake_ioreq = alloc_fake_mem(IOStdReq.size());
+        add_label(fake_ioreq, "FakeIoRequest", make_struct_type(IOStdReq), false);
+        update_mem(opsize::l, fake_ioreq + IOStdReq.field_offset("io_Device"), simval { fake_dev });
 
         // exec.library
         auto add_int = [this]() { do_add_int(); };
@@ -3107,8 +3147,7 @@ private:
     {
         auto it = areas.begin();
         for (; it != areas.end(); ++it) {
-            //return a0 <= b1 && b0 <= a1;
-            if (beg <= it->end && it->beg <= end)
+            if (!(it->end <= beg || end <= it->beg))
                 throw std::runtime_error { "Area overlap" };
             if (beg < it->beg)
                 break;
@@ -4880,14 +4919,15 @@ void hunk_file::read_hunk_exe()
         if (flags == 0b110) {
             flags = read_u32() & ~(1<<30);
         }
-        const auto aligned_size = (size + 4095) & -4096;
+        // +8 is for hunk size + bptr to segment list
+        const auto aligned_size = (size + 8 + 4095) & -4096;
         if (flags & 2) {
-            hunks[i].addr = chip_ptr;
+            hunks[i].addr = chip_ptr + 8;
             chip_ptr += aligned_size;
             if (chip_ptr > 0x200000)
                 throw std::runtime_error { "Out of chip mem" };
         } else {
-            hunks[i].addr = fast_ptr;
+            hunks[i].addr = fast_ptr + 8;
             fast_ptr += aligned_size;
             if (fast_ptr > 0xa00000)
                 throw std::runtime_error { "Out of fast mem" };
@@ -5006,8 +5046,17 @@ void hunk_file::read_hunk_exe()
         for (const auto& s : symbols)
             a_->add_label(s.addr, s.name, unknown_type);
         bool has_code = false;
-        for (const auto& h : hunks) {
-            a_->write_data(h.addr, h.data.data(), static_cast<uint32_t>(h.data.size()));
+        for (size_t i = 0, sz = hunks.size(); i < sz; ++i) {
+            const auto& h = hunks[i];
+            const auto hunk_size = static_cast<uint32_t>(h.data.size());
+            const auto hunk_name = "hunk" + std::to_string(i);
+            uint8_t header[8];
+            put_u32(&header[0], hunk_size);
+            put_u32(&header[4], (i == sz-1 ? 0 : hunks[i+1].addr - 4) >> 2); // BPTR to next hunk
+            a_->add_label(h.addr - 8, hunk_name + "_size", long_type);
+            a_->add_label(h.addr - 4, hunk_name + "_link", long_type);
+            a_->write_data(h.addr - 8, header, sizeof(header));
+            a_->write_data(h.addr, h.data.data(), hunk_size);
             if (h.type == HUNK_CODE) {
                 if (!has_code)
                     a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present

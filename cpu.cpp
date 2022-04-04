@@ -382,7 +382,7 @@ private:
     struct address_error_exception : public std::exception {
         const char* what() const noexcept override
         {
-            return "Unhadled address error exception";
+            return "Unhandled address error exception";
         }
     };
 

@@ -22,7 +22,7 @@ public:
     {
     }
 
-    void set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task, const load_seg_callback& load_seg)
+    void set_callbacks(const ptr1_cb& init, const ptr2_cb& add_task, const ptr1_cb& rem_task, const ptr2_cb& load_seg)
     {
         init_ = init;
         add_task_ = add_task;
@@ -41,10 +41,10 @@ private:
     };
 
     memory_handler& mem_;
-    task_info_callback init_;
-    task_info_callback add_task_;
-    task_info_callback rem_task_;
-    load_seg_callback load_seg_;
+    ptr1_cb init_;
+    ptr2_cb add_task_;
+    ptr1_cb rem_task_;
+    ptr2_cb load_seg_;
     uint32_t ptr1_ = 0;
     uint32_t ptr2_ = 0;
 
@@ -105,7 +105,7 @@ private:
                 return;
             case 2:
                 if (add_task_)
-                    add_task_(ptr1_);
+                    add_task_(ptr1_, ptr2_);
                 return;
             case 3:
                 if (rem_task_)
@@ -137,7 +137,7 @@ autoconf_device& debug_board::autoconf_dev()
     return *impl_;
 }
 
-void debug_board::set_callbacks(const task_info_callback& init, const task_info_callback& add_task, const task_info_callback& rem_task, const load_seg_callback& load_seg)
+void debug_board::set_callbacks(const ptr1_cb& init, const ptr2_cb& add_task, const ptr1_cb& rem_task, const ptr2_cb& load_seg)
 {
     impl_->set_callbacks(init, add_task, rem_task, load_seg);
 }

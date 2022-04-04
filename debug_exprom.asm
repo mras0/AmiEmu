@@ -146,6 +146,7 @@ NewAddTask:
         movem.l a0, -(sp)
         move.l  BoardAddress(pc), a0
         move.l  a1, OFS_PTR1(a0) ; Communicate new task to exprom
+        move.l  a2, OFS_PTR2(a0)
         move.w  #OP_ADDTASK, OFS_OP(a0)
         move.l  (sp)+, a0
         dc.w    $4ef9 ; JMP ABS.L
