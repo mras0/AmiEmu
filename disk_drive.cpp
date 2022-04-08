@@ -224,6 +224,20 @@ public:
         sf.handle_blob(&s_, sizeof(s_));
     }
 
+    bool ofs_bootable_disk_inserted() const
+    {
+        if (data_.size() < 1024 || data_[0] != 'D' || data_[1] != 'O' || data_[2] != 'S' || data_[3] != 0)
+            return false;
+        uint32_t csum = 0;
+        for (uint32_t i = 0; i < 1024; i += 4) {
+            const auto before = csum;
+            csum += get_u32(&data_[i]);
+            if (csum < before) // carry?
+                ++csum;
+        }
+        return csum == 0xffffffff;
+    }
+
 private:
     std::string name_;
     std::vector<uint8_t> data_;
@@ -298,4 +312,9 @@ void disk_drive::handle_state(state_file& sf)
 bool disk_drive::step()
 {
     return impl_->step();
+}
+
+bool disk_drive::ofs_bootable_disk_inserted() const
+{
+    return impl_->ofs_bootable_disk_inserted();
 }

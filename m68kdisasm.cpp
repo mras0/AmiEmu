@@ -2821,7 +2821,7 @@ public:
             add_fakes();
         for (const auto& [addr, reg, lab] : delayed_forced_values_) {
             // TODO: This lookup is slow
-            auto it = std::find_if(labels_.begin(), labels_.end(), [&lab](const auto& l) { return l.second.name == lab; });
+            auto it = std::find_if(labels_.begin(), labels_.end(), [&lab = lab](const auto& l) { return l.second.name == lab; });
             if (it == labels_.end()) {
                 throw std::runtime_error { "Invalid label \"" + lab + "\" used for forced value at address $" + hexstring(addr) };
             }

@@ -44,6 +44,8 @@ public:
     // returns true if the disk has completed a revolution
     bool step();
 
+    bool ofs_bootable_disk_inserted() const;
+
 private:
     class impl;
     std::unique_ptr<impl> impl_;

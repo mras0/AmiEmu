@@ -1,5 +1,7 @@
 RomStart=0
 
+; KS1.2 magic based on http://eab.abime.net/showpost.php?p=1045113&postcount=3
+
 VERSION=0
 REVISION=3
 
@@ -38,6 +40,8 @@ NT_BOOTNODE=16
 
 ; exec.library
 _LVOFindResident=-96
+_LVOInitResident=-102
+_LVOAlert=-108
 _LVOForbid=-132
 _LVOPermit=-138
 _LVOAllocMem=-198
@@ -45,22 +49,35 @@ _LVOFreeMem=-210
 _LVOAddHead=-240
 _LVOAddTail=-246
 _LVOEnqueue=-270
+_LVOPutMsg=-366
 _LVOReplyMsg=-378
+_LVOOldOpenLibrary=-408
 _LVOCloseLibrary=-414
+_LVODoIO=-456
 _LVOAddResource=-486
 _LVOOpenResource=-498
 _LVOOpenLibrary=-552
 
+ThisTask=$114
 ResourceList=$150
 
 ; expansion.library
 _LVOAddBootNode=-36
+_LVOObtainConfigBinding=-120
+_LVOReleaseConfigBinding=-126
+_LVOSetCurrentBinding=-132
 _LVOGetCurrentBinding=-138
 _LVOMakeDosNode=-144
 _LVOAddDosNode=-150
 
 eb_MountList=74
 
+; dos.library
+_LVODeviceProc=-174
+
+pr_MsgPort=$5c
+pr_FileSystemTask=$a8
+pr_WindowPtr=$b8
 
 INITBYTE=$e000
 INITWORD=$d000
@@ -131,6 +148,12 @@ IO_LENGTH=$24			; ULONG   requested # of bytes transfered
 IO_DATA=$28			; APTR    pointer to data area
 IO_OFFSET=$2C			; ULONG   offset for seeking devices
 IOSTD_SIZE=$30
+
+CMD_READ=$2
+TD_MOTOR=$9
+TD_CHANGENUM=$D
+TD_CHANGESTATE=$E
+
 
 PA_SIGNAL=0	; Signal task in mp_SigTask
 PA_SOFTINT=1	; Signal SoftInt in mp_SoftInt/mp_SigTask
@@ -233,6 +256,24 @@ devn_bootFlags=$54	; ULONG boot flags (filled in by host)
 devn_segList=$58        ; BPTR segList (filled in by host)
 devn_Sizeof=$5c	        ; Size of this structure
 
+; struct DosPacket
+dp_Link=$0000
+dp_Port=$0004
+dp_Type=$0008
+dp_Res1=$000c
+dp_Res2=$0010
+dp_Arg1=$0014
+dp_Arg2=$0018
+dp_Arg3=$001c
+dp_Arg4=$0020
+dp_Arg5=$0024
+dp_Arg6=$0028
+dp_Arg7=$002c
+dp_Sizeof=$0030
+
+ACTION_LOCATE_OBJECT=8
+ACTION_READ=82
+
 ; Filesystem info
 fsinfo_num=$00          ; UWORD Filesystem number (filled in by expansion ROM)
 fsinfo_dosType=$02      ; ULONG dos type (filled by host)
@@ -307,11 +348,9 @@ BootEntry:
         move.l  RT_INIT(a0), a0         ; set vector to DOS INIT
         jmp     (a0)                    ; initialize DOS
 
+; a0=BoardBase, a2=DiagCopy, a3=configDev
 DiagEntry:
-        ;lea     patchTable-RomStart(a0), a1
-        move.l  #patchTable, a1
-        sub.l   #RomStart, a1
-        add.l   a0, a1
+        lea     patchTable-RomStart(a0), a1
         move.l  a2, d1
 dloop:
         move.w  (a1)+, d0
@@ -326,8 +365,118 @@ bloop:
         add.l   d1, 0(a2,d0.w)
         bra     bloop
 endpatches:
+
+        ; KS1.2?
+        move.l  $4.w, a1
+        cmp.w   #34, LIB_VERSION(a1)
+        bcc.b   de_Out
+
+        move.l  a0, d0 ; Save board base
+        lea     BoardBase(pc), a0
+        move.l  d0, (a0)
+        lea     ConfigDev(pc), a0
+        move.l  a3, (a0)
+        ; Patch PutMsg
+        move.l  _LVOPutMsg+2(a1), OldPutMsg-DiagStart(a2)
+        lea     NewPutMsg(pc), a0
+        move.l  a0, _LVOPutMsg+2(a1)
+
+        ; Autoboot disabled?
+        move.l  BoardBase(pc), a0
+        tst.w   RomCodeEnd+4(a0)
+        bne.b   de_Out
+
+        ; and DoIO
+        move.l  _LVODoIO+2(a1), OldDoIO-DiagStart(a2)
+        lea     NewDoIO(pc), a0
+        move.l  a0, _LVODoIO+2(a1)
+
+de_Out:
         moveq   #1,d0 ; success
         rts
+
+DOSSTACKSIZE=2048
+NewPutMsg:
+        movem.l d0/a1, -(sp)
+        ; Check if DOS packet
+        ; ln_Name must be non-zero
+        move.l  LN_NAME(a1), d0
+        beq.b   npm_Cont
+        move.l  d0, a1
+        ; ln_Name must be longword aligned
+        and.b   #3, d0
+        bne.b   npm_Cont
+        ; Packet we're waiting for?
+        cmp.l   #ACTION_LOCATE_OBJECT, dp_Type(a1)
+        bne.b   npm_Cont
+
+        ; Remove patch
+        move.l  OldPutMsg(pc), _LVOPutMsg+2(a6)
+        ; Now do what romboot.library handles in KS1.3
+        movem.l d1-d7/a0-a6, -(sp)
+        ; Allocate temporary stack
+        move.l  #DOSSTACKSIZE, d0
+        moveq   #0, d1
+        jsr     _LVOAllocMem(a6)
+        ; Assume this doesn't fail..
+        add.l   #DOSSTACKSIZE, d0
+        move.l  d0, a0
+        move.l  sp, -(a0)
+        move.l  a0, sp
+        lea     RomTag(pc), a0
+        move.l  BoardBase(pc), a1
+        move.l  ConfigDev(pc), a3
+        jsr     HandleResInit-RomStart(a1)
+        move.l  d0, d7 ; store return value
+        move.l  (sp)+, a1 ; Old stack
+        exg.l   a1, a7
+        move.l  #DOSSTACKSIZE, d0
+        sub.l   d0, a1
+        move.l  $4.w, a6
+        jsr     _LVOFreeMem(a6)
+        move.l  d7, d0
+        movem.l (sp)+, d1-d7/a0-a6
+
+        ; d0 is either 0 or DeviceProc() return value for boot drive
+        tst.l   d0
+        beq     npm_Cont
+
+        ; Check if autoboot is disabled
+        move.l  BoardBase(pc), a1
+        tst.w   RomCodeEnd+4(a1)
+        bne.b   npm_Cont
+
+        ; Replace pr_FileSystemTask
+        move.l  d0, a0 ; Replace msg port
+        move.l  ThisTask(a6), a1
+        move.l  a0, pr_FileSystemTask(a1) ; And filesystask
+
+npm_Cont:
+        movem.l (sp)+, d0/a1
+        dc.w    $4ef9 ; JMP ABS.L
+OldPutMsg:
+        dc.l    0
+BoardBase:
+        dc.l    0
+ConfigDev:
+        dc.l    0
+
+NewDoIO:
+        movem.l a2/a3, -(sp)
+        move.l  BoardBase(pc), a2
+        lea     OldDoIO(pc), a3
+        jsr     HandleDoIO-RomStart(a2)
+        ; Preserve flags
+        movem.l (sp)+, a2/a3
+        beq.b   ndi_NotHandled
+        rts
+ndi_NotHandled:
+        dc.w    $4ef9 ; JMP ABS.L
+OldDoIO:
+        dc.l    0
+MotorState:
+        dc.l    0
+
 EndCopy:
 
 patchTable:
@@ -352,6 +501,216 @@ patchTable:
         dc.w   funcTable-DiagStart+$14
         dc.w   -1
 
+
+; registers preserved in NewPutMsg
+; a0 = romtag, a1 = boardbase, a3 = configdev, a6 = execbase
+; returns d0 = DeviceProc() for bootable parition (or 0)
+HandleResInit:
+        move.l  a0, d6 ; d6=romtag
+        move.l  a1, d7 ; d7=boardbase
+
+        moveq   #0, d4 ; DeviceProc() of bootable parition
+
+        lea     ExLibName(pc), a1
+        moveq   #0, d0
+        jsr     _LVOOpenLibrary(a6)
+        tst.l   d0
+        beq     hri_Out
+        move.l  d0, a5  ; a5 = expansion library
+
+        ; Avoid requester for "DEVS:" during AddDosNode call
+        ; FIXME
+        move.l  ThisTask(a6), a0
+        move.l  pr_WindowPtr(a0), -(sp)
+        move.l  #-1, pr_WindowPtr(a0)
+
+        exg.l   a5, a6 ; a6=expansion library, a5=execbase
+
+        jsr     _LVOObtainConfigBinding(a6)
+
+        sub.l   #cb_Sizeof, a7
+
+        moveq   #0, d0
+        move.l  d0, cb_FileName(a7)
+        move.l  d0, cb_ProductString(a7)
+        move.l  d0, cb_ToolTypes(a7)
+        move.l  a3, cb_ConfigDev(a7)
+        moveq   #cb_Sizeof, d0
+        move.l  a7, a0
+        jsr     _LVOSetCurrentBinding(a6)
+
+        exg.l   a5, a6 ; a6=execbase, a5=expansion
+
+        move.l  d6, a1
+        moveq   #0, d1
+        jsr     _LVOInitResident(a6)
+
+        exg.l   a5, a6 ; a6=expansion library, a5=execbase
+        add.l   #cb_Sizeof, a7
+
+        jsr     _LVOReleaseConfigBinding(a6)
+
+        ; Close expansion.library
+        move.l  a6, a1
+        move.l  a5, a6
+        jsr     _LVOCloseLibrary(a6)
+
+        ; Restore pr_WindowPtr
+        move.l  ThisTask(a6), a0
+        move.l  (sp)+, pr_WindowPtr(a0)
+
+
+        lea     DosLibName(pc), a1
+        jsr     _LVOOldOpenLibrary(a6)
+        tst.l   d0
+        beq     hri_Out
+        move.l  d0, a5
+        exg.l   a5, a6 ; a6 = dos.library, a5 = exec.library
+
+        ;
+        ; Now call DeviceProc on all partitions
+        ; This seems to be necessary even if they're
+        ; not bootable?? FIXME
+        ;
+
+        moveq   #0, d5 ; Unit counter
+hri_DevInit:
+        ; Room for dos packet
+        sub.l   #devn_Sizeof, a7
+        move.l  a7, a3
+
+        ; Room for name and ':'
+        sub.l   #34, a7
+
+        ; Have emulator fill out dos packet (again)
+        move.l  a7, devn_dosName(a3)
+        lea     DevName(pc), a0
+        move.l  d5, devn_unit(a3)
+
+        lea     RomCodeEnd(pc), a0
+        move.l  a3, (a0)
+        move.w  #OP_INIT, 4(a0)
+
+        ; Add ':' to name
+        move.l  a7, a0
+        moveq   #0, d0
+hri_FindNul:
+        cmp.b   (a0)+, d0
+        bne.b   hri_FindNul
+        move.b  d0, (a0)
+        move.b  #58, -1(a0) ; ':'
+
+        move.l  a7, d1
+        jsr     _LVODeviceProc(a6)
+        ; Ignore failure here (for now)
+
+        ; Do we already have a bootable partition?
+        tst.l   d4
+        bne.b   hri_Next
+
+        ;  Is this parition bootable?
+        btst.b  #0, devn_bootFlags+3(a3)
+        beq.b   hri_Next
+
+        move.l  d0, d4 ; Store device process
+
+hri_Next:
+        add.l   #devn_Sizeof+34, a7 ; free dos packet + name
+        addq.w  #1, d5
+        cmp.w   RomCodeEnd(pc), d5 ; Done?
+        bne     hri_DevInit
+
+        exg.l   a5, a6 ; a6 = dos.library, a5 = exec.library
+        move.l  a5, a1
+        jsr     _LVOCloseLibrary(a6)
+hri_Out:
+        move.l  d4, d0 ; return DeviceProc() result
+        rts
+
+; a1 = ioRequest (ok to trash a2), a3=OldDoIO
+; Returns whether the command was handled in Z-flag (NZ=handled)
+HandleDoIO:
+        movem.l d0-d2/a0-a1, -(sp)
+        moveq   #0, d2 ; Assume unhandled command
+        move.l  IO_DEVICE(a1), a2
+        move.l  LN_NAME(a2), a2
+        lea     trackdiskName(pc), a0
+hdi_Compare:
+        move.b  (a0)+, d0
+        cmp.b   (a2)+, d0
+        bne     hdi_Out
+        tst.b   d0
+        beq.b   hdi_Match
+        bra.b   hdi_Compare
+hdi_Match:
+        move.w  IO_COMMAND(a1), d0
+        cmp.w   #CMD_READ, d0
+        beq     hdi_Read
+        cmp.w   #TD_MOTOR, d0
+        beq     hdi_Motor
+        cmp.w   #TD_CHANGENUM, d0
+        beq     hdi_ChangeNum
+        cmp.w   #TD_CHANGESTATE, d0
+        beq     hdi_ChangeState
+hdi_Out:
+        tst.l   d2 ; Return handled in zero
+        ; DON'T TOUCH FLAGS ANYMORE!!
+        movem.l (sp)+, d0-d2/a0-a1
+        rts
+hdi_Read:
+        ; Remove patch
+        move.l  (a3), _LVODoIO+2(a6)
+
+        ; And provide OFS boot block as result
+        lea     ofsBootBlock(pc), a0
+        move.l  IO_DATA(a1), a2
+        move.l  #ofsBootBlockEnd-ofsBootBlock-1, d0
+hdi_CopyLoop:
+        move.b  (a0)+, (a2)+
+        dbf     d0, hdi_CopyLoop
+        move.l  IO_LENGTH(a1), d0
+        move.l  d0, IO_ACTUAL(a1)
+        sub.l   #ofsBootBlockEnd-ofsBootBlock, d0
+        moveq   #0, d1
+hdi_ClearLoop:
+        move.b  d1, (a2)+
+        dbf     d0, hdi_ClearLoop
+        move.b  #0, IO_ERROR(a1)
+        moveq   #1, d2 ; Handled
+        bra     hdi_Out
+hdi_Motor:
+        lea     MotorState-OldDoIO(a3), a2
+        move.l  (a2), IO_ACTUAL(a1)
+        move.b  #0, IO_ERROR(a1)
+        move.l  IO_LENGTH(a1), (a2)
+        move.b  IO_FLAGS(a1), d0
+        moveq   #1, d2 ; Handled
+        bra     hdi_Out
+hdi_ChangeNum:
+        ; Simulate disk inserted (IO_ACTUAL=0)
+        move.l  #1, IO_ACTUAL(a1)
+        move.b  #0, IO_ERROR(a1)
+        moveq   #1, d2 ; Handled
+        bra     hdi_Out
+hdi_ChangeState:
+        ; Simulate disk inserted (IO_ACTUAL=0)
+        moveq   #0, d0
+        move.l  d0, IO_ACTUAL(a1)
+        move.b  d0, IO_ERROR(a1)
+        moveq   #1, d2 ; Handled
+        bra     hdi_Out
+
+trackdiskName:
+        dc.b 'trackdisk.device', 0
+        even
+
+ofsBootBlock:
+        dc.w $444f, $5300, $c020, $0f19, $0000, $0370, $43fa, $0018
+        dc.w $4eae, $ffa0, $4a80, $670a, $2040, $2068, $0016, $7000
+        dc.w $4e75, $70ff, $60fa, $646f, $732e, $6c69, $6272, $6172
+        dc.w $7900
+ofsBootBlockEnd:
+
 ; d0 = device pointer, a0 = segment list
 ; a6 = exec base
 initRoutine:
@@ -363,8 +722,7 @@ initRoutine:
 
         ; Open expansion library
         lea     ExLibName(pc), a1
-        moveq   #0, d0
-        jsr     _LVOOpenLibrary(a6)
+        jsr     _LVOOldOpenLibrary(a6)
         tst.l   d0
         beq     irError
         move.l  d0, a4    ; a4=expansion library
@@ -512,10 +870,15 @@ irUnitLoop:
         move.l  #-1, dn_GlobalVec(a0)
         move.l  devn_segList(a3), dn_SegList(a0) ; Seglist from host
 
+        ; KS1.2?
+        cmp.w   #34, LIB_VERSION(a6)
+        bcs.b   irPrev34
+
         move.l  devn_bootFlags(a3), d0
         btst.l  #0, d0 ; Auto boot?
-        bne     irBootNode
+        bne.b   irBootNode
 
+irAddDosNode:
         ; a0 = dosNode
         moveq   #-128, d0 ; Boot priority (-128 = not bootable)
         moveq   #ADNF_STARTPROC, d1 ; Flags
@@ -524,6 +887,13 @@ irUnitLoop:
         beq     irUnitError
 
         bra     irNextUnit
+
+irPrev34:
+        ; For OFS the global vector MUST be zero (BCPL linking rules)
+        tst.l   dn_SegList(a0)
+        bne.b   irAddDosNode
+        move.l  #0, dn_GlobalVec(a0)
+        bra.b   irAddDosNode
 
 irBootNode:
         cmp.w   #36, LIB_VERSION(a6)
@@ -563,13 +933,11 @@ irPrev36:
         bra     irNextUnit
 
 irUnitError:
-        add.l   #32, a7 ; Free name
-        add.l   #devn_Sizeof, a7 ; Free dos packet
+        add.l   #devn_Sizeof+32, a7 ; Free name + dos packet
         bra     irError
 
 irNextUnit:
-        add.l   #32, a7 ; Free name
-        add.l   #devn_Sizeof, a7 ; Free dos packet
+        add.l   #devn_Sizeof+32, a7 ; Free name and dos packet
         addq.w  #1, d5 ; next unit
         cmp.w   RomCodeEnd(pc), d5 ; Done?
         bne     irUnitLoop

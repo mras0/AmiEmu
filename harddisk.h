@@ -4,13 +4,16 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <functional>
 
 class memory_handler;
 class autoconf_device;
 
 class harddisk {
 public:
-    explicit harddisk(memory_handler& mem, bool& cpu_active, const std::vector<std::string>& hdfilenames);
+    using bool_func = std::function<bool ()>;
+
+    explicit harddisk(memory_handler& mem, bool& cpu_active, const bool_func& should_disable_autoboot, const std::vector<std::string>& hdfilenames);
     ~harddisk();
 
     autoconf_device& autoconf_dev();

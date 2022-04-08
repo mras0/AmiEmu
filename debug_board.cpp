@@ -18,7 +18,6 @@ class debug_board::impl final : public memory_area_handler, public autoconf_devi
 public:
     explicit impl(memory_handler& mem)
         : autoconf_device { mem, *this, config }
-        , mem_ { mem }
     {
     }
 
@@ -40,7 +39,6 @@ private:
         .rom_vector_offset = EXPROM_BASE,
     };
 
-    memory_handler& mem_;
     ptr1_cb init_;
     ptr2_cb add_task_;
     ptr1_cb rem_task_;

@@ -173,10 +173,11 @@ std::vector<hunk> parse_hunk_file(const std::vector<uint8_t>& code)
 
 class harddisk::impl final : public memory_area_handler, public autoconf_device {
 public:
-    explicit impl(memory_handler& mem, bool& cpu_active, const std::vector<std::string>& hdfilenames)
+    explicit impl(memory_handler& mem, bool& cpu_active, const bool_func& should_disable_autoboot, const std::vector<std::string>& hdfilenames)
         : autoconf_device { mem, *this, config }
         , mem_ { mem }
         , cpu_active_ { cpu_active }
+        , should_disable_autoboot_ { should_disable_autoboot }
     {
         if (hdfilenames.empty())
             throw std::runtime_error { "Harddisk initialized with no filenames" };
@@ -236,6 +237,7 @@ private:
 
     memory_handler& mem_;
     bool& cpu_active_;
+    bool_func should_disable_autoboot_;
     std::vector<std::unique_ptr<hd_info>> hds_;
     uint32_t ptr_hold_ = 0;
     std::vector<uint8_t> buffer_;
@@ -502,6 +504,8 @@ private:
             return static_cast<uint16_t>(partitions_.size());
         } else if (offset == special_offset + 2) {
             return static_cast<uint16_t>(filesystems_.size());
+        } else if (offset == special_offset + 4) {
+            return should_disable_autoboot_();
         }
 
         std::cerr << "harddisk: Read U16 offset $" << hexfmt(offset) << "\n";
@@ -963,8 +967,8 @@ private:
     }
 };
 
-harddisk::harddisk(memory_handler& mem, bool& cpu_active, const std::vector<std::string>& hdfilenames)
-    : impl_{ new impl(mem, cpu_active, hdfilenames) }
+harddisk::harddisk(memory_handler& mem, bool& cpu_active, const bool_func& should_disable_autoboot, const std::vector<std::string>& hdfilenames)
+    : impl_{ new impl(mem, cpu_active, should_disable_autoboot, hdfilenames) }
 {
 }
 

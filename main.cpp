@@ -1101,7 +1101,10 @@ int main(int argc, char* argv[])
 
         std::unique_ptr<harddisk> hd;
         if (!cmdline_args.hds.empty()) {
-            hd = std::make_unique<harddisk>(mem, cpu_active, cmdline_args.hds);
+            auto should_disable_autoboot = [&]() {
+                return df0.ofs_bootable_disk_inserted();
+            };
+            hd = std::make_unique<harddisk>(mem, cpu_active, should_disable_autoboot, cmdline_args.hds);
             autoconf.add_device(hd->autoconf_dev());
         }
 
@@ -1309,7 +1312,7 @@ int main(int argc, char* argv[])
             // Bit of a hack, but add initial process (could scan task lists instead, but doesn't seem to be necessary)
             tasks.push_back(mem.read_u32(exec_base + ThisTask));
         };
-        auto task_added = [&](const uint32_t task_ptr, uint32_t initial_pc) {
+        auto task_added = [&](const uint32_t task_ptr, [[maybe_unused]] uint32_t initial_pc) {
             disable_bool db { cpu_active };
             const auto type = mem.read_u8(task_ptr + ln_Type);
             if (type != NT_TASK && type != NT_PROCESS) {
@@ -1322,7 +1325,9 @@ int main(int argc, char* argv[])
             }
             tasks.push_back(task_ptr);
             const auto task_name = read_string(mem, mem.read_u32(task_ptr + ln_Name));
+#ifdef PROCESS_LOG
             std::cout << (type == NT_TASK ? "Task" : "Process") << " \"" << task_name << "\" started address $" << hexfmt(task_ptr) << " initialPC=$" << hexfmt(initial_pc) << "\n";
+#endif
             if (type == NT_PROCESS)
                 check_wait_process(task_ptr, task_name);
         };
@@ -1336,7 +1341,9 @@ int main(int argc, char* argv[])
                 return;
             }
             tasks.erase(it);
+#ifdef PROCESS_LOG
             std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
+#endif
         };
         auto load_seg = [&](uint32_t name_ptr, const uint32_t seg_list_bptr) {
 
@@ -1351,7 +1358,9 @@ int main(int argc, char* argv[])
             } else {
                 name = read_string(mem, name_ptr);
             }
+#ifdef PROCESS_LOG
             std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
+#endif
 
             if (wait_mode != wait_process)
                 return;
