@@ -115,32 +115,42 @@ constexpr bool range16(uint32_t val)
     X(TST       , bwl  , w    , 1)        \
     X(UNLK      , none , none , 1)        \
 
-#define TOKENS(X)       \
-    X(size_b , ".B"   ) \
-    X(size_w , ".W"   ) \
-    X(size_l , ".L"   ) \
-    X(d0     , "D0"   ) \
-    X(d1     , "D1"   ) \
-    X(d2     , "D2"   ) \
-    X(d3     , "D3"   ) \
-    X(d4     , "D4"   ) \
-    X(d5     , "D5"   ) \
-    X(d6     , "D6"   ) \
-    X(d7     , "D7"   ) \
-    X(a0     , "A0"   ) \
-    X(a1     , "A1"   ) \
-    X(a2     , "A2"   ) \
-    X(a3     , "A3"   ) \
-    X(a4     , "A4"   ) \
-    X(a5     , "A5"   ) \
-    X(a6     , "A6"   ) \
-    X(a7     , "A7"   ) \
-    X(usp    , "USP"  ) \
-    X(pc     , "PC"   ) \
-    X(sr     , "SR"   ) \
-    X(ccr    , "CCR"  ) \
-    X(dc     , "DC"   ) \
-    X(even   , "EVEN" ) \
+#define TOKENS(X)           \
+    X(size_b  , ".B"      ) \
+    X(size_s  , ".S"      ) \
+    X(size_w  , ".W"      ) \
+    X(size_l  , ".L"      ) \
+    X(d0      , "D0"      ) \
+    X(d1      , "D1"      ) \
+    X(d2      , "D2"      ) \
+    X(d3      , "D3"      ) \
+    X(d4      , "D4"      ) \
+    X(d5      , "D5"      ) \
+    X(d6      , "D6"      ) \
+    X(d7      , "D7"      ) \
+    X(a0      , "A0"      ) \
+    X(a1      , "A1"      ) \
+    X(a2      , "A2"      ) \
+    X(a3      , "A3"      ) \
+    X(a4      , "A4"      ) \
+    X(a5      , "A5"      ) \
+    X(a6      , "A6"      ) \
+    X(a7      , "A7"      ) \
+    X(usp     , "USP"     ) \
+    X(pc      , "PC"      ) \
+    X(sr      , "SR"      ) \
+    X(ccr     , "CCR"     ) \
+    X(dc      , "DC"      ) \
+    X(even    , "EVEN"    ) \
+    X(equ     , "EQU"     ) \
+    X(rs      , "RS"      ) \
+    X(rsreset , "RSRESET" ) \
+    X(rsset   , "RSSET"   ) \
+    X(ifeq    , "IFEQ"    ) \
+    X(ifne    , "IFNE"    ) \
+    X(else_   , "ELSE"    ) \
+    X(endc    , "ENDC"    ) \
+    X(cnop    , "CNOP"    ) \
 
 enum class token_type {
     eof,
@@ -172,6 +182,33 @@ enum class token_type {
 
     identifier_start,
 };
+
+constexpr bool is_branch_inst(token_type tt)
+{
+    return tt >= token_type::BRA && tt <= token_type::BLE;
+}
+
+constexpr bool is_cond_token(token_type tt)
+{
+    switch (tt) {
+    case token_type::ifeq:
+    case token_type::ifne:
+    case token_type::else_:
+    case token_type::endc:
+        return true;
+    }
+    return false;
+}
+constexpr bool eval_cond(token_type tt, int32_t val)
+{
+    switch (tt) {
+    case token_type::ifeq:
+        return val == 0;
+    case token_type::ifne:
+        return val != 0;
+    }
+    throw std::runtime_error { "Invalid condition type in eval_cond" };
+}
 
 constexpr struct instruction_info_type {
     token_type type;
@@ -212,40 +249,76 @@ public:
 
     std::vector<uint8_t> process()
     {
+        bool dont_get_token = false;
         do {
             const bool start_of_line = col_ == 1;
 
-            get_token();
+            if (dont_get_token)
+                dont_get_token = false;
+            else
+                get_token();
+
             if (token_type_ == token_type::whitespace || token_type_ == token_type::newline) {
                 continue;
             } else if (token_type_ == token_type::eof) {
                 break;
-            } else if (is_identifier(token_type_)) {
+            }
+
+            // In disabled block?
+            if (in_disabled_block() && !is_cond_token(token_type_)) {
+                while (token_type_ != token_type::eof && token_type_ != token_type::newline)
+                    get_token();
+                dont_get_token = true;
+                continue;
+            }
+
+            if (is_identifier(token_type_)) {
                 const auto l = token_type_;
                 get_token();
                 if (token_type_ == token_type::colon) {
                     get_token();
-                } else if (token_type_ == token_type::equal) {
-                    get_token();
-                    auto& ii = identifier_info(l);
-                    if (ii.has_value)
-                        ASSEMBLER_ERROR("Redefinition of " << ii.id);
-                    else if (!ii.fixups.empty())
-                        ASSEMBLER_ERROR("Invalid definition for " << ii.id << " (previously referenced)");
-                    ii.has_value = true;
-                    auto val = process_number();
-                    if (val.has_fixups())
-                        ASSEMBLER_ERROR("Invalid definition for " << ii.id << "(needs fixups)");
-                    ii.value = val.val;
-                    skip_to_eol();
-                    continue;
-                } else if (!start_of_line) {
-                    ASSEMBLER_ERROR("Expected instruction got " << token_type_string(l));
+                } else {
+                    if (token_type_ == token_type::whitespace) {
+                        dont_get_token = true;
+                        skip_whitespace();
+                    }
+                    if (token_type_ == token_type::equal || token_type_ == token_type::equ) {
+                        get_token();
+                        skip_whitespace();
+                        auto& ii = identifier_info(l);
+                        if (ii.has_value)
+                            ASSEMBLER_ERROR("Redefinition of " << ii.id);
+                        else if (!ii.fixups.empty())
+                            ASSEMBLER_ERROR("Invalid definition for " << ii.id << " (previously referenced)");
+                        ii.has_value = true;
+                        auto val = process_number();
+                        if (val.has_fixups())
+                            ASSEMBLER_ERROR("Invalid definition for " << ii.id << "(needs fixups)");
+                        ii.value = val.val;
+                        skip_to_eol();
+                        dont_get_token = false;
+                        continue;
+                    } else if (token_type_ == token_type::rs) {
+                        auto& ii = identifier_info(l);
+                        if (ii.has_value)
+                            ASSEMBLER_ERROR("Redefinition of " << ii.id);
+                        else if (!ii.fixups.empty())
+                            ASSEMBLER_ERROR("Invalid definition for " << ii.id << " (previously referenced)");
+                        ii.has_value = true;
+                        ii.value = process_rs();
+                        skip_to_eol();
+                        dont_get_token = false;
+                        continue;
+                    }
+                    if (!start_of_line)
+                        ASSEMBLER_ERROR("Expected instruction got " << token_type_string(l));
                 }
                 auto& ii = identifier_info(l);
                 if (ii.has_value) {
                     ASSEMBLER_ERROR("Redefinition of " << ii.id);
                 }
+                if (ii.id.find_first_of('.') == std::string::npos)
+                    last_global_ = ii.id;
                 ii.has_value = true;
                 ii.value = pc_;
                 for (const auto& f : ii.fixups) {
@@ -263,11 +336,59 @@ public:
                 process_instruction(inst);
             } else if (token_type_ == token_type::dc) {
                 process_dc();
+            } else if (token_type_ == token_type::rs) {
+                process_rs();
             } else if (token_type_ == token_type::even) {
                 if (pc_ & 1) {
                     result_.push_back(0);
                     ++pc_;
                 }
+            } else if (token_type_ == token_type::cnop) {
+                get_token();
+                const auto offset = get_constant_expr();
+                skip_whitespace();
+                expect(token_type::comma);
+                skip_whitespace();
+                const auto alignment = get_constant_expr();
+                skip_to_eol();
+                auto extra = offset + (pc_ % alignment ? alignment - pc_ % alignment : 0);
+                while (extra--) {
+                    result_.push_back(0);
+                    ++pc_;
+                }
+            } else if (token_type_ == token_type::rsreset) {
+                rs_value_ = 0;
+            } else if (token_type_ == token_type::rsset) {
+                get_token();
+                rs_value_ = get_constant_expr();
+                skip_to_eol();
+            } else if (token_type_ == token_type::ifeq || token_type_ == token_type::ifne) {
+                cond_state c;
+                c.line = line_;
+                const auto type = token_type_;
+                get_token();
+                const auto val = get_constant_expr();
+                skip_to_eol();
+                if (!conds_.empty() && !(conds_.back().state & cond_state::state_active))
+                    c.state = cond_state::state_was_active; // In disabled block
+                else
+                    c.state = eval_cond(type, val) ? cond_state::state_active | cond_state::state_was_active : 0;
+                conds_.push_back(c);
+            } else if (token_type_ == token_type::else_) {
+                if (conds_.empty())
+                    ASSEMBLER_ERROR("else without matching if");
+                auto& c = conds_.back();
+                if (c.state & cond_state::state_else_seen)
+                    ASSEMBLER_ERROR("multiple else statements for condition started on line " << c.line);
+                c.state |= cond_state::state_else_seen;
+                if (c.state & cond_state::state_was_active)
+                    c.state &= ~cond_state::state_active;
+                else
+                    c.state |= cond_state::state_active | cond_state::state_was_active;
+            } else if (token_type_ == token_type::endc) {
+                if (conds_.empty())
+                    ASSEMBLER_ERROR("endc without matching if");
+                conds_.pop_back();
             } else {
                 ASSEMBLER_ERROR("Unexpected token: " << token_type_string(token_type_));
             }
@@ -288,7 +409,7 @@ public:
                 ASSEMBLER_ERROR("Internal error");
             case opsize::b:
                 assert(offset & 1);
-                if (!range8(f.value))
+                if (!range8(f.value) || (!f.value && is_branch_inst(f.inst)))
                     ASSEMBLER_ERROR("Value ($" << hexfmt(f.value) << ") of out 8-bit range in line " << f.line << " for " << token_type_string(f.inst) );
                 result_[offset] = static_cast<uint8_t>(f.value);
                 break;
@@ -304,6 +425,9 @@ public:
                 break;
             }
         }
+
+        if (!conds_.empty())
+            ASSEMBLER_ERROR("Unterminated condition started at line " << conds_[0].line);
 
         return std::move(result_);
     }
@@ -340,6 +464,15 @@ private:
         std::vector<fixup_type> fixups;
     };
 
+    struct cond_state {
+        static constexpr uint8_t state_active = 1;
+        static constexpr uint8_t state_was_active = 2;
+        static constexpr uint8_t state_else_seen = 4;
+
+        uint32_t line;
+        uint8_t state;
+    };
+
     std::vector<std::unique_ptr<identifier_info_type>> identifier_info_;
     std::map<uint32_t, pending_fixup> pending_fixups_;
 
@@ -349,9 +482,14 @@ private:
     uint32_t line_ = 1;
     uint32_t col_ = 1;
 
+    std::string last_global_;
     token_type token_type_ = token_type::eof;
     std::string token_text_;
     uint32_t token_number_ = 0;
+
+    uint32_t rs_value_ = 0; // TODO: In vasm this value can be referenced as __RS
+
+    std::vector<cond_state> conds_;
 
     static constexpr bool is_instruction(token_type t)
     {
@@ -383,6 +521,11 @@ private:
         const auto id_idx = static_cast<uint32_t>(t) - static_cast<uint32_t>(token_type::identifier_start);
         assert(id_idx < identifier_info_.size());
         return *identifier_info_[id_idx];
+    }
+
+    bool in_disabled_block()
+    {
+        return !conds_.empty() && !(conds_.back().state & cond_state::state_active);
     }
 
     std::string token_type_string(token_type tt)
@@ -425,6 +568,19 @@ private:
 
         if (auto it = id_map_.find(uc); it != id_map_.end())
             return it->second;
+
+        // Don't define new identifiers in disabled block
+        if (in_disabled_block())
+            return token_type::whitespace; // Hmm...
+
+        if (uc[0] == '.') {
+            if (last_global_.empty())
+                ASSEMBLER_ERROR("Local label outside function");
+            uc = last_global_ + uc;
+            // Lookup again
+            if (auto it = id_map_.find(uc); it != id_map_.end())
+                return it->second;
+        }
 
         const uint32_t id = static_cast<uint32_t>(identifier_info_.size()) + static_cast<uint32_t>(token_type::identifier_start);
         id_map_[uc] = static_cast<token_type>(id);
@@ -609,7 +765,7 @@ private:
         } else if (is_identifier(token_type_)) {
             auto& ii = identifier_info(token_type_);
             if (ii.has_value) {
-                res.val = ii.value;
+                res.val = neg ? -static_cast<int32_t>(ii.value) : ii.value;
             }  else {
                 res.val = 0;
                 res.fixups.push_back({ &ii, neg });
@@ -837,22 +993,25 @@ has_reg:
             goto operands_done;
         }
 
-        if (token_type_ == token_type::size_b) {
+        // Allow Bxx.s as synonym for Bxx.b
+        if (is_branch_inst(inst) && token_type_ == token_type::size_s) {
+            get_token();
+            osize = opsize::b;
+        } else {
+            osize = get_opsize();
+        }
+
+        if (osize == opsize::b) {
             if (!(info.opsize_mask & opsize_mask_b))
                 ASSEMBLER_ERROR("Byte size not allowed for " << info.name);
-            osize = opsize::b;
-            get_token();
-        } else if (token_type_ == token_type::size_w) {
+        } else if (osize == opsize::w) {
             if (!(info.opsize_mask & opsize_mask_w))
                 ASSEMBLER_ERROR("Word size not allowed for " << info.name);
-            osize = opsize::w;
-            get_token();
-        } else if (token_type_ == token_type::size_l) {
+        } else if (osize == opsize::l) {
             if (!(info.opsize_mask & opsize_mask_l))
                 ASSEMBLER_ERROR("Long size not allowed for " << info.name);
-            osize = opsize::l;
-            get_token();
         } else {
+            osize = info.default_size;
             explicit_size = false;
         }
 
@@ -1369,10 +1528,9 @@ done:
         }
     }
 
-    void process_dc()
+    opsize get_opsize()
     {
-        get_token();
-        opsize osize = opsize::w;
+        opsize osize = opsize::none;
         if (token_type_ == token_type::size_b) {
             osize = opsize::b;
             get_token();
@@ -1383,6 +1541,15 @@ done:
             osize = opsize::l;
             get_token();
         }
+        return osize;
+    }
+
+    void process_dc()
+    {
+        get_token();
+        const opsize osize = get_opsize();
+        if (osize == opsize::none)
+            ASSEMBLER_ERROR("Size required for DC");
       
         expect(token_type::whitespace);
         for (;;) {
@@ -1425,6 +1592,30 @@ done:
             skip_whitespace();
         }
         skip_to_eol();
+    }
+
+    uint32_t get_constant_expr()
+    {
+        skip_whitespace();
+        const auto val = process_number();
+        if (!val.fixups.empty())
+            ASSEMBLER_ERROR("Expected constant expression");
+        return val.val;
+    }
+
+    uint32_t process_rs()
+    {
+        const auto ret = rs_value_;
+
+        get_token();
+        const opsize osize = get_opsize();
+        if (osize == opsize::none)
+            ASSEMBLER_ERROR("Size required for RS");
+        skip_whitespace();
+
+        rs_value_ += get_constant_expr() * opsize_bytes(osize);
+
+        return ret;
     }
 
     uint16_t encode_add_sub_cmp(const instruction_info_type& info, const ea_result* ea, opsize osize, uint16_t imm_code, uint16_t normal_code)

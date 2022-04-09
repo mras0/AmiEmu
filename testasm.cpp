@@ -319,6 +319,10 @@ bool simple_asm_tests()
         { "MOVEP.L d4, $1234(a7)", { 0x09cf, 0x1234 } },
         { "MOVEP.L $1234(a2), d0", { 0x014a, 0x1234 } },
         { "DC.B $12, $34, $56\nEVEN\nDC.W $abcd\n", { 0x1234, 0x5600, 0xabcd } },
+        { "DC.B 42\nCNOP 0,4\nDC.W $1234", { 0x2a00, 0x0000, 0x1234 } },
+        { "CNOP 0,4\nDC.W $1234", { 0x1234 } },
+        { "CNOP 1,2\nDC.B 42", { 0x002a } },
+        { "DC.B 0\n\tCNOP 1,2\nDC.B 42", { 0x0000, 0x002a } },
         { "DC.W 2000-1000", { 0x3e8 } },        
         { "lab1: dc.w $1234,$5678\nlab2: dc.w $abcd\n dc.w lab2-lab1\n", { 0x1234, 0x5678, 0xabcd, 0x0004 } },
         { "dc.b 'hello', 0", { 'h'<<8|'e', 'l'<<8|'l', 'o'<<8 } },
@@ -369,6 +373,113 @@ OldAddTask:
         dc.l    0 ; Old AddTask vector stored here
 )", {0x2151, 0x0002, 0x4ef9, 0x0000, 0x0000} },
         { "move.w (a2,d3.w), d4", { 0x3832, 0x3000 } },
+        { "_LVOSupervisor         equ     -30\n\tjsr _LVOSupervisor(a6)\n", { 0x4eae, 0xffe2 } },
+        { "foo=42\n\tjsr -foo(a0)\n\t", { 0x4ea8, 0xffd6 } },
+        { R"(
+foo rs.l 1
+bar rs.b 2
+    rsreset
+baz rs.l 4
+boo rs.w 2
+end rs.b 0
+end2 rs.b 0
+    rsset 42
+lab rs.b 42
+lab2 rs.l 0
+    dc.w foo, bar, baz, boo, end, end2, lab, lab2
+)",
+            { 0, 4, 0, 16, 20, 20, 42, 84 } },
+        { "lab bne.b lab", { 0x66fe } },
+        { "lab ble.s lab", { 0x6ffe } }, 
+        { "debug=0\n\tifeq debug\n\tdc.w $abcd\n\telse\n\tdc.w $1234\n\tendc\n", { 0xabcd } },
+        { "debug=1\n\tifeq debug\n\tdc.w $abcd\n\telse\n\tdc.w $1234\n\tendc\n", { 0x1234 } },
+        { "debug=0\n\tifne debug\n\tdc.w $abcd\n\telse\n\tdc.w $1234\n\tendc\n", { 0x1234 } },
+        { "debug=1\n\tifne debug\n\tdc.w $abcd\n\telse\n\tdc.w $1234\n\tendc\n", { 0xabcd } },
+        { R"(
+x=0
+y=0
+    ifeq x
+        ifeq y
+            dc.w 1
+        else
+            dc.w 2
+        endc
+    else
+        ifeq y
+            dc.w 3
+        else
+            dc.w 4
+        endc
+    endc    
+)", { 1 } },
+        { R"(
+x=0
+y=1
+    ifeq x
+        ifeq y
+            dc.w 1
+        else
+            dc.w 2
+        endc
+    else
+        ifeq y
+            dc.w 3
+        else
+            dc.w 4
+        endc
+    endc    
+)", { 2 } },
+        { R"(
+x=1
+y=0
+    ifeq x
+        ifeq y
+            dc.w 1
+        else
+            dc.w 2
+        endc
+    else
+        ifeq y
+            dc.w 3
+        else
+            dc.w 4
+        endc
+    endc    
+)", { 3 } },
+        { R"(
+x=1
+y=1
+    ifeq x
+        ifeq y
+            dc.w 1
+        else
+            dc.w 2
+        endc
+    else
+        ifeq y
+            dc.w 3
+        else
+            dc.w 4
+        endc
+    endc    
+)", { 4 } },
+
+    { R"(
+func1:
+    moveq   #10, d0
+.lab:
+    dbf     d0, .lab
+func2:
+.lab:
+    bra.s   .lab
+)", {0x700a, 0x51c8, 0xfffe, 0x60fe} },
+        { R"(
+DEBUG=0
+    IFNE DEBUG
+Foo:
+    bsr bar
+    ENDC
+)", {} },
     };
 
     for (const auto& tc : test_cases) {
