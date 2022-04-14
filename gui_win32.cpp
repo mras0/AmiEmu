@@ -365,7 +365,7 @@ public:
     void append_text(const std::string& strdat)
     {
         if (!visible_) {
-            ShowWindow(handle(), SW_NORMAL);
+            ShowWindow(handle(), SW_SHOWNOACTIVATE);
             visible_ = true;
         }
 

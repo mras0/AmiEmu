@@ -11,6 +11,7 @@ constexpr uint32_t marker_scope_end   = 1;
 constexpr uint32_t marker_u8          = 100;
 constexpr uint32_t marker_u16         = 101;
 constexpr uint32_t marker_u32         = 102;
+constexpr uint32_t marker_bool        = 103;
 constexpr uint32_t marker_blob        = 200;
 constexpr uint32_t marker_string      = 300;
 constexpr uint32_t marker_vec_u8      = 400;
@@ -102,6 +103,17 @@ public:
             put_vector(marker_vec_u8, vec);
         else
             get_vector(marker_vec_u8, vec);
+    }
+
+    void handle(bool& b)
+    {
+        if (dir_ == dir::save) {
+            put_u32(marker_bool);
+            put_u8(b);
+        } else {
+            expect_marker(marker_bool);
+            b = !!get_u8();
+        }
     }
 
     void handle(uint8_t& num)
@@ -273,6 +285,11 @@ void state_file::handle(std::vector<uint8_t>& vec)
 void state_file::handle_blob(void* blob, uint32_t size)
 {
     impl_->handle_blob(blob, size);
+}
+
+void state_file::handle(bool& b)
+{
+    impl_->handle(b);
 }
 
 void state_file::handle(uint8_t& num)

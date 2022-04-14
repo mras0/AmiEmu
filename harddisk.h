@@ -13,7 +13,7 @@ class harddisk {
 public:
     using bool_func = std::function<bool ()>;
 
-    explicit harddisk(memory_handler& mem, bool& cpu_active, const bool_func& should_disable_autoboot, const std::vector<std::string>& hdfilenames);
+    explicit harddisk(memory_handler& mem, bool& cpu_active, const bool_func& should_disable_autoboot, const std::vector<std::string>& hdfilenames, const std::vector<std::string>& shared_folders);
     ~harddisk();
 
     autoconf_device& autoconf_dev();

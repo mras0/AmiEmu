@@ -31,6 +31,8 @@
 #include "dms.h"
 #include "debug_board.h"
 
+//#define PROCESS_LOG
+
 namespace {
 
 volatile bool ctrl_c;
@@ -713,6 +715,7 @@ struct command_line_arguments {
     std::string df0;
     std::string df1;
     std::vector<std::string> hds;
+    std::vector<std::string> shared_folders;
     std::string debug_script;
     uint32_t chip_size;
     uint32_t slow_size;
@@ -722,6 +725,7 @@ struct command_line_arguments {
     bool test_mode;
     bool nosound;
     bool debug;
+    bool debug_board;
 
     void handle_state(state_file& sf)
     {
@@ -730,10 +734,12 @@ struct command_line_arguments {
         sf.handle(df0);
         sf.handle(df1);
         sf.handle(hds);
+        sf.handle(shared_folders);
         sf.handle(chip_size);
         sf.handle(slow_size);
         sf.handle(fast_size);
         sf.handle(cpu_scale);
+        sf.handle(debug_board);
     }
 };
 
@@ -743,6 +749,7 @@ void usage(const std::string& msg)
         "[-rom rom-file]\n"
         "[-df0/-df1 disk/exe]"
         "[-hd file]\n"
+        "[-share path]\n"
         "[-chip size]\n"
         "[-slow size]\n"
         "[-fast size]\n"
@@ -753,6 +760,7 @@ void usage(const std::string& msg)
         "[-debug]\n"
         "[-debugscript file]\n"
         "[-testmode]\n"
+        "[-debugboard]\n"
         "[-help]\n";
     throw std::runtime_error { msg };
 }
@@ -814,8 +822,10 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
             else if (std::string s; get_string_arg("hd", s)) {
                 args.hds.push_back(s);
                 continue;
-            }
-            else if (get_string_arg("rom", args.rom))
+            } else if (std::string s; get_string_arg("share", s)) {
+                args.shared_folders.push_back(s);
+                continue;
+            } else if (get_string_arg("rom", args.rom))
                 continue;
             else if (get_size_arg("chip", args.chip_size, max_chip_size))
                 continue;
@@ -840,6 +850,9 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
                 continue;
             } else if (!std::strcmp(&argv[i][1], "debug")) {
                 args.debug = true;
+                continue;
+            } else if (!std::strcmp(&argv[i][1], "debugboard")) {
+                args.debug_board = true;
                 continue;
             } else if (get_string_arg("debugscript", args.debug_script)) {
                 args.debug = true; // debugscript implies -debug
@@ -1100,16 +1113,16 @@ int main(int argc, char* argv[])
 #endif
 
         std::unique_ptr<harddisk> hd;
-        if (!cmdline_args.hds.empty()) {
+        if (!cmdline_args.hds.empty() || !cmdline_args.shared_folders.empty()) {
             auto should_disable_autoboot = [&]() {
                 return df0.ofs_bootable_disk_inserted();
             };
-            hd = std::make_unique<harddisk>(mem, cpu_active, should_disable_autoboot, cmdline_args.hds);
+            hd = std::make_unique<harddisk>(mem, cpu_active, should_disable_autoboot, cmdline_args.hds, cmdline_args.shared_folders);
             autoconf.add_device(hd->autoconf_dev());
         }
 
         std::unique_ptr<debug_board> dbg_board;
-        if (1) {
+        if (cmdline_args.debug_board) {
             dbg_board = std::make_unique<debug_board>(mem);
             autoconf.add_device(dbg_board->autoconf_dev());
         }

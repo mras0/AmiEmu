@@ -33,6 +33,7 @@ public:
         const uint32_t pos_;
     };
 
+    void handle(bool& b);
     void handle(uint8_t& num);
     void handle(uint16_t& num);
     void handle(uint32_t& num);

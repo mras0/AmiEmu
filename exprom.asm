@@ -2,14 +2,22 @@ RomStart=0
 
 ; KS1.2 magic based on http://eab.abime.net/showpost.php?p=1045113&postcount=3
 
+; TODO: Consider not using ADNF_STARTPROC for KS1.2 (can't start process anyway)
+; TODO: Maybe support shared folders for "normal" bootnodes?
+
 VERSION=0
-REVISION=3
+REVISION=4
+
+DEBUG=0
 
 OP_INIT=$fedf
 OP_IOREQ=$fede
 OP_SETFSRES=$fee0
 OP_FSINFO=$fee1
 OP_FSINITSEG=$fee2
+OP_VOLUME_GET_ID=$fee3
+OP_VOLUME_INIT=$fee4
+OP_VOLUME_PACKET=$fee5
 
 RT_MATCHWORD=$00		; UWORD word to match on (ILLEGAL)
 RT_MATCHTAG=$02			; APTR  pointer to the above (RT_MATCHWORD)
@@ -46,11 +54,17 @@ _LVOForbid=-132
 _LVOPermit=-138
 _LVOAllocMem=-198
 _LVOFreeMem=-210
+_LVOAllocEntry=-222
 _LVOAddHead=-240
 _LVOAddTail=-246
 _LVOEnqueue=-270
+_LVOAddTask=-282
+_LVOSetTaskPri=-300
+_LVOWait=-318
 _LVOPutMsg=-366
+_LVOGetMsg=-372
 _LVOReplyMsg=-378
+_LVOWaitPort=-384
 _LVOOldOpenLibrary=-408
 _LVOCloseLibrary=-414
 _LVODoIO=-456
@@ -73,7 +87,23 @@ _LVOAddDosNode=-150
 eb_MountList=74
 
 ; dos.library
+_LVOCreateProc=-138
 _LVODeviceProc=-174
+_LVODateStamp=-192
+_LVODelay=-198
+ ; rev 36+
+_LVOLockDosList=-654
+_LVOUnLockDosList=-660
+_LVOAttemptLockDosList=-666
+_LVOAddDosEntry=-678
+
+dl_Root=$0022
+
+; struct RootNode
+rn_Info=$0018
+
+; struct DosInfo
+di_DevInfo=$0004
 
 pr_MsgPort=$5c
 pr_FileSystemTask=$a8
@@ -176,6 +206,45 @@ bn_Flags=$0E                    ; UWORD
 bn_DeviceNode=$10               ; APTR
 BootNode_SIZEOF=$14
 
+MEMF_PUBLIC=$1
+MEMF_CLEAR=$10000
+
+; struct MemEntry
+me_Addr=0
+me_Length=4
+me_Sizeof=8
+
+; struct MemList
+ml_Node=0
+ml_NumEntries=$e ; UWORD
+ml_ME=$10        ; struct MemEntry[]
+
+; struct Task
+tc_Node        = $0000
+tc_Flags       = $000e
+tc_State       = $000f
+tc_IDNestCnt   = $0010
+tc_TDNestCnt   = $0011
+tc_SigAlloc    = $0012
+tc_SigWait     = $0016
+tc_SigRecvd    = $001a
+tc_SigExcept   = $001e
+tc_TrapAlloc   = $0022
+tc_TrapAble    = $0024
+tc_ExceptData  = $0026
+tc_ExceptCode  = $002a
+tc_TrapData    = $002e
+tc_TrapCode    = $0032
+tc_SPReg       = $0036
+tc_SPLower     = $003a
+tc_SPUpper     = $003e
+tc_Switch      = $0042
+tc_Launch      = $0046
+tc_MemEntry    = $004a
+tc_UserData    = $0058
+tc_Sizeof      = $005c
+
+; Internal device structure
 dev_SysLib=$22  ; LIB_SIZE
 dev_SegList=$26
 dev_Base=$2A
@@ -205,7 +274,7 @@ cb_Sizeof=$0010
 
 ; Starts at UNIT_SIZE
 devunit_Device=$26              ; APTR
-devunit_UnitNum=$2A             ; ULONG
+devunit_UnitNum=$2A             ; ULONG NOTE used in emulator, offset must be kept in sync
 devunit_Sizeof=$2E
 
 ; struct FileSysResource
@@ -271,8 +340,29 @@ dp_Arg6=$0028
 dp_Arg7=$002c
 dp_Sizeof=$0030
 
+ACTION_CURRENT_VOLUME=7
 ACTION_LOCATE_OBJECT=8
-ACTION_READ=82
+ACTION_FLUSH=27 ; $1b
+ACTION_READ=82 ; 'R'
+
+; struct DosList
+dol_Next=$0
+dol_Type=$4
+dol_Task=$8
+dol_VolumeDate=$10
+dol_DiskType=$20
+dol_Name=$28
+dol_Sizeof=$2c
+
+ID_DOS_DISK=$444f5300 ; DOS\0
+DLT_VOLUME=2
+
+LDF_WRITE=2
+LDF_DEVICES=4
+LDF_VOLUMES=8
+LDF_ASSIGNS=16
+LDF_ALL=LDF_DEVICES+LDF_VOLUMES+LDF_ASSIGNS
+
 
 ; Filesystem info
 fsinfo_num=$00          ; UWORD Filesystem number (filled in by expansion ROM)
@@ -775,7 +865,7 @@ irAllocHunkLoop:
         swap    d1
         lsr.l   #8, d1
         lsr.l   #5, d1
-        or.l    #$10000, d1 ; MEMF_CLEAR
+        or.l    #MEMF_CLEAR, d1
         and.l   #$3FFFFFFF, d0
         lsl.l   #2, d0
         addq.l  #8, d0
@@ -800,7 +890,7 @@ irAllocHunkLoop:
         add.l   #16, a7
 
         move.l  #fse_Sizeof, d0
-        move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
+        move.l  #MEMF_CLEAR+MEMF_PUBLIC, d1
         jsr     _LVOAllocMem(a6)
         tst.l   d0
         beq     irError ; TODO: Need clean up...
@@ -842,6 +932,8 @@ irFsOK:
         bclr.b  #CDB_CONFIGME, cd_Flags(a0)    ; Mark as configured
 
         moveq   #0, d5 ; Unit counter
+        cmp.w   RomCodeEnd(pc), d5 ; No units?
+        beq     irNoUnits
 irUnitLoop:
         ; Room for dos packet
         sub.l   #devn_Sizeof, a7
@@ -914,7 +1006,7 @@ irPrev36:
         move.l  a0, -(sp)
         move.l  dev_SysLib(a5), a6
         moveq   #BootNode_SIZEOF, d0
-        move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
+        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
         move.l  dev_SysLib(a5), a6
         jsr     _LVOAllocMem(a6)
         move.l  (sp)+, a0
@@ -942,6 +1034,14 @@ irNextUnit:
         cmp.w   RomCodeEnd(pc), d5 ; Done?
         bne     irUnitLoop
 
+irNoUnits:
+
+        ; Any shared folders?
+        move.w  RomCodeEnd+6(pc), d0
+        beq.b   irAddVolumeDone
+        bsr     AddVolume
+irAddVolumeDone:
+
         move.l  a5, d0
         bra     irExit
 irError:
@@ -964,71 +1064,73 @@ ExLibName:  dc.b 'expansion.library', 0
 FsrName:    dc.b 'FileSystem.resource', 0
             even
 
-;        ; a0 = List
-;PrintList:
-;        movem.l d0/a0/a1, -(sp)
-;        move.l  a0, a1
-;prLoop:
-;        tst.l   LN_SUCC(a1)
-;        beq     prDone
-;        move.l  a1, d0
-;        bsr     SerPutNum
-;        move.b  #$20, d0
-;        bsr     SerPutchar
-;        move.l  LN_NAME(a1), a0
-;        bsr     SerPutMsg
-;        bsr     SerPutCrLf
-;        move.l  LN_SUCC(a1), a1
-;        bra     prLoop
-;prDone:
-;        movem.l (sp)+, d0/a0/a1
-;        rts
-;
-;SerPutchar:
-;        move.l  d0, -(sp)
-;        and.w   #$ff, d0
-;        or.w    #$100, d0       ; stop bit
-;        move.w  d0, $dff030
-;        move.l  (sp)+, d0
-;        rts
-;
-;SerPutMsg:
-;        movem.l  d0/a0, -(sp)
-;spLoop:
-;        move.b  (a0)+, d0
-;        beq     spDone
-;        bsr     SerPutchar
-;        bra     spLoop
-;spDone:
-;        movem.l  (sp)+, d0/a0
-;        rts
-;
-;SerPutCrLf:
-;        move.l  d0, -(sp)
-;        move.b  #13, d0
-;        bsr     SerPutchar
-;        move.b  #10, d0
-;        bsr     SerPutchar
-;        move.l  (sp)+, d0
-;        rts
-;
-;SerPutNum:
-;        movem.l d0-d2, -(sp)
-;        move.l  d0, d1
-;        moveq   #7, d2
-;spnLoop:
-;        rol.l   #4, d1
-;        move.w  d1, d0
-;        and.b   #$f, d0
-;        add.b   #$30, d0
-;        cmp.b   #$39, d0
-;        ble.b   spnPrint
-;        add.b   #39, d0
-;spnPrint:
-;        bsr     SerPutchar
-;        dbf     d2, spnLoop
-;        movem.l (sp)+, d0-d2
-;        rts
+        ifne DEBUG
+        ; a0 = List
+PrintList:
+        movem.l d0/a0/a1, -(sp)
+        move.l  a0, a1
+prLoop:
+        tst.l   LN_SUCC(a1)
+        beq     prDone
+        move.l  a1, d0
+        bsr     SerPutNum
+        move.b  #$20, d0
+        bsr     SerPutchar
+        move.l  LN_NAME(a1), a0
+        bsr     SerPutMsg
+        bsr     SerPutCrLf
+        move.l  LN_SUCC(a1), a1
+        bra     prLoop
+prDone:
+        movem.l (sp)+, d0/a0/a1
+        rts
+
+SerPutchar:
+        move.l  d0, -(sp)
+        and.w   #$ff, d0
+        or.w    #$100, d0       ; stop bit
+        move.w  d0, $dff030
+        move.l  (sp)+, d0
+        rts
+
+SerPutMsg:
+        movem.l  d0/a0, -(sp)
+spLoop:
+        move.b  (a0)+, d0
+        beq     spDone
+        bsr     SerPutchar
+        bra     spLoop
+spDone:
+        movem.l  (sp)+, d0/a0
+        rts
+
+SerPutCrLf:
+        move.l  d0, -(sp)
+        move.b  #13, d0
+        bsr     SerPutchar
+        move.b  #10, d0
+        bsr     SerPutchar
+        move.l  (sp)+, d0
+        rts
+
+SerPutNum:
+        movem.l d0-d2, -(sp)
+        move.l  d0, d1
+        moveq   #7, d2
+spnLoop:
+        rol.l   #4, d1
+        move.w  d1, d0
+        and.b   #$f, d0
+        add.b   #$30, d0
+        cmp.b   #$39, d0
+        ble.b   spnPrint
+        add.b   #39, d0
+spnPrint:
+        bsr     SerPutchar
+        dbf     d2, spnLoop
+        movem.l (sp)+, d0-d2
+        rts
+        endc ; DEBUG
 
 Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         movem.l d0-d7/a0-a6, -(sp)
@@ -1044,7 +1146,7 @@ Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
 
         ; Allocate memory for unit
         move.l  #devunit_Sizeof, d0
-        move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
+        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
         move.l  a6, a3 ; device in a3
         move.l  dev_SysLib(a3), a6
         jsr     _LVOAllocMem(a6)
@@ -1146,7 +1248,7 @@ AbortIO:
 ; In: a6=SysBase Out: d0=Filesystem resource
 CreateFileSysResource:
         move.l  #fsr_Sizeof, d0
-        move.l  #$10001, d1 ; MEMF_CLEAR!MEMF_PUBLIC
+        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
         jsr     _LVOAllocMem(a6)
         tst.l   d0
         beq     cfsrOut
@@ -1170,5 +1272,289 @@ CreateFileSysResource:
         move.l  (sp)+, d0
 cfsrOut:
         rts
+
+TASK_STACK_SIZE=2048
+
+        ; struct MemEntry for the task
+AddVolumeTaskME:
+        dc.w    0, 0, 0, 0, 0, 0, 0
+        dc.w    1 ; One entry
+        dc.l    MEMF_PUBLIC+MEMF_CLEAR
+        dc.l    tc_Sizeof+TASK_STACK_SIZE
+
+AddVolume:
+        ; dos isn't ready at this point, so start a task for later...
+
+        movem.l d1-d7/a0-a6, -(sp)
+        move.l  $4.w, a6
+
+        lea     AddVolumeTaskME(pc), a0
+        jsr     _LVOAllocEntry(a6)
+        tst.l   d0
+        beq     .out
+
+        move.l  d0, a3 ; a3=struct MemList*
+        move.l  ml_ME+me_Addr(a3), a2 ; get pointer to memory
+
+        move.b  #NT_TASK, LN_TYPE(a2)
+        move.b  #127, LN_PRI(a2)
+        lea     .taskname(pc), a0
+        move.l  a0, LN_NAME(a2)
+        lea     tc_Sizeof(a2), a0
+        move.l  a0, tc_SPLower(a2)
+        lea     TASK_STACK_SIZE(a0), a0
+        move.l  a0, tc_SPUpper(a2)
+        move.l  a0, tc_SPReg(a2)
+
+        ; Init tc_MemEntry
+
+        lea     tc_MemEntry(a2), a0
+        move.l  a0, LH_HEAD(a0)
+        addq.l  #4, LH_HEAD(a0) ; Point head to tail
+        clr.l   LH_TAIL(a0)     ; Clear tail
+        move.l  a0, LH_TAILPRED(a0) ; TailPred points to head
+
+        ; Add memlist
+        lea     tc_MemEntry(a2), a0
+        move.l  a3, a1
+        jsr     _LVOAddTail(a6)
+
+        move.l  a2, a4 ; save task pointer in a4
+
+        move.l  a2, a1
+        lea     AddVolumeTask(pc), a2 ; initialPC
+        sub.l   a3, a3 ; finalPC
+        jsr     _LVOAddTask(a6)
+
+        move.l  a4, d0 ; return value (task)
+
+        ifne DEBUG
+        lea     .taskname(pc), a0
+        bsr     SerPutMsg
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        endc ; DEBUG
+
+.out:
+        movem.l (sp)+, d1-d7/a0-a6
+        rts
+.taskname:
+        dc.b 'AddVolumeTask', 0
+        even
+
+AddVolumeTask:
+        move.l  $4.w, a6
+.wait:
+        ; Stupid polling mechanism...
+        ; Force a reschedule
+        move.l  ThisTask(a6), a1
+        moveq   #-128, d0
+        jsr     _LVOSetTaskPri(a6)
+
+        ; Can we open dos now?
+        lea     DosLibName(pc), a1
+        jsr     _LVOOldOpenLibrary(a6)
+        tst.l   d0
+        beq     .wait
+        move.l  d0, a6
+
+        moveq   #0, d7 ; Counter
+.loop:
+        cmp.w   RomCodeEnd+6(pc), d7
+        beq.b   .done
+
+        lea     .ProcName(pc), a0
+        move.l  a0, d1 ; name
+        moveq   #0, d2 ; priority
+        lea     FakeSegList(pc), a0
+        move.l  a0, d3 ; seglist
+        lsr.l   #2, d3 ; to bptr
+        move.l  #4096, d4 ; stackSize
+        jsr     _LVOCreateProc(a6)
+
+        ifne  DEBUG
+        lea     .ProcName(pc), a0
+        bsr     SerPutMsg
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        endc ; DEBUG
+
+        addq.w  #1, d7
+        bra.b   .loop
+
+.done:
+        move.l  a6, a1
+        move.l  $4.w, a6
+        jsr     _LVOCloseLibrary(a6)
+
+        moveq   #0, d0
+        rts
+
+.ProcName: dc.b 'virtualhd handler proc', 0
+        even
+
+        ; Structure shared with emulator
+        ; Keep in sync
+        rsreset
+handler_SysBase rs.l 1
+handler_DosBase rs.l 1
+handler_MsgPort rs.l 1
+handler_DosList rs.l 1
+handler_Id      rs.l 1
+handler_DevName rs.l 1
+handler_Sizeof  rs.b 0
+
+        cnop    0,4 ; Must be long word aligned
+        dc.l    16 ; fake length
+FakeSegList:
+        dc.l    0  ; next segment
+
+        sub.l   #handler_Sizeof, sp
+        move.l  sp, a4
+
+        lea     RomCodeEnd(pc), a0
+        move.l  a4, (a0)
+        move.w  #OP_VOLUME_GET_ID, 4(a0)
+
+        move.l  $4.w, a6
+        move.l  a6, handler_SysBase(a4)
+        move.l  ThisTask(a6), a1
+        lea.l   pr_MsgPort(a1), a1
+        move.l  a1, handler_MsgPort(a4)
+
+        ifne DEBUG
+        move.l  ThisTask(a6), a1
+        move.l  LN_NAME(a1), a0
+        bsr     SerPutMsg
+        move.b  #$20, d0
+        bsr     SerPutchar
+        move.l  a0, d0
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        endc
+
+        lea     DosLibName(pc), a1
+        jsr     _LVOOldOpenLibrary(a6)
+        tst.l   d0
+        beq     .err
+        move.l  d0, handler_DosBase(a4)
+
+        move.l  #dol_Sizeof, d0
+        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
+        jsr     _LVOAllocMem(a6)
+        tst.l   d0
+        beq     .err
+        move.l  d0, a3 ; a3=DosList*
+        move.l  a3, handler_DosList(a4)
+
+        move.l  handler_DosBase(a4), a6
+
+        move.l  handler_MsgPort(a4), dol_Task(a3)
+        move.l  handler_DevName(a4), dol_Name(a3)
+        move.l  #DLT_VOLUME, dol_Type(a3)
+        move.l  #ID_DOS_DISK, dol_DiskType(a3)
+        lea     dol_VolumeDate(a3), a0
+        move.l  a0, d1
+        jsr     _LVODateStamp(a6)
+
+        ; KS1.x?
+        cmp.w   #36, LIB_VERSION(a6)
+        bcc.b   .waitlock
+
+        ; Yes, so no AddDosEntry
+
+        move.l  handler_SysBase(a4), a6
+        jsr     _LVOForbid(a6)
+
+        move.l  handler_DosBase(a4), a0
+        move.l  dl_Root(a0), a0
+        move.l  rn_Info(a0), a0 ; BPTR
+        add.l   a0, a0
+        add.l   a0, a0
+        move.l  di_DevInfo(a0), dol_Next(a3)
+        move.l  a3, d0
+        lsr.l   #2, d0
+        move.l  d0, di_DevInfo(a0)
+
+        jsr     _LVOPermit(a6)
+        bra.b   .volAdded
+
+        ; Must use AttemptLockDosList to avoid deadlock
+.waitlock:
+        moveq   #LDF_WRITE+LDF_VOLUMES, d1
+        jsr     _LVOAttemptLockDosList(a6)
+        subq.l  #2, d0 ; AttemptLockDosList can return 0 or 1 for failure (!)
+        bmi.s   .waitlock
+
+        move.l  a3, d1
+        jsr     _LVOAddDosEntry(a6)
+        move.l  d0, -(sp)
+
+        moveq   #LDF_WRITE+LDF_VOLUMES, d1
+        jsr     _LVOUnLockDosList(a6)
+        move.l   (sp)+, d0
+        beq     .err
+
+.volAdded:
+        lea     RomCodeEnd(pc), a5 ; a5 = comm area
+
+        move.l  a4, (a5)
+        move.w  #OP_VOLUME_INIT, 4(a5)
+
+.waitmsg:
+        ; In this loop:
+        ; a4 = handler data, a5 = comm area, a6 = ExecBase
+
+        move.l  handler_SysBase(a4), a6
+        move.l  handler_MsgPort(a4), a0
+        jsr     _LVOWaitPort(a6)
+
+.msgloop:
+        move.l  handler_MsgPort(a4), a0
+        jsr     _LVOGetMsg(a6)
+        tst.l   d0
+        beq     .waitmsg
+        move.l  d0, a2
+        move.l  LN_NAME(a2), a2 ; a2 = DosPacket*
+
+        ifne DEBUG
+        lea     .text_GotMsg(pc), a0
+        bsr     SerPutMsg
+        move.l  a2, d0
+        bsr     SerPutNum
+        move.b  #$20, d0
+        bsr     SerPutChar
+        move.l  dp_Type(a2), d0
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        endc ; DEBUG
+
+        ; Put the handler ID in Res1 for the host
+        move.l  handler_Id(a4), dp_Res1(a2)
+
+        move.l  a2, (a5)
+        move.w  #OP_VOLUME_PACKET, 4(a5)
+
+        move.l  dp_Port(a2), a0 ; grab reply port for PutMsg
+        move.l  handler_MsgPort(a4), dp_Port(a2) ; our reply port
+        move.l  dp_Link(a2), a1 ; message
+        jsr     _LVOPutMsg(a6)
+
+        bra     .msgloop
+.err:
+        ; TODO: Cleanup
+        ifne DEBUG
+        lea     .text_Failed(pc), a0
+        bsr     SerPutMsg
+        endc
+.out:
+        add.l   #handler_Sizeof, a7
+        rts
+
+        ifne DEBUG
+.text_GotMsg: dc.b 'Got message ', 0
+.text_Failed: dc.b 'Failed to add device', 13, 10, 0
+        even
+        endc ; DEBUG
 
 RomCodeEnd:
