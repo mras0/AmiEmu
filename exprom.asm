@@ -2,7 +2,6 @@ RomStart=0
 
 ; KS1.2 magic based on http://eab.abime.net/showpost.php?p=1045113&postcount=3
 
-; TODO: Consider not using ADNF_STARTPROC for KS1.2 (can't start process anyway)
 ; TODO: Maybe support shared folders for "normal" bootnodes?
 
 VERSION=0
@@ -608,12 +607,6 @@ HandleResInit:
         beq     hri_Out
         move.l  d0, a5  ; a5 = expansion library
 
-        ; Avoid requester for "DEVS:" during AddDosNode call
-        ; FIXME
-        move.l  ThisTask(a6), a0
-        move.l  pr_WindowPtr(a0), -(sp)
-        move.l  #-1, pr_WindowPtr(a0)
-
         exg.l   a5, a6 ; a6=expansion library, a5=execbase
 
         jsr     _LVOObtainConfigBinding(a6)
@@ -644,11 +637,6 @@ HandleResInit:
         move.l  a6, a1
         move.l  a5, a6
         jsr     _LVOCloseLibrary(a6)
-
-        ; Restore pr_WindowPtr
-        move.l  ThisTask(a6), a0
-        move.l  (sp)+, pr_WindowPtr(a0)
-
 
         lea     DosLibName(pc), a1
         jsr     _LVOOldOpenLibrary(a6)
@@ -970,10 +958,10 @@ irUnitLoop:
         btst.l  #0, d0 ; Auto boot?
         bne.b   irBootNode
 
+        moveq   #ADNF_STARTPROC, d1 ; Flags
 irAddDosNode:
         ; a0 = dosNode
         moveq   #-128, d0 ; Boot priority (-128 = not bootable)
-        moveq   #ADNF_STARTPROC, d1 ; Flags
         jsr     _LVOAddDosNode(a6)
         tst.l   d0
         beq     irUnitError
@@ -981,6 +969,7 @@ irAddDosNode:
         bra     irNextUnit
 
 irPrev34:
+        moveq   #0, d1 ; Flags for AddDosNode (don't use ADNF_STARTPROC here to avoid requester for "DEVS", DeviceProc starts it later)
         ; For OFS the global vector MUST be zero (BCPL linking rules)
         tst.l   dn_SegList(a0)
         bne.b   irAddDosNode

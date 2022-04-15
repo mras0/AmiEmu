@@ -31,8 +31,6 @@
 #include "dms.h"
 #include "debug_board.h"
 
-//#define PROCESS_LOG
-
 namespace {
 
 volatile bool ctrl_c;
@@ -822,8 +820,8 @@ command_line_arguments parse_command_line_arguments(int argc, char* argv[])
             else if (std::string s; get_string_arg("hd", s)) {
                 args.hds.push_back(s);
                 continue;
-            } else if (std::string s; get_string_arg("share", s)) {
-                args.shared_folders.push_back(s);
+            } else if (std::string share; get_string_arg("share", share)) {
+                args.shared_folders.push_back(share);
                 continue;
             } else if (get_string_arg("rom", args.rom))
                 continue;
@@ -1338,9 +1336,7 @@ int main(int argc, char* argv[])
             }
             tasks.push_back(task_ptr);
             const auto task_name = read_string(mem, mem.read_u32(task_ptr + ln_Name));
-#ifdef PROCESS_LOG
             std::cout << (type == NT_TASK ? "Task" : "Process") << " \"" << task_name << "\" started address $" << hexfmt(task_ptr) << " initialPC=$" << hexfmt(initial_pc) << "\n";
-#endif
             if (type == NT_PROCESS)
                 check_wait_process(task_ptr, task_name);
         };
@@ -1354,9 +1350,7 @@ int main(int argc, char* argv[])
                 return;
             }
             tasks.erase(it);
-#ifdef PROCESS_LOG
             std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
-#endif
         };
         auto load_seg = [&](uint32_t name_ptr, const uint32_t seg_list_bptr) {
 
@@ -1371,9 +1365,7 @@ int main(int argc, char* argv[])
             } else {
                 name = read_string(mem, name_ptr);
             }
-#ifdef PROCESS_LOG
             std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
-#endif
 
             if (wait_mode != wait_process)
                 return;
