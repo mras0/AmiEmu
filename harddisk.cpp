@@ -471,6 +471,21 @@ uint64_t ticks_since_amiga_epoch(const fs::file_time_type& t)
     return std::chrono::duration_cast<dur_type>(t.time_since_epoch()).count() + file_time_epoch_diff * ticks_per_sec - epoch_diff;
 }
 
+uint32_t translate_error(const std::error_code& ec)
+{
+    const auto err = ec.default_error_condition().value();
+    if (err == ENOENT)
+        return ERROR_OBJECT_NOT_FOUND;
+    else if (err == ENOTEMPTY)
+        return ERROR_DIRECTORY_NOT_EMPTY;
+    else if (err == EIO) // Happens with e.g. rename foo foo/bar
+        return ERROR_OBJECT_IN_USE;
+#if FS_HANDLER_DEBUG > 0
+    std::cout << "[HD] Unable to translate error: " << ec << " (" << err << ")\n";
+#endif
+    return ERROR_WRITE_PROTECTED; //??
+}
+
 class filesystem_handler {
 public:
     class node {
@@ -648,6 +663,9 @@ public:
     {
         assert(dir.type() == ST_USERDIR || dir.type() == ST_ROOT);
 
+        if (name.empty() || name == "." || name == ".." || name[0] == '\\')
+            return nullptr;
+
         // Already known?
         for (auto child : dir.children_) {
             if (ci_equal(child->path().filename().string(), name))
@@ -718,6 +736,43 @@ public:
             return nullptr;
         }
         return ++it == dir.children_.end() ? nullptr : *it;
+    }
+
+    uint32_t delete_node(node& obj)
+    {
+        assert(obj.access_count_ == -1);
+        auto it = nodes_.find(obj.id()); 
+        if (it == nodes_.end() || it->second.get() != &obj)
+            throw std::runtime_error { "[HD] Internal error: Tried to delete invalid node" };
+
+        std::error_code ec;
+        if (!remove(obj.path(), ec))
+            return translate_error(ec);
+
+        nodes_.erase(it);
+        return NO_ERROR;
+    }
+
+    uint32_t rename(node& old_node, node& dir, const std::string& name)
+    {
+        assert(old_node.access_count_ == -1);
+
+        auto it = nodes_.find(old_node.id());
+        if (it == nodes_.end() || it->second.get() != &old_node)
+            throw std::runtime_error { "[HD] Internal error: Tried to rename invalid node" };
+
+        std::error_code ec;
+        const auto new_path = dir.path() / name;
+        fs::rename(old_node.path(), new_path, ec);
+        if (ec)
+            return translate_error(ec);
+
+        const auto type = old_node.type();
+        nodes_.erase(it);
+
+        (void)make_node(&dir, new_path, type);
+
+        return NO_ERROR;
     }
 
 private:
@@ -1753,17 +1808,24 @@ private:
 
     // 0 => root dir
     filesystem_handler::node* node_from_lock(filesystem_handler& fs_handler, uint32_t bptr_to_lock);    
-    std::variant<uint32_t, filesystem_handler::node*> lock_node(filesystem_handler& fs_handler, uint32_t bptr_to_lock, uint32_t bptr_to_name, int32_t access, bool create_new_file = false);
+    // Perform an operation on "name" releative to "lock" (operation = 0 => lock, ST_USERDIR/ST_FILE => create, node* => rename the node to the pointed to object)
+    std::variant<uint32_t, filesystem_handler::node*> node_operation(filesystem_handler& fs_handler, uint32_t bptr_to_lock, uint32_t bptr_to_name, int32_t access, std::variant<int32_t, filesystem_handler::node*> operation = 0);
     void fill_file_info(filesystem_handler::node& node, uint32_t fib_cptr);
+    void fill_info_data(filesystem_handler& fs_handler, uint32_t id_cptr);
 
     // Alloc FileLock for already locked node (returns BPTR to allocated memory, or 0 on error)
     uint32_t make_lock(filesystem_handler& fs_handler, filesystem_handler::node& node, int32_t access);
 
     void action_locate_object(filesystem_handler& fs_handler, DosPacket& dp);
     void action_free_lock(filesystem_handler& fs_handler, DosPacket& dp);
+    void action_delete_object(filesystem_handler& fs_handler, DosPacket& dp);
+    void action_rename_object(filesystem_handler& fs_handler, DosPacket& dp);
     void action_copy_dir(filesystem_handler& fs_handler, DosPacket& dp);
+    void action_set_protect(filesystem_handler& fs_handler, DosPacket& dp);
+    void action_create_dir(filesystem_handler& fs_handler, DosPacket& dp);
     void action_examine_object(filesystem_handler& fs_handler, DosPacket& dp);
     void action_examine_next(filesystem_handler& fs_handler, DosPacket& dp);
+    void action_disk_info(filesystem_handler& fs_handler, DosPacket& dp);
     void action_info(filesystem_handler& fs_handler, DosPacket& dp);
     void action_parent(filesystem_handler& fs_handler, DosPacket& dp);
     void action_same_lock(filesystem_handler& fs_handler, DosPacket& dp);
@@ -1781,7 +1843,7 @@ filesystem_handler::node* harddisk::impl::node_from_lock(filesystem_handler& fs_
     return fs_handler.node_from_key(mem_.read_u32(BADDR(bptr_to_lock) + fl_Key));
 }
 
-std::variant<uint32_t, filesystem_handler::node*> harddisk::impl::lock_node(filesystem_handler& fs_handler, uint32_t bptr_to_lock, uint32_t bptr_to_name, int32_t access, bool create_new_file)
+std::variant<uint32_t, filesystem_handler::node*> harddisk::impl::node_operation(filesystem_handler& fs_handler, uint32_t bptr_to_lock, uint32_t bptr_to_name, int32_t access, std::variant<int32_t, filesystem_handler::node*> operation)
 {
     auto* node = node_from_lock(fs_handler, bptr_to_lock);
 
@@ -1791,7 +1853,6 @@ std::variant<uint32_t, filesystem_handler::node*> harddisk::impl::lock_node(file
     auto name = read_bcpl_string(mem_, BADDR(bptr_to_name));
     auto i = name.find_first_of(':'), l = name.length();
     if (i != std::string::npos) {
-        node = &fs_handler.root_node();
         ++i;
     } else {
         i = 0;
@@ -1813,7 +1874,17 @@ std::variant<uint32_t, filesystem_handler::node*> harddisk::impl::lock_node(file
             auto& parent = *node;
             auto filename = name.substr(i);
             node = fs_handler.find_in_node(parent, filename);
-            if (create_new_file) {
+
+            if (operation.index() == 1) {
+                // Rename
+                if (node)
+                    return ERROR_OBJECT_EXISTS;
+                return fs_handler.rename(*std::get<1>(operation), parent, filename);
+            }
+
+            const auto create_type = std::get<0>(operation);
+
+            if (create_type == ST_FILE) {
                 // TODO: This could be better...
                 // NOTE: could be overwriting file here!!
                 {
@@ -1823,8 +1894,19 @@ std::variant<uint32_t, filesystem_handler::node*> harddisk::impl::lock_node(file
                         return ERROR_WRITE_PROTECTED; // FIXME
                 }
                 node = fs_handler.find_in_node(parent, filename);
-                create_new_file = false; // Rely on normal logic!!! (HACK)
+                assert(node);
+            } else if (create_type == ST_USERDIR) {
+                if (node)
+                    return ERROR_OBJECT_EXISTS;
+                create_directory(parent.path() / filename);
+                node = fs_handler.find_in_node(parent, filename);
+                assert(node);
+            } else if (create_type) {
+                throw std::runtime_error { "TODO: Create type " + std::to_string(create_type) };
             }
+
+            // Rely on normal logic!!! (HACK)
+            operation = 0;
             break;
         }
         node = fs_handler.find_in_node(*node, name.substr(i, comp_end - i));
@@ -1835,7 +1917,7 @@ std::variant<uint32_t, filesystem_handler::node*> harddisk::impl::lock_node(file
     if (!node)
         return ERROR_OBJECT_NOT_FOUND;
 
-    assert(!create_new_file);
+    assert(operation.index() == 0 && std::get<0>(operation) == 0);
 
     if (!node->lock(access))
         return ERROR_OBJECT_IN_USE;
@@ -1888,6 +1970,19 @@ uint32_t harddisk::impl::make_lock(filesystem_handler& fs_handler, filesystem_ha
     return BPTR(fl); // convert to BPTR
 }
 
+void harddisk::impl::fill_info_data(filesystem_handler& fs_handler, uint32_t id_cptr)
+{
+    mem_.write_u32(id_cptr + id_NumSoftErrors, 0);
+    mem_.write_u32(id_cptr + id_UnitNumber, 0);
+    mem_.write_u32(id_cptr + id_DiskState, ID_VALIDATED);
+    mem_.write_u32(id_cptr + id_NumBlocks, 1);
+    mem_.write_u32(id_cptr + id_NumBlocksUsed, 1);
+    mem_.write_u32(id_cptr + id_BytesPerBlock, sector_size_bytes);
+    mem_.write_u32(id_cptr + id_DiskType, ID_DOS_DISK);
+    mem_.write_u32(id_cptr + id_VolumeNode, BPTR(fs_handler.dos_list_address()));
+    mem_.write_u32(id_cptr + id_InUse, 0);
+}
+
 void harddisk::impl::handle_volume_packet()
 {
     DosPacket dp {};
@@ -1920,14 +2015,29 @@ void harddisk::impl::handle_volume_packet()
     case ACTION_FREE_LOCK: // 15
         action_free_lock(fs_handler, dp);
         break;
+    case ACTION_DELETE_OBJECT: // 16
+        action_delete_object(fs_handler, dp);
+        break;
+    case ACTION_RENAME_OBJECT: // 17
+        action_rename_object(fs_handler, dp);
+        break;
     case ACTION_COPY_DIR: // 19
         action_copy_dir(fs_handler, dp);
+        break;
+    case ACTION_SET_PROTECT: // 21
+        action_set_protect(fs_handler, dp);
+        break;
+    case ACTION_CREATE_DIR: // 22
+        action_create_dir(fs_handler, dp);
         break;
     case ACTION_EXAMINE_OBJECT: // 23
         action_examine_object(fs_handler, dp);
         break;
     case ACTION_EXAMINE_NEXT: // 24
         action_examine_next(fs_handler, dp);
+        break;
+    case ACTION_DISK_INFO: // 25
+        action_disk_info(fs_handler, dp);
         break;
     case ACTION_INFO: // 26
         action_info(fs_handler, dp);
@@ -1987,7 +2097,7 @@ void harddisk::impl::action_locate_object(filesystem_handler& fs_handler, DosPac
 
     dp.dp_Res1 = 0;
     const int32_t access = static_cast<int32_t>(dp.dp_Arg3) == EXCLUSIVE_LOCK ? EXCLUSIVE_LOCK : SHARED_LOCK;
-    auto lock_res = lock_node(fs_handler, dp.dp_Arg1, dp.dp_Arg2, access);
+    auto lock_res = node_operation(fs_handler, dp.dp_Arg1, dp.dp_Arg2, access);
 
     if (lock_res.index()) {
         dp.dp_Res1 = make_lock(fs_handler, *std::get<1>(lock_res), access);
@@ -2029,6 +2139,39 @@ void harddisk::impl::action_free_lock(filesystem_handler& fs_handler, DosPacket&
     dp.dp_Res2 = NO_ERROR;
 }
 
+void harddisk::impl::action_rename_object(filesystem_handler& fs_handler, DosPacket& dp)
+{
+    // dp_Type - ACTION_RENAME_OBJECT (17)
+    // dp_Argl - BPTR to struct FileLock (original)
+    // dp_Arg2 - BPTR to BCPL string (original name)
+    // dp_Arg3 - BPTR to struct FileLock (new)
+    // dp_Arg4 - BPTR to BCPL string (new name)
+    // dp_Resl - LONG (success code; DOS boolean)
+    // dp.Res2 - LONG (AmigaDOS error code if dp_Resl == DOSFALSE)
+
+
+    auto lock_res = node_operation(fs_handler, dp.dp_Arg1, dp.dp_Arg2, EXCLUSIVE_LOCK);
+
+    if (lock_res.index()) {
+        auto old_node = std::get<1>(lock_res);
+        auto new_res = node_operation(fs_handler, dp.dp_Arg3, dp.dp_Arg4, SHARED_LOCK, old_node);
+        assert(new_res.index() == 0);
+        dp.dp_Res1 = DOSFALSE;
+        dp.dp_Res2 = std::get<0>(new_res);
+        if (dp.dp_Res2 != 0)
+            old_node->unlock(EXCLUSIVE_LOCK);
+        else
+            dp.dp_Res1 = DOSTRUE;
+    } else {
+        dp.dp_Res1 = 0;
+        dp.dp_Res2 = std::get<0>(lock_res);
+    }
+
+#if FS_HANDLER_DEBUG > 1
+    std::cout << "[HD] Rename lock=$" << hexfmt(BADDR(dp.dp_Arg1)) << " name=\"" << read_bcpl_string(mem_, BADDR(dp.dp_Arg2)) << "\" to lock=$" << hexfmt(BADDR(dp.dp_Arg3)) << " name=\"" << read_bcpl_string(mem_, BADDR(dp.dp_Arg4)) << " -> " << error_name(dp.dp_Res2) << "\n";
+#endif
+}
+
 void harddisk::impl::action_copy_dir(filesystem_handler& fs_handler, DosPacket& dp)
 {
     // dp_Type - ACTION_COPY_DIR (19)
@@ -2064,6 +2207,84 @@ void harddisk::impl::action_copy_dir(filesystem_handler& fs_handler, DosPacket& 
     if (!dp.dp_Res1)
         dp.dp_Res2 = ERROR_NO_FREE_STORE;
 }
+
+void harddisk::impl::action_delete_object(filesystem_handler& fs_handler, DosPacket& dp)
+{
+    // dp_Type - ACTION_DELETE_OBJECT (16)
+    // dp_Argl - BPTR to struct FileLock
+    // dp_Arg2 - BPTR to BCPL string (object name)
+    // dp_Resl - LONG (success code; DOS boolean)
+    // dp_Res2 - LONG (AmigaDOS error code if dp_Resl == DOSFALSE)
+    auto lock_res = node_operation(fs_handler, dp.dp_Arg1, dp.dp_Arg2, EXCLUSIVE_LOCK);
+    if (lock_res.index()) {
+        auto& node = *std::get<1>(lock_res);
+        dp.dp_Res1 = DOSTRUE;
+        if ((dp.dp_Res2 = fs_handler.delete_node(node)) != NO_ERROR) {
+            dp.dp_Res1 = DOSFALSE;
+            node.unlock(EXCLUSIVE_LOCK);
+        }
+    } else {
+        dp.dp_Res1 = DOSFALSE;
+        dp.dp_Res2 = std::get<0>(lock_res);
+    }
+
+#if FS_HANDLER_DEBUG > 1
+    std::cout << "[HD] Delete lock=$" << hexfmt(BADDR(dp.dp_Arg1)) << " name=\"" << read_bcpl_string(mem_, BADDR(dp.dp_Arg2)) << "\" -> " << error_name(dp.dp_Res2) << "\n";
+#endif
+}
+
+void harddisk::impl::action_set_protect(filesystem_handler& fs_handler, DosPacket& dp)
+{
+    // dp_Type - ACTION_SET_PROTECT (21)
+    // dp_Argl - not used (NULL)
+    // dp_Arg2 - BPTR to struct FileLock
+    // dp_Arg3 - BPTR to BCPL string (object name)
+    // dp_Arg4 - ULONG (bit mask)
+    // dp_Resl - LONG (success code; DOS boolean)
+    // dp_Res2 - LONG (AmigaDOS error code if dp_Resl == DOSFALSE)
+
+    auto lock_res = node_operation(fs_handler, dp.dp_Arg2, dp.dp_Arg3, EXCLUSIVE_LOCK);
+    if (!lock_res.index()) {
+        dp.dp_Res1 = DOSFALSE;
+        dp.dp_Res2 = std::get<0>(lock_res);
+    } else {
+        // Fake sucess
+        std::get<1>(lock_res)->unlock(EXCLUSIVE_LOCK);
+        dp.dp_Res1 = DOSTRUE;
+        dp.dp_Res2 = NO_ERROR;
+    }
+#if FS_HANDLER_DEBUG > 1
+    std::cout << "[HD] Set protect lock=$" << hexfmt(BADDR(dp.dp_Arg2)) << " object=\"" << read_bcpl_string(mem_, BADDR(dp.dp_Arg3)) << "\" mask=$" << hexfmt(dp.dp_Arg4) << " -> " << error_name(dp.dp_Res2) << "\n";
+#endif
+}
+
+void harddisk::impl::action_create_dir(filesystem_handler& fs_handler, DosPacket& dp)
+{
+    // dp_Type - ACTION_CREATE_DIR (22)
+    // dp_Argl - BPTR to struct FileLock
+    // dp_Arg2 - BPTR to BCPL string (directory name)
+    // dp_Resl - BPTR to struct FileLock
+    // dp_Res2 - LONG (AmigaDOS error code if dp_Resl == ZERO)
+    //auto lock_res = lock_node(fs_handler, dp.dp_Arg2, dp.dp_Arg3, EXCLUSIVE_LOCK, ST_USERDIR);
+
+
+    auto lock_res = node_operation(fs_handler, dp.dp_Arg1, dp.dp_Arg2, EXCLUSIVE_LOCK, ST_USERDIR);
+
+    if (lock_res.index()) {
+        dp.dp_Res1 = make_lock(fs_handler, *std::get<1>(lock_res), EXCLUSIVE_LOCK);
+        dp.dp_Res2 = NO_ERROR;
+        if (!dp.dp_Res1)
+            dp.dp_Res2 = ERROR_NO_FREE_STORE;
+    } else {
+        dp.dp_Res1 = 0;
+        dp.dp_Res2 = std::get<0>(lock_res);
+    }
+
+#if FS_HANDLER_DEBUG > 1
+    std::cout << "[HD] Create dir lock=$" << hexfmt(BADDR(dp.dp_Arg1)) << " name=\"" << read_bcpl_string(mem_, BADDR(dp.dp_Arg2)) << "\" -> " << error_name(dp.dp_Res2) << "\n";
+#endif
+}
+
 
 void harddisk::impl::action_examine_object(filesystem_handler& fs_handler, DosPacket& dp)
 {
@@ -2127,6 +2348,22 @@ void harddisk::impl::action_examine_next(filesystem_handler& fs_handler, DosPack
     dp.dp_Res2 = NO_ERROR;
 }
 
+void harddisk::impl::action_disk_info(filesystem_handler& fs_handler, DosPacket& dp)
+{
+    // dp_Type - ACTION_DISKINFO (25)
+    // dp_Argl - BPTR to struct InfoData
+    // dp_Resl - LONG (success code; DOS boolean)
+    // dp_Res2 - LONG (AmigaDOS error code if dp_Resl == DOSFALSE)
+#if FS_HANDLER_DEBUG > 1
+    std::cout << "[HD] Disk info $" << hexfmt(BADDR(dp.dp_Arg1)) << "\n";
+#endif
+
+    fill_info_data(fs_handler, BADDR(dp.dp_Arg1));
+
+    dp.dp_Res1 = DOSTRUE;
+    dp.dp_Res2 = NO_ERROR;
+}
+
 void harddisk::impl::action_info(filesystem_handler& fs_handler, DosPacket& dp)
 {
     // dp_Type - ACTION_INFO (26)
@@ -2138,17 +2375,7 @@ void harddisk::impl::action_info(filesystem_handler& fs_handler, DosPacket& dp)
     std::cout << "[HD] Info lock=$" << hexfmt(BADDR(dp.dp_Arg1)) << " info=$" << hexfmt(BADDR(dp.dp_Arg2)) << "\n";
 #endif
 
-    const auto id = BADDR(dp.dp_Arg2);
-
-    mem_.write_u32(id + id_NumSoftErrors, 0);
-    mem_.write_u32(id + id_UnitNumber, 0);
-    mem_.write_u32(id + id_DiskState, ID_VALIDATED);
-    mem_.write_u32(id + id_NumBlocks, 1);
-    mem_.write_u32(id + id_NumBlocksUsed, 1);
-    mem_.write_u32(id + id_BytesPerBlock, sector_size_bytes);
-    mem_.write_u32(id + id_DiskType, ID_DOS_DISK);
-    mem_.write_u32(id + id_VolumeNode, BPTR(fs_handler.dos_list_address()));
-    mem_.write_u32(id + id_InUse, 0);
+    fill_info_data(fs_handler, BADDR(dp.dp_Arg2));
 
     dp.dp_Res1 = DOSTRUE;
     dp.dp_Res2 = NO_ERROR;
@@ -2223,7 +2450,7 @@ void harddisk::impl::action_find(filesystem_handler& fs_handler, DosPacket& dp)
     // dp_Res2 - LONG (AmigaDOS error code if dp_Resl == DOSFALSE)
 
     const int32_t access = dp.dp_Type == ACTION_FINDINPUT ? SHARED_LOCK : EXCLUSIVE_LOCK;
-    auto lock_res = lock_node(fs_handler, dp.dp_Arg2, dp.dp_Arg3, access, dp.dp_Type == ACTION_FINDOUTPUT);
+    auto lock_res = node_operation(fs_handler, dp.dp_Arg2, dp.dp_Arg3, access, dp.dp_Type == ACTION_FINDOUTPUT ? ST_FILE : 0);
 
     dp.dp_Res1 = DOSFALSE;
     if (lock_res.index()) {
@@ -2349,9 +2576,9 @@ void harddisk::impl::action_write(filesystem_handler& fs_handler, DosPacket& dp)
         dp.dp_Res2 = ERROR_BAD_NUMBER;
     }
 
-//#if FS_HANDLER_DEBUG > 1
+#if FS_HANDLER_DEBUG > 1
     std::cout << "[HD] Write " << dp.dp_Arg1 << " " << dp.dp_Arg3 << " bytes -> " << error_name(dp.dp_Res2) << " " << static_cast<int32_t>(dp.dp_Res1) << "\n";
-//#endif
+#endif
 }
 
 void harddisk::impl::action_seek(filesystem_handler& fs_handler, DosPacket& dp)
