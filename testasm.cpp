@@ -480,6 +480,10 @@ Foo:
     bsr bar
     ENDC
 )", {} },
+        { R"( dc.b 'Hello world! \'\" \r\n \xfe\0' ,0)", { 0x4865, 0x6C6C, 0x6F20, 0x776F, 0x726C, 0x6421, 0x2027, 0x2220, 0x0D0A, 0x20FE, 0x0000 } },
+    { "blah=1\n\tifeq blah\n\tdc.b 'Hello 9a',13,10\n\tendc\n MOVEQ #0,d0\n", {0x7000 } },
+    { " MOVEQ #':', d0\n", { 0x703a } },
+    { " DC.L 'DOS\\0'\n", { 0x444f, 0x5300 } },
     };
 
     for (const auto& tc : test_cases) {

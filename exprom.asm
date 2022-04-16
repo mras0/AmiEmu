@@ -342,7 +342,7 @@ dp_Sizeof=$0030
 ACTION_CURRENT_VOLUME=7
 ACTION_LOCATE_OBJECT=8
 ACTION_FLUSH=27 ; $1b
-ACTION_READ=82 ; 'R'
+ACTION_READ='R'
 
 ; struct DosList
 dol_Next=$0
@@ -353,7 +353,7 @@ dol_DiskType=$20
 dol_Name=$28
 dol_Sizeof=$2c
 
-ID_DOS_DISK=$444f5300 ; DOS\0
+ID_DOS_DISK='DOS\0'
 DLT_VOLUME=2
 
 LDF_WRITE=2
@@ -676,7 +676,7 @@ hri_FindNul:
         cmp.b   (a0)+, d0
         bne.b   hri_FindNul
         move.b  d0, (a0)
-        move.b  #58, -1(a0) ; ':'
+        move.b  #':', -1(a0)
 
         move.l  a7, d1
         jsr     _LVODeviceProc(a6)

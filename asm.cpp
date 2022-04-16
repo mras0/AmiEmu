@@ -170,6 +170,7 @@ enum class token_type {
     equal = '=',
 
     last_operator = 127,
+    string,
 
 #define DEF_TOKEN(n, t) n,
     TOKENS(DEF_TOKEN)
@@ -331,6 +332,9 @@ public:
                 }
                 ii.fixups.clear();
             } else if (is_instruction(token_type_)) {
+                // Strictly legal, but 99.99% of the time not what's wanted
+                if (pc_ & 1)
+                    ASSEMBLER_ERROR("Assembling instruction at odd address");
                 const auto inst = token_type_;
                 get_token();
                 process_instruction(inst);
@@ -539,6 +543,8 @@ private:
             return "NEWLINE";
         case token_type::number:
             return "NUMBER";
+        case token_type::string:
+            return "STRING";
         #define CASE_INST_TOKEN(n, m, d, no) case token_type::n: return #n;
             INSTRUCTIONS(CASE_INST_TOKEN)
         #undef CASE_INST_TOKEN
@@ -590,7 +596,7 @@ private:
         return static_cast<token_type>(id);
     }
 
-    void read_number(uint8_t base)
+    uint32_t read_number(uint8_t base)
     {
         uint32_t n = 0;
         bool any = false;
@@ -617,7 +623,7 @@ private:
         }
         if (!any)
             ASSEMBLER_ERROR("No digits in number");
-        token_number_ = n;
+        return n;
     }
 
     void get_token()
@@ -641,7 +647,6 @@ private:
             token_type_ = token_type::whitespace;
             return;
         case '#':
-        case '\'':
         case '(':
         case ')':
         case '+':
@@ -657,7 +662,73 @@ private:
             return;
         case '$':
             token_type_ = token_type::number;
-            read_number(16);
+            token_number_ = read_number(16);
+            return;
+        }
+
+        if (c == '\'') {
+            token_text_ = "";
+            for (bool quote = false; *input_ != '\'' || quote; ++input_, ++col_) {
+                const auto ch = *input_;
+                if (!ch || ch == '\n')
+                    ASSEMBLER_ERROR("Unterminted string literal");
+                if (!quote) {
+                    if (ch == '\\')
+                        quote = true;
+                    else
+                        token_text_ += ch;
+                    continue;
+                }
+                quote = false;
+                switch (ch) {
+                case 'n':
+                    token_text_ += '\n';
+                    continue;
+                case 'r':
+                    token_text_ += '\r';
+                    continue;
+                case 't':
+                    token_text_ += '\t';
+                    continue;
+                case '\'':
+                    token_text_ += '\'';
+                    continue;
+                case '"':
+                    token_text_ += '\"';
+                    continue;
+                case '\\':
+                    token_text_ += '\\';
+                    continue;
+                case 'x': {
+                    ++input_;
+                    ++col_;
+                    auto n = read_number(16);
+                    if (n > 255)
+                        ASSEMBLER_ERROR("Character too large $" << hexfmt(n));
+                    token_text_ += static_cast<char>(n);
+                    // Undo increment in looop
+                    --col_;
+                    --input_;
+                    continue;
+                }
+                case '0': case '1': case '2': case '3':
+                case '4': case '5': case '6': case '7': {
+                    auto n = read_number(8);
+                    if (n > 255)
+                        ASSEMBLER_ERROR("Octal character too large $" << hexfmt(n));
+                    token_text_ += static_cast<char>(n);
+                    // Undo increment in looop
+                    --col_;
+                    --input_;
+                    continue;
+                }
+                default:
+                    ASSEMBLER_ERROR("Invalid escape sequence \\" << ch);
+                }
+            }
+            ++input_; // Skip end quote
+            ++col_;
+            token_type_ = token_type::string;
             return;
         }
 
@@ -665,7 +736,7 @@ private:
             --input_;
             --col_;
             token_type_ = token_type::number;
-            read_number(10);
+            token_number_ = read_number(10);
             return;
         }
 
@@ -746,6 +817,21 @@ private:
             ii->fixups.push_back(fixup_type { osize, negate, offset });
     }
 
+    void convert_string_to_number()
+    {
+        if (token_type_ != token_type::string)
+            return;
+        const auto l = token_text_.length();
+        if (l == 0 || l > 4)
+            ASSEMBLER_ERROR("String is not a valid number: '" << token_text_ << "'");
+        token_type_ = token_type::number;
+        token_number_ = 0;
+        for (size_t i = 0; i < l; ++i) {
+            token_number_ <<= 8;
+            token_number_ |= static_cast<uint8_t>(token_text_[i]);
+        }
+    }
+
 
     ea_result process_number(bool neg = false)
     {
@@ -758,7 +844,7 @@ private:
             neg = true;
             get_token();
         }
-
+        convert_string_to_number();
         if (token_type_ == token_type::number) {
             res.val = neg ? -static_cast<int32_t>(token_number_) : token_number_;
             get_token();
@@ -772,13 +858,15 @@ private:
             }
             get_token();
         } else {
-            ASSEMBLER_ERROR("Invalid number");
+            ASSEMBLER_ERROR("Expected number or identifier got " << token_type_string(token_type_));
         }
 
         // Only support very simple aritmetic for now
         while (token_type_ == token_type::minus || token_type_ == token_type::plus) {
             const auto saved_token = token_type_;
             get_token();
+
+            convert_string_to_number();
 
             uint32_t val = 0;
             if (token_type_ == token_type::number) {
@@ -793,7 +881,7 @@ private:
                 }
                 get_token();
             } else {
-                ASSEMBLER_ERROR("Expected number of identifier");
+                ASSEMBLER_ERROR("Expected number or identifier got " << token_type_string(token_type_));
             }
 
             if (saved_token == token_type::minus)
@@ -1553,17 +1641,11 @@ done:
       
         expect(token_type::whitespace);
         for (;;) {
-            if (token_type_ == token_type::quote) {
-                if (osize != opsize::b)
-                    ASSEMBLER_ERROR("Strings only supported for DC.B");
-                while (*input_ != '\'' ) {
-                    if (!*input_ || *input_ == '\n')
-                        ASSEMBLER_ERROR("Unexpected end of string");
-                    result_.push_back(*input_++);
-                    ++col_;
+            if (token_type_ == token_type::string && osize == opsize::b) {
+                for (size_t i = 0, l = token_text_.length(); i < l; ++i) {
+                    result_.push_back(token_text_[i]);
                     ++pc_;
                 }
-                get_token(); // quote char
                 get_token();
             } else {
                 auto num = process_number();
