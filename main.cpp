@@ -1551,6 +1551,7 @@ int main(int argc, char* argv[])
                 if (debug_mode) {
                     const auto& s = cpu.state();
                     if (g) {
+                        serdata_flush();
                         g->set_debug_memory(mem.ram(), custom.get_regs());
                         g->set_debug_windows_visible(true);
                         g->update_image(custom_step.frame);

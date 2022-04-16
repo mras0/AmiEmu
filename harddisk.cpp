@@ -15,7 +15,7 @@
 #include <chrono>
 
 //#define LOCAL_RAM_DEBUG
-#define FS_HANDLER_DEBUG 1
+//#define FS_HANDLER_DEBUG 3
 
 namespace fs = std::filesystem;
 
@@ -29,7 +29,6 @@ namespace {
 constexpr uint32_t handler_MsgPort = 0x08;
 constexpr uint32_t handler_DosList = 0x0C;
 constexpr uint32_t handler_Id      = 0x10;
-constexpr uint32_t handler_DevName = 0x14;
 
 constexpr uint32_t IDNAME_RIGIDDISK = 0x5244534B; // 'RDSK'
 constexpr uint32_t IDNAME_PARTITION = 0x50415254; // 'PART'
@@ -871,6 +870,7 @@ private:
     struct shared_folder_info {
         fs::path root_dir;
         std::string volume_name;
+        uint32_t name_addr;
         std::unique_ptr<filesystem_handler> fs_handler;
     };
 
@@ -883,7 +883,6 @@ private:
     std::vector<partition_info> partitions_;
     std::vector<fs_info> filesystems_;
     std::vector<shared_folder_info> shared_folders_;
-    uint32_t shared_folders_initialized_ = 0;
 
     static constexpr uint32_t local_ram_list_end = ~0U;
     static constexpr uint32_t local_ram_align = 8;
@@ -907,7 +906,6 @@ private:
     void do_reset(const std::vector<std::string>& disk_filenames, const std::vector<fs::path>& shared_folders)
     {
         ptr_hold_ = 0;
-        shared_folders_initialized_ = 0;
         local_ram_init();
         hds_.clear();
         partitions_.clear();
@@ -918,7 +916,7 @@ private:
             auto name = p.filename().string();
             if (name.length() > 30)
                 name.erase(30);
-            shared_folders_.push_back({ p, name, std::make_unique<filesystem_handler>(p) });
+            shared_folders_.push_back({ p, name, 0, std::make_unique<filesystem_handler>(p) });
         }
     }
 
@@ -1772,35 +1770,35 @@ private:
 
     void handle_volume_get_id()
     {
-        if (shared_folders_initialized_ >= shared_folders_.size())
-            throw std::runtime_error { "Too many shared folders being initialized (get id)" };
-        auto name = shared_folders_[shared_folders_initialized_].volume_name;
-        const auto l = static_cast<uint8_t>(name.length());
-        const auto addr = local_ram_alloc(l+2);
-        if (!addr)
-            throw std::runtime_error { "Could not allocate local HD memory for shared folder name" };
+        const auto id = mem_.read_u32(ptr_hold_);
+        if (id >= shared_folders_.size())
+            throw std::runtime_error { "Invalid shared folder requested $" + hexstring(id) };
 
-        // Name as NUL-terminated BSTR
-        mem_.write_u8(addr, l);
-        for (int i = 0; i < l; ++i)
-            mem_.write_u8(addr + 1 + i, name[i]);
-        mem_.write_u8(addr + 1 + l, 0);
-
-        std::cout << "[HD] Volume getting id ptr=$" << hexfmt(ptr_hold_) << " " << name << "\n";
-        mem_.write_u32(ptr_hold_ + handler_Id, shared_folders_initialized_);
-        mem_.write_u32(ptr_hold_ + handler_DevName, BPTR(addr));
-        ++shared_folders_initialized_;
+        auto& sf = shared_folders_[id];
+        if (!sf.name_addr) {
+            const auto l = static_cast<uint8_t>(sf.volume_name.length());
+            const auto addr = local_ram_alloc(l + 2);
+            if (!addr)
+                throw std::runtime_error { "Could not allocate local HD memory for shared folder name" };
+            // Name as NUL-terminated BSTR
+            mem_.write_u8(addr, l);
+            for (int i = 0; i < l; ++i)
+                mem_.write_u8(addr + 1 + i, sf.volume_name[i]);
+            mem_.write_u8(addr + 1 + l, 0);
+            sf.name_addr = addr;
+        }
+        mem_.write_u32(ptr_hold_, BPTR(sf.name_addr));
     }
 
     void handle_volume_init()
     {
         const auto id = mem_.read_u32(ptr_hold_ + handler_Id);
-        if (id >= shared_folders_initialized_)
+        if (id >= shared_folders_.size())
             throw std::runtime_error { "Too many shared folders being initialized (init)" };
-        std::cout << "[HD] Volume initialized ptr=$" << hexfmt(ptr_hold_) << " id=" << id << " " << shared_folders_[id].volume_name << "\n";
 
         const auto msg_port = mem_.read_u32(ptr_hold_ + handler_MsgPort);
         const auto dos_list = mem_.read_u32(ptr_hold_ + handler_DosList);
+        std::cout << "[HD] Volume initialized msg_port=$" << hexfmt(msg_port) << " dos_list=$" << hexfmt(dos_list) << " id=" << id << " " << shared_folders_[id].volume_name << "\n";
         shared_folders_[id].fs_handler->init(msg_port, dos_list);
     }
 
@@ -1997,8 +1995,8 @@ void harddisk::impl::handle_volume_packet()
 
     const auto id = mem_.read_u32(ptr_hold_ + dp_Res1);
 
-    if (id >= shared_folders_initialized_) {
-        std::cerr << "[HD] Invalid ID in dos packet: " << id << " (not mounted)\n";
+    if (id >= shared_folders_.size()) {
+        std::cerr << "[HD] Invalid shared folder ID in dos packet: " << id << "\n";
         mem_.write_u32(ptr_hold_ + dp_Res1, DOSFALSE);
         mem_.write_u32(ptr_hold_ + dp_Res2, ERROR_DEVICE_NOT_MOUNTED);
         return;
@@ -2048,6 +2046,13 @@ void harddisk::impl::handle_volume_packet()
         break;
     case ACTION_PARENT: // 29
         action_parent(fs_handler, dp);
+        break;
+    case ACTION_INHIBIT: // 31
+#if FS_HANDLER_DEBUG > 1
+        std::cout << "[HD] Inhibit " << (dp.dp_Arg1 ? "TRUE" : "FALSE" ) << "\n";
+#endif
+        dp.dp_Res1 = DOSTRUE;
+        dp.dp_Res2 = 0;
         break;
     case ACTION_SAME_LOCK: // 40
         action_same_lock(fs_handler, dp);

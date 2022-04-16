@@ -2,8 +2,6 @@ RomStart=0
 
 ; KS1.2 magic based on http://eab.abime.net/showpost.php?p=1045113&postcount=3
 
-; TODO: Maybe support shared folders for "normal" bootnodes?
-
 VERSION=0
 REVISION=4
 
@@ -324,6 +322,13 @@ devn_bootFlags=$54	; ULONG boot flags (filled in by host)
 devn_segList=$58        ; BPTR segList (filled in by host)
 devn_Sizeof=$5c	        ; Size of this structure
 
+; struct FileSysStartupMsg
+fssm_Unit     = $0000
+fssm_Device   = $0004
+fssm_Environ  = $0008
+fssm_Flags    = $000c
+fssm_Sizeof   = $0010
+
 ; struct DosPacket
 dp_Link=$0000
 dp_Port=$0004
@@ -339,21 +344,28 @@ dp_Arg6=$0028
 dp_Arg7=$002c
 dp_Sizeof=$0030
 
-ACTION_CURRENT_VOLUME=7
+ACTION_STARTUP=0
 ACTION_LOCATE_OBJECT=8
-ACTION_FLUSH=27 ; $1b
-ACTION_READ='R'
+
+DOSTRUE=-1
+DOSFALSE=0
 
 ; struct DosList
 dol_Next=$0
 dol_Type=$4
 dol_Task=$8
+
+; Volume (dol_misc.dol_volume)
 dol_VolumeDate=$10
 dol_DiskType=$20
+; Handler (dol_misc.dol_handler) -- for devices
+dol_Startup=$1c
+
 dol_Name=$28
 dol_Sizeof=$2c
 
 ID_DOS_DISK='DOS\0'
+DLT_DEVICE=0
 DLT_VOLUME=2
 
 LDF_WRITE=2
@@ -653,6 +665,9 @@ HandleResInit:
 
         moveq   #0, d5 ; Unit counter
 hri_DevInit:
+        cmp.w   RomCodeEnd(pc), d5 ; Done?
+        beq     hri_DevsDone
+
         ; Room for dos packet
         sub.l   #devn_Sizeof, a7
         move.l  a7, a3
@@ -695,8 +710,59 @@ hri_FindNul:
 hri_Next:
         add.l   #devn_Sizeof+34, a7 ; free dos packet + name
         addq.w  #1, d5
-        cmp.w   RomCodeEnd(pc), d5 ; Done?
-        bne     hri_DevInit
+        bra     hri_DevInit
+hri_DevsDone:
+
+
+        ; Any shared folders?
+        lea     RomCodeEnd(pc), a3
+        move.w  6(a3), d3
+        moveq   #0, d2
+.checkshare:
+        cmp.w   d2, d3
+        beq     .sharedone
+
+        ; Get volume name
+        move.l  d2, -(sp)
+        move.l  a7, a2
+        move.l  a2, (a3)
+        move.w  #OP_VOLUME_GET_ID, 4(a3)
+        move.l  (sp)+, a1 ; a1 = bptr to volume name
+
+        add.l   a1, a1
+        add.l   a1, a1  ; to cptr
+
+        sub.l   #34, a7 ; room for name
+        move.l  a7, a0
+        moveq   #0, d0
+        move.b  (a1)+, d0
+.copy:
+        subq.w  #1, d0
+        bmi.b   .copyend
+        move.b  (a1)+, (a0)+
+        bra.b   .copy
+.copyend:
+        move.b  #':', (a0)+
+        move.b  #0, (a0)+
+
+        ifne    DEBUG
+        move.l  a7, a0
+        bsr     SerPutMsg
+        bsr     SerPutCrLf
+        endc
+
+        move.l  a7, d1
+        jsr     _LVODeviceProc(a6)
+        tst.l   d4
+        bne.b   .gotboot
+        move.l  d0, d4 ; store device proc (if first)
+
+.gotboot:
+        add.l   #34, a7
+
+        addq.w  #1, d2
+        bra     .checkshare
+.sharedone:
 
         exg.l   a5, a6 ; a6 = dos.library, a5 = exec.library
         move.l  a5, a1
@@ -977,40 +1043,14 @@ irPrev34:
         bra.b   irAddDosNode
 
 irBootNode:
-        cmp.w   #36, LIB_VERSION(a6)
-        bcs.b   irPrev36
-
         ; a0 = dosNode
         move.l  d6, a1 ; configDev
         move.l  devn_bootPrio(a3), d0 ; Boot priority
         moveq   #ADNF_STARTPROC, d1 ; flags
-        jsr     _LVOAddBootNode(a6)
+        bsr     AddBootNode
         tst.l   d0
         beq     irUnitError
 
-        bra     irNextUnit
-
-irPrev36:
-        ; Enqueue boot node
-        move.l  a0, -(sp)
-        move.l  dev_SysLib(a5), a6
-        moveq   #BootNode_SIZEOF, d0
-        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
-        move.l  dev_SysLib(a5), a6
-        jsr     _LVOAllocMem(a6)
-        move.l  (sp)+, a0
-        tst.l   d0
-        beq     irUnitError
-        move.l  d0, a1
-        move.b  #NT_BOOTNODE, LN_TYPE(a1)
-        move.l  d6, LN_NAME(a1)
-        move.w  #ADNF_STARTPROC, bn_Flags(a1)
-        move.l  a0, bn_DeviceNode(a1)
-        lea     eb_MountList(a4), a0
-        jsr     _LVOForbid(a6)
-        jsr     _LVOEnqueue(a6)
-        jsr     _LVOPermit(a6)
-        move.l  a4, a6 ; a6 = expansion.library again!
         bra     irNextUnit
 
 irUnitError:
@@ -1026,10 +1066,65 @@ irNextUnit:
 irNoUnits:
 
         ; Any shared folders?
-        move.w  RomCodeEnd+6(pc), d0
-        beq.b   irAddVolumeDone
-        bsr     AddVolume
-irAddVolumeDone:
+        lea     RomCodeEnd(pc), a3
+        move.w  6(a3), d3
+        moveq   #0, d2
+.addshare:
+        cmp.w   d2, d3
+        beq     .done
+
+        ; Get volume name
+        move.l  d2, -(sp)
+        move.l  a7, a2
+        move.l  a2, (a3)
+        move.w  #OP_VOLUME_GET_ID, 4(a3)
+        move.l  (sp)+, d1 ; d1 = bptr to volume name
+
+        ifne DEBUG
+        lea     irAddShareMsg1(pc), a0
+        bsr     SerPutMsg
+        move.l  d2, d0
+        bsr     SerPutNum
+        bsr     SerPutSpace
+        move.l  d1, d0
+        add.l   d0, d0
+        add.l   d0, d0
+        addq.l  #1, d0
+        move.l  d0, a0
+        bsr     SerPutMsg
+        bsr     SerPutCrLf
+        endc ;DEBUG
+
+        move.l  d1, a0
+        bsr     MakeDeviceNode
+        tst.l   d0
+        beq     irError
+
+        ifne DEBUG
+        movem.l a0/d0, -(sp)
+        lea     irAddShareMsg2(pc), a0
+        bsr     SerPutMsg
+        bsr     SerPutNum
+        lea     irAddShareMsg3(pc), a0
+        bsr     SerPutMsg
+        move.l  d0, a0
+        move.l  dn_Startup(a0), d0
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        movem.l (sp)+, a0/d0
+        endc
+
+        move.l  d0, a0 ; deviceNode
+        move.l  d6, a1 ; configDev
+        moveq   #0, d0 ; Boot priority
+        moveq   #ADNF_STARTPROC, d1 ; flags
+        bsr     AddBootNode
+        tst.l   d0
+        beq     irError
+
+        addq.w  #1, d2
+        bra     .addshare
+.done:
 
         move.l  a5, d0
         bra     irExit
@@ -1052,6 +1147,105 @@ irNoClose:
 ExLibName:  dc.b 'expansion.library', 0
 FsrName:    dc.b 'FileSystem.resource', 0
             even
+        ifne DEBUG
+irAddShareMsg1: dc.b 'Adding share ', 0
+irAddShareMsg2: dc.b 'Device node: $',0
+irAddShareMsg3: dc.b ' Startup packet: $',0
+        even
+        endc ; DEBUG
+
+; ok = AddBootNode( bootPri, flags, deviceNode, configDev )
+; D0                D0       D1     A0          A1
+AddBootNode:
+        cmp.w   #34, LIB_VERSION(a6)
+        bcs.b   .prev34
+        cmp.w   #36, LIB_VERSION(a6)
+        bcs.b   .prev36
+        jmp     _LVOAddBootNode(a6)
+.prev34:
+        moveq   #0, d1 ; Don't start process yet
+        jmp     _LVOAddDosNode(a6)
+.prev36:
+        movem.l a2/a6, -(sp)
+
+        movem.l a0-a1/d0-d1, -(sp)
+        move.l  dev_SysLib(a5), a6
+        moveq   #BootNode_SIZEOF, d0
+        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
+        jsr     _LVOAllocMem(a6)
+        move.l  d0, a2
+        movem.l (sp)+, a0-a1/d0-d1
+        cmp.l   #0, a2
+        beq     .out
+        move.b  #NT_BOOTNODE, LN_TYPE(a2)
+        move.l  a1, LN_NAME(a2)
+        move.w  d1, bn_Flags(a2)
+        move.l  a0, bn_DeviceNode(a2)
+        jsr     _LVOForbid(a6)
+        lea     eb_MountList(a4), a0
+        move.l  a2, a1
+        jsr     _LVOEnqueue(a6)
+        jsr     _LVOPermit(a6)
+        moveq   #1, d0 ; success
+.out:
+        movem.l (sp)+, a2/a6
+        rts
+
+        cnop 0,4
+DevNameBstr:
+        dc.b 16, 'virtualhd.device',0
+        cnop 0,4
+; DE_BOOTBLOCKS=19
+FakeEnviron:
+        dc.l 0, 0, 0, 0, 0, 0, 0, 0
+        dc.l 0, 0, 0, 0, 0, 0, 0, 0
+        dc.l 0, 0, 0
+
+; In: a0 = BPTR to volume name, d2 = share number
+; Out: d0 = DeviceNode* (NULL on error)
+MakeDeviceNode:
+        movem.l d1/a0-a3/a6, -(sp)
+        move.l  a0, a2
+
+        move.l  $4.w, a6
+
+        moveq   #fssm_Sizeof, d0
+        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
+        jsr     _LVOAllocMem(a6)
+        tst.l   d0
+        beq.b   .out
+        move.l  d0, a3
+        move.l  d2, fssm_Unit(a3)
+        lea     DevNameBstr(pc), a0
+        move.l  a0, d0
+        lsr.l   #2, d0 ; To BSTR
+        move.l  d0, fssm_Device(a3)
+        lea     FakeEnviron(pc), a0
+        move.l  a0, d0
+        lsr.l   #2, d0 ; To BPTR
+        move.l  d0, fssm_Environ(a3)
+
+        moveq   #dn_Sizeof, d0
+        move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
+        jsr     _LVOAllocMem(a6)
+        tst.l   d0
+        beq.b   .out
+
+        move.l  d0, a0
+        move.l  a2, dn_Name(a0)
+        moveq   #-1, d1
+        move.l  d1, dn_GlobalVec(a0)
+        move.l  a3, d1
+        lsr.l   #2, d1 ; To BPTR
+        move.l  d1, dn_Startup(a0)
+        lea     FakeSegList(pc), a1
+        move.l  a1, d1
+        lsr.l   #2, d1 ; to BPTR
+        move.l  d1, dn_SegList(a0)
+        move.l  #2048, dn_StackSize(a0)
+.out:
+        movem.l (sp)+, d1/a0-a3/a6
+        rts
 
         ifne DEBUG
         ; a0 = List
@@ -1093,12 +1287,38 @@ spDone:
         movem.l  (sp)+, d0/a0
         rts
 
+; Print BSTR in d0
+SerPutBstr:
+        movem.l  d0-d1/a0, -(sp)
+        add.l   d0, d0
+        add.l   d0, d0
+        move.l  d0, a0
+        moveq   #0, d1
+        move.b  (a0)+, d1 ; Length
+.loop:
+        subq.w  #1, d1
+        bmi.b   .done
+        move.b  (a0)+, d0
+        bsr     SerPutchar
+        bra.b   .loop
+.done:
+        movem.l  (sp)+, d0-d1/a0
+        rts
+
+
 SerPutCrLf:
         move.l  d0, -(sp)
-        move.b  #13, d0
+        moveq   #'\r', d0
         bsr     SerPutchar
-        move.b  #10, d0
+        moveq   #'\n', d0
         bsr     SerPutchar
+        move.l  (sp)+, d0
+        rts
+
+SerPutSpace:
+        move.l  d0, -(sp)
+        moveq   #' ', d0
+        bsr     SerPutChar
         move.l  (sp)+, d0
         rts
 
@@ -1121,8 +1341,23 @@ spnPrint:
         rts
         endc ; DEBUG
 
+        ifne DEBUG
+OpenMsg: dc.b 'Device open unit=$',0
+        even
+        endc ;DEBUG
+
 Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         movem.l d0-d7/a0-a6, -(sp)
+
+        ifne DEBUG
+        movem.l d0/a0, -(sp)
+        lea     OpenMsg(pc), a0
+        bsr     SerPutMsg
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        movem.l (sp)+, d0/a0
+        endc ; DEBUG
+
         addq.w  #1, LIB_OPENCNT(a6) ; Avoid expunge during open
         move.l  a1, a2 ; IOB in a2
 
@@ -1262,126 +1497,6 @@ CreateFileSysResource:
 cfsrOut:
         rts
 
-TASK_STACK_SIZE=2048
-
-        ; struct MemEntry for the task
-AddVolumeTaskME:
-        dc.w    0, 0, 0, 0, 0, 0, 0
-        dc.w    1 ; One entry
-        dc.l    MEMF_PUBLIC+MEMF_CLEAR
-        dc.l    tc_Sizeof+TASK_STACK_SIZE
-
-AddVolume:
-        ; dos isn't ready at this point, so start a task for later...
-
-        movem.l d1-d7/a0-a6, -(sp)
-        move.l  $4.w, a6
-
-        lea     AddVolumeTaskME(pc), a0
-        jsr     _LVOAllocEntry(a6)
-        tst.l   d0
-        beq     .out
-
-        move.l  d0, a3 ; a3=struct MemList*
-        move.l  ml_ME+me_Addr(a3), a2 ; get pointer to memory
-
-        move.b  #NT_TASK, LN_TYPE(a2)
-        move.b  #127, LN_PRI(a2)
-        lea     .taskname(pc), a0
-        move.l  a0, LN_NAME(a2)
-        lea     tc_Sizeof(a2), a0
-        move.l  a0, tc_SPLower(a2)
-        lea     TASK_STACK_SIZE(a0), a0
-        move.l  a0, tc_SPUpper(a2)
-        move.l  a0, tc_SPReg(a2)
-
-        ; Init tc_MemEntry
-
-        lea     tc_MemEntry(a2), a0
-        move.l  a0, LH_HEAD(a0)
-        addq.l  #4, LH_HEAD(a0) ; Point head to tail
-        clr.l   LH_TAIL(a0)     ; Clear tail
-        move.l  a0, LH_TAILPRED(a0) ; TailPred points to head
-
-        ; Add memlist
-        lea     tc_MemEntry(a2), a0
-        move.l  a3, a1
-        jsr     _LVOAddTail(a6)
-
-        move.l  a2, a4 ; save task pointer in a4
-
-        move.l  a2, a1
-        lea     AddVolumeTask(pc), a2 ; initialPC
-        sub.l   a3, a3 ; finalPC
-        jsr     _LVOAddTask(a6)
-
-        move.l  a4, d0 ; return value (task)
-
-        ifne DEBUG
-        lea     .taskname(pc), a0
-        bsr     SerPutMsg
-        bsr     SerPutNum
-        bsr     SerPutCrLf
-        endc ; DEBUG
-
-.out:
-        movem.l (sp)+, d1-d7/a0-a6
-        rts
-.taskname:
-        dc.b 'AddVolumeTask', 0
-        even
-
-AddVolumeTask:
-        move.l  $4.w, a6
-.wait:
-        ; Stupid polling mechanism...
-        ; Force a reschedule
-        move.l  ThisTask(a6), a1
-        moveq   #-128, d0
-        jsr     _LVOSetTaskPri(a6)
-
-        ; Can we open dos now?
-        lea     DosLibName(pc), a1
-        jsr     _LVOOldOpenLibrary(a6)
-        tst.l   d0
-        beq     .wait
-        move.l  d0, a6
-
-        moveq   #0, d7 ; Counter
-.loop:
-        cmp.w   RomCodeEnd+6(pc), d7
-        beq.b   .done
-
-        lea     .ProcName(pc), a0
-        move.l  a0, d1 ; name
-        moveq   #0, d2 ; priority
-        lea     FakeSegList(pc), a0
-        move.l  a0, d3 ; seglist
-        lsr.l   #2, d3 ; to bptr
-        move.l  #4096, d4 ; stackSize
-        jsr     _LVOCreateProc(a6)
-
-        ifne  DEBUG
-        lea     .ProcName(pc), a0
-        bsr     SerPutMsg
-        bsr     SerPutNum
-        bsr     SerPutCrLf
-        endc ; DEBUG
-
-        addq.w  #1, d7
-        bra.b   .loop
-
-.done:
-        move.l  a6, a1
-        move.l  $4.w, a6
-        jsr     _LVOCloseLibrary(a6)
-
-        moveq   #0, d0
-        rts
-
-.ProcName: dc.b 'virtualhd handler proc', 0
-        even
-
         ; Structure shared with emulator
         ; Keep in sync
         rsreset
@@ -1390,7 +1505,6 @@ handler_DosBase rs.l 1
 handler_MsgPort rs.l 1
 handler_DosList rs.l 1
 handler_Id      rs.l 1
-handler_DevName rs.l 1
 handler_Sizeof  rs.b 0
 
         cnop    0,4 ; Must be long word aligned
@@ -1401,100 +1515,121 @@ FakeSegList:
         sub.l   #handler_Sizeof, sp
         move.l  sp, a4
 
-        lea     RomCodeEnd(pc), a0
-        move.l  a4, (a0)
-        move.w  #OP_VOLUME_GET_ID, 4(a0)
-
         move.l  $4.w, a6
         move.l  a6, handler_SysBase(a4)
         move.l  ThisTask(a6), a1
-        lea.l   pr_MsgPort(a1), a1
-        move.l  a1, handler_MsgPort(a4)
+        lea.l   pr_MsgPort(a1), a3
+        move.l  a3, handler_MsgPort(a4)
 
         ifne DEBUG
+        movem.l d0/a0/a1, -(sp)
+        lea     .text_Starting(pc), a0
+        bsr     SerPutMsg
         move.l  ThisTask(a6), a1
         move.l  LN_NAME(a1), a0
         bsr     SerPutMsg
-        move.b  #$20, d0
-        bsr     SerPutchar
+        bsr     SerPutSpace
         move.l  a0, d0
         bsr     SerPutNum
         bsr     SerPutCrLf
+        movem.l (sp)+, d0/a0/a1
         endc
+
+        ; Get startup packet
+        move.l  a3, a0
+        jsr     _LVOWaitPort(a6)
+        move.l  a3, a0
+        jsr     _LVOGetMsg(a6)
+        move.l  d0, a2
+        move.l  LN_NAME(a2), a2 ; a2 = DosPacket*
 
         lea     DosLibName(pc), a1
         jsr     _LVOOldOpenLibrary(a6)
-        tst.l   d0
-        beq     .err
         move.l  d0, handler_DosBase(a4)
+        beq     .err
 
+        ; KS1.3 does not initialize arg1/arg3
+        tst.l   dp_Arg3(a2)
+        bne.b   .nofix
+        bsr     FixStartupMessage
+
+        ; arg1 = BSTR to mount name
+        ; arg2 = BPTR to startup packet
+        ; arg3 = BPTR to device node
+
+.nofix:
+
+        ifne DEBUG
+        movem.l a0/d0, -(sp)
+        lea     .text_Startup1(pc), a0
+        bsr     SerPutMsg
+        move.l  dp_Arg1(a2), d0
+        bsr     SerPutBstr
+        lea     .text_Startup2(pc), a0
+        bsr     SerPutMsg
+        move.l  dp_Arg2(a2), d0
+        add.l   d0, d0
+        add.l   d0, d0
+        bsr     SerPutNum
+        lea     .text_Startup3(pc), a0
+        bsr     SerPutMsg
+        move.l  dp_Arg3(a2), d0
+        add.l   d0, d0
+        add.l   d0, d0
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        movem.l (sp)+, a0/d0
+        endc
+
+        move.l  dp_Arg2(a2), d0
+        add.l   d0, d0
+        add.l   d0, d0
+        move.l  d0, a0
+        move.l  fssm_Unit(a0), handler_Id(a4)
+        move.l  dp_Arg3(a2), d0
+        add.l   d0, d0
+        add.l   d0, d0
+        move.l  d0, handler_DosList(a4)
+        move.l  d0, a0
+        move.l  a3, dol_Task(a0) ; Set task in device node
+
+        ; Reply to startup packet
+        move.l  #DOSTRUE, dp_Res1(a2)
+        move.l  #0, dp_Res2(a2)
+        bsr     .dosreply
+
+        ; Add volume
         move.l  #dol_Sizeof, d0
         move.l  #MEMF_PUBLIC+MEMF_CLEAR, d1
         jsr     _LVOAllocMem(a6)
         tst.l   d0
         beq     .err
-        move.l  d0, a3 ; a3=DosList*
-        move.l  a3, handler_DosList(a4)
+        move.l  d0, a2
 
         move.l  handler_DosBase(a4), a6
 
-        move.l  handler_MsgPort(a4), dol_Task(a3)
-        move.l  handler_DevName(a4), dol_Name(a3)
-        move.l  #DLT_VOLUME, dol_Type(a3)
-        move.l  #ID_DOS_DISK, dol_DiskType(a3)
-        lea     dol_VolumeDate(a3), a0
+        move.l  handler_MsgPort(a4), dol_Task(a2)
+        move.l  handler_DosList(a4), a0
+        move.l  dol_Name(a0), dol_Name(a2)
+        move.l  #DLT_VOLUME, dol_Type(a2)
+        move.l  #ID_DOS_DISK, dol_DiskType(a2)
+        lea     dol_VolumeDate(a2), a0
         move.l  a0, d1
         jsr     _LVODateStamp(a6)
-
-        ; KS1.x?
-        cmp.w   #36, LIB_VERSION(a6)
-        bcc.b   .waitlock
-
-        ; Yes, so no AddDosEntry
-
-        move.l  handler_SysBase(a4), a6
-        jsr     _LVOForbid(a6)
-
-        move.l  handler_DosBase(a4), a0
-        move.l  dl_Root(a0), a0
-        move.l  rn_Info(a0), a0 ; BPTR
-        add.l   a0, a0
-        add.l   a0, a0
-        move.l  di_DevInfo(a0), dol_Next(a3)
-        move.l  a3, d0
-        lsr.l   #2, d0
-        move.l  d0, di_DevInfo(a0)
-
-        jsr     _LVOPermit(a6)
-        bra.b   .volAdded
-
-        ; Must use AttemptLockDosList to avoid deadlock
-.waitlock:
-        moveq   #LDF_WRITE+LDF_VOLUMES, d1
-        jsr     _LVOAttemptLockDosList(a6)
-        subq.l  #2, d0 ; AttemptLockDosList can return 0 or 1 for failure (!)
-        bmi.s   .waitlock
-
-        move.l  a3, d1
-        jsr     _LVOAddDosEntry(a6)
-        move.l  d0, -(sp)
-
-        moveq   #LDF_WRITE+LDF_VOLUMES, d1
-        jsr     _LVOUnLockDosList(a6)
-        move.l   (sp)+, d0
+        bsr     AddDosEntry
+        tst.l   d0
         beq     .err
 
-.volAdded:
+        ; Tell host we're ready
         lea     RomCodeEnd(pc), a5 ; a5 = comm area
-
         move.l  a4, (a5)
         move.w  #OP_VOLUME_INIT, 4(a5)
 
+        move.l  handler_SysBase(a4), a6
 .waitmsg:
         ; In this loop:
         ; a4 = handler data, a5 = comm area, a6 = ExecBase
 
-        move.l  handler_SysBase(a4), a6
         move.l  handler_MsgPort(a4), a0
         jsr     _LVOWaitPort(a6)
 
@@ -1524,10 +1659,7 @@ FakeSegList:
         move.l  a2, (a5)
         move.w  #OP_VOLUME_PACKET, 4(a5)
 
-        move.l  dp_Port(a2), a0 ; grab reply port for PutMsg
-        move.l  handler_MsgPort(a4), dp_Port(a2) ; our reply port
-        move.l  dp_Link(a2), a1 ; message
-        jsr     _LVOPutMsg(a6)
+        bsr     .dosreply
 
         bra     .msgloop
 .err:
@@ -1540,10 +1672,101 @@ FakeSegList:
         add.l   #handler_Sizeof, a7
         rts
 
+; Reply to dos packet in a2
+; transhes a0-a1
+.dosreply:
+        move.l  dp_Port(a2), a0 ; grab reply port for PutMsg
+        move.l  handler_MsgPort(a4), dp_Port(a2) ; our reply port
+        move.l  dp_Link(a2), a1 ; message
+        jmp     _LVOPutMsg(a6)
+
         ifne DEBUG
+.text_Starting: dc.b 'FS handler starting: ',0
+.text_Startup1: dc.b 'Startup msg: "', 0
+.text_Startup2: dc.b '" dn_Startup=$', 0
+.text_Startup3: dc.b ' deviceNode=$', 0
 .text_GotMsg: dc.b 'Got message ', 0
 .text_Failed: dc.b 'Failed to add device', 13, 10, 0
         even
         endc ; DEBUG
+
+; input: a2=entry, a6=dosbase
+; output: D0=result
+AddDosEntry:
+        ; KS1.x?
+        cmp.w   #36, LIB_VERSION(a6)
+        bcc.b   .waitlock
+
+        move.l  a6, -(sp)
+        move.l  handler_SysBase(a4), a6
+        jsr     _LVOForbid(a6)
+        bsr     GetDosList
+        move.l  (a0), dol_Next(a2)
+        move.l  a2, d0
+        lsr.l   #2, d0 ; to bptr
+        move.l  d0, (a0)
+        jsr     _LVOPermit(a6)
+        move.l  (sp)+, a6
+        moveq   #1, d0 ; success
+        rts
+.waitlock:
+        moveq   #LDF_WRITE+LDF_ALL, d1
+        jsr     _LVOAttemptLockDosList(a6)
+        subq.l  #2, d0 ; AttemptLockDosList can return 0 or 1 for failure (!)
+        bmi.s   .waitlock
+
+        move.l  a2, d1
+        jsr     _LVOAddDosEntry(a6)
+        move.l  d0, -(sp)
+
+        moveq   #LDF_WRITE+LDF_ALL, d1
+        jsr     _LVOUnLockDosList(a6)
+        move.l   (sp)+, d0
+        rts
+
+; input a2=message, a6=sysbase
+FixStartupMessage:
+        movem.l a0-a1/d0-d1, -(sp)
+        jsr     _LVOForbid(a6)
+        bsr     GetDosList
+        move.l  dp_Arg2(a2), d1
+.loop:
+        move.l  dol_Next(a0), d0 ; d0 = BPTR to dos list entry
+        beq.b   .done
+        move.l  d0, a0
+        add.l   a0, a0
+        add.l   a0, a0 ; From BPTR
+        tst.l   dol_Type(a0) ; == DLT_DEVICE?
+        bne.b   .loop
+
+        ifne DEBUG
+        movem.l d0/a0, -(sp)
+        move.l  dol_Name(a0), d0
+        bsr     SerPutBstr
+        bsr     SerPutSpace
+        move.l  dol_Startup(a0), d0
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        movem.l (sp)+, d0/a0
+        endc ; DEBUG
+
+        cmp.l   dol_Startup(a0), d1
+        bne.b   .loop
+        move.l  dol_Name(a0), dp_Arg1(a2)
+        move.l  d0, dp_Arg3(a2)
+.done:
+        jsr     _LVOPermit(a6)
+        movem.l (sp)+, a0-a1/d0-d1
+        rts
+
+; Return dos list in a0 (Must be in forbid state)
+GetDosList:
+        move.l  handler_DosBase(a4), a0
+        move.l  dl_Root(a0), a0
+        move.l  rn_Info(a0), a0
+        add.l   a0, a0
+        add.l   a0, a0  ; From BPTR
+        lea.l   di_DevInfo(a0), a0
+        rts
 
 RomCodeEnd:
