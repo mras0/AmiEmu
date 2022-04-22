@@ -176,6 +176,7 @@ public:
         uint32_t current_pc;
         uint16_t instruction;
         bool stopped;
+        uint8_t exception;
     };
     using cycle_handler = std::function<void (uint8_t)>;
     using read_ipl_func = std::function<uint8_t(void)>;

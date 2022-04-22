@@ -120,14 +120,15 @@ public:
         if (state_.stopped) {
             if (!trace_active && !state_.ipl) {
                 poll_ipl();
-                return { state_.pc, state_.pc, iwords_[0], true };
+                return { state_.pc, state_.pc, iwords_[0], true, 0 };
             }
             state_.stopped = false;
         }
 
         ++state_.instruction_count;
         start_pc_ = state_.pc;
-        step_result step_res { state_.pc, 0, 0, false };
+        last_execption_ = 0;
+        step_result step_res { state_.pc, 0, 0, false, 0 };
 
         if (state_.ipl > (state_.sr & srm_ipl) >> sri_ipl) {
             do_interrupt(state_.ipl);
@@ -357,6 +358,8 @@ found:
 
         step_res.current_pc = state_.pc;
         step_res.stopped = state_.stopped;
+        step_res.exception = last_execption_;
+        last_execption_ = 0;
 
         if (state_.pc & 1) {
             invalid_access_address_ = state_.pc;
@@ -401,6 +404,7 @@ private:
     std::ostream* trace_ = nullptr;
     uint32_t invalid_access_address_ = 0;
     uint16_t invalid_access_info_ = 0;
+    uint8_t last_execption_ = 0;
 #ifndef NDEBUG
     bool read_ipled_ = false;
 #endif
@@ -964,6 +968,8 @@ private:
     void do_interrupt_impl(interrupt_vector vec, uint8_t ipl)
     {
         assert(vec > interrupt_vector::reset_pc); // RESET doesn't save anything
+
+        last_execption_ = static_cast<uint8_t>(vec);
 
         // Common:
         // push_u32(pc)        8(0/2)

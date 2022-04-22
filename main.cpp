@@ -1050,6 +1050,7 @@ int main(int argc, char* argv[])
         } wait_mode = wait_none;
         uint32_t wait_arg = 0;
         std::string wait_process_name;
+        uint32_t exception_break_mask = 0;
         uint32_t chip_cycles_count = 0, cpu_cycles_count = 0;
         uint32_t last_vhpos = 0;
         std::vector<uint32_t> breakpoints;
@@ -1662,6 +1663,16 @@ int main(int argc, char* argv[])
                             } else {
                                 std::cerr << "Invalid number of arguments\n";
                             }
+                        } else if (args[0] == "il") {
+                            if (args.size() > 1) {
+                                if (auto [valid, mask] = get_simple_expr(args[1]); valid)
+                                    exception_break_mask = mask;
+                                else
+                                    std::cerr << "Invalid mask\n";
+                            } else {
+                                exception_break_mask = ~0U;
+                            }
+                            std::cout << "Exception break mask: $" << hexfmt(exception_break_mask) << "\n";
                         } else if (args[0] == "insert_disk") {
                             if (args.size() >= 2) {
                                 const int drive = args[1].length() == 1 && isdigit(args[1][0]) ? args[1][0] - '0' : -1;
@@ -1719,7 +1730,7 @@ int main(int argc, char* argv[])
                             } else if (args.size() == 3) {
                                 const auto [size, ptr] = get_register_address(args[1].c_str(), s);
                                 if (size) {
-                                    assert((size == 2 || size == 4) && ptr);                                    
+                                    assert((size == 2 || size == 4) && ptr);
                                     if (const auto [ok, val] = get_simple_expr(args[2]); ok) {
                                         if (size == 2) {
                                             if (val < 65536)
@@ -1736,6 +1747,8 @@ int main(int argc, char* argv[])
                             } else {
                                 std::cerr << "Invalid number of arguments\n";
                             }
+                        } else if (args[0] == "reset") {
+                            reset = keyboard_reset;
                         } else if (args[0] == "s") {
                             if (args.size() > 1 && !args[1].empty()) {
                                 std::vector<uint8_t> needle;
@@ -2167,6 +2180,11 @@ unknown_command:
                         cstep(false);
                     } while (!custom.current_ipl() && !new_frame && !debug_mode);
                 } else {
+                    if (cpu_step.exception && exception_break_mask & (1 << cpu_step.exception)) {
+                        active_debugger();
+                        std::cout << "Breaking on exception " << static_cast<int>(cpu_step.exception) << "\n";
+                    }
+
                     switch (wait_mode) {
                     case wait_none:
 #ifdef DEBUG_BREAK_INST
