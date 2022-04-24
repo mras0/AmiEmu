@@ -2017,6 +2017,156 @@ const structure_definition Process {
     }
 };
 
+// Global vector (info from http://aminet.net/package/dev/misc/BCPL)
+const structure_definition DosGlobalVec
+{
+    "DosGlobalVec",
+    {
+        { "SYSREQUEST", long_type, -0x84 },
+        { "TOCSTR", long_type, -0x80 },
+        { "TOBSTR", long_type, -0x7c },
+        { "EXECUTEC", long_type, -0x6c },
+        { "ISINTERACT", long_type, -0x68 },
+        { "DATESTAMPC", long_type, -0x64 },
+        { "SETPROTECT", long_type, -0x60 },
+        { "SETCOMMENT", long_type, -0x5c },
+        { "DEVICEPROCC", long_type, -0x58 },
+        { "QUEUEPKT", long_type, -0x54 },
+        { "CLEARMEM", long_type, -0x50 },
+        { "LOADSEG", long_type, -0x4c },
+        { "CREATEPROCC", long_type, -0x48 },
+        { "IOERR", long_type, -0x44 },
+        { "CURRENTDIR", long_type, -0x40 },
+        { "CREATEDIRC", long_type, -0x3c },
+        { "INFO", long_type, -0x38 },
+        { "EXNEXT", long_type, -0x34 },
+        { "EXAMINE", long_type, -0x30 },
+        { "LOCKC", long_type, -0x2c },
+        { "RENAMEC", long_type, -0x28 },
+        { "DELETEFILE", long_type, -0x24 },
+        { "SEEK", long_type, -0x20 },
+        { "WRITE", long_type, -0x18 },
+        { "READ", long_type, -0xc },
+        { "STRNCPY", long_type, -0x8 },
+        { "OPEN", long_type, -0x4 },
+        { "VECSIZE", long_type, 0x0 },
+        { "START", long_type, 0x4 },
+        { "EXIT", long_type, 0x8 },
+        { "MULTIPLY", long_type, 0xc },
+        { "DIVIDE", long_type, 0x10 },
+        { "MOD", long_type, 0x14 },
+        { "SETIO", long_type, 0x18 },
+        { "PACKLW", long_type, 0x20 },
+        { "UNPACKLW", long_type, 0x24 },
+        { "SETRES2", long_type, 0x28 },
+        { "MAKEGV", long_type, 0x34 },
+        { "FINDTASK", long_type, 0x38 },
+        { "GETBYTE", long_type, 0x3c },
+        { "PUTBYTE", long_type, 0x40 },
+        { "LEVEL", long_type, 0x44 },
+        { "LONGJUMP1", long_type, 0x48 },
+        { "ALLOCMEM", long_type, 0x4c },
+        { "LONGJUMP2", long_type, 0x50 },
+        { "DOIO", long_type, 0x54 },
+        { "SENDIO", long_type, 0x58 },
+        { "CREATECO", long_type, 0x5c },
+        { "DELETECO", long_type, 0x60 },
+        { "CALLCO", long_type, 0x64 },
+        { "COWAIT", long_type, 0x68 },
+        { "RESUMECO", long_type, 0x6c },
+        { "INSTALLSEG", long_type, 0x70 },
+        { "GETVEC1", long_type, 0x74 },
+        { "FREEVEC", long_type, 0x78 },
+        { "OPENDEV", long_type, 0x7c },
+        { "CLOSEDEV", long_type, 0x80 },
+        { "CREATEPROCB", long_type, 0x84 },
+        { "REMPROCESS", long_type, 0x88 },
+        { "PARENTDIR", long_type, 0x8c },
+        { "SETSIGS", long_type, 0x90 },
+        { "CLEARSIGS", long_type, 0x94 },
+        { "DOSALERT", long_type, 0x98 },
+        { "FINDROOT", long_type, 0x9c },
+        { "READINC", long_type, 0xa0 },
+        { "TASKWAIT1", long_type, 0xa4 },
+        { "PUTPKT", long_type, 0xa8 },
+        { "WRITEOUTC", long_type, 0xac },
+        { "PACKSTRING", long_type, 0xb0 },
+        { "UNPACKSTRING", long_type, 0xb4 },
+        { "HOLDTASK", long_type, 0xb8 },
+        { "DELAY", long_type, 0xbc },
+        { "SENDPKT", long_type, 0xc0 },
+        { "RETURNPKT", long_type, 0xc4 },
+        { "OPENWINDOW", long_type, 0xc8 },
+        { "SETCURDIR", long_type, 0xcc },
+        { "BUILDSYSREQ", long_type, 0xd0 },
+        { "WRITET", long_type, 0xd4 },
+        { "RDCH", long_type, 0xd8 },
+        { "UNRDCH", long_type, 0xdc },
+        { "WRCH", long_type, 0xe0 },
+        { "READINB", long_type, 0xe4 },
+        { "WRITEOUTB", long_type, 0xe8 },
+        { "FINDINPUT", long_type, 0xec },
+        { "FINDOUTPUT", long_type, 0xf0 },
+        { "SELECTINPUT", long_type, 0xf4 },
+        { "SELECTOUTPUT", long_type, 0xf8 },
+        { "ENDREAD", long_type, 0xfc },
+        { "ENDWRITE", long_type, 0x100 },
+        { "INPUT", long_type, 0x104 },
+        { "OUTPUT", long_type, 0x108 },
+        { "READN", long_type, 0x10c },
+        { "NEWLINE", long_type, 0x110 },
+        { "WRITEI", long_type, 0x114 },
+        { "WRITEN", long_type, 0x118 },
+        { "WRITEHEX", long_type, 0x11c },
+        { "WRITEOCT", long_type, 0x120 },
+        { "WRITES", long_type, 0x124 },
+        { "WRITEF", long_type, 0x128 },
+        { "TOUPPER", long_type, 0x12c },
+        { "CHARCMP", long_type, 0x130 },
+        { "STRCMP", long_type, 0x134 },
+        { "RDARGS", long_type, 0x138 },
+        { "RDLINE", long_type, 0x13c },
+        { "PARSESTRING", long_type, 0x140 },
+        { "LOAD", long_type, 0x144 },
+        { "UNLOAD", long_type, 0x148 },
+        { "TIDYUP", long_type, 0x150 },
+        { "ADDDEVICE", long_type, 0x154 },
+        { "DATESTAMPB", long_type, 0x158 },
+        { "WAITFORCHAR", long_type, 0x15c },
+        { "EXECLIB", long_type, 0x160 },
+        { "FINDSEGARRAY", long_type, 0x164 },
+        { "DELETEOBJ", long_type, 0x168 },
+        { "RENAMEB", long_type, 0x16c },
+        { "CLOSE", long_type, 0x174 },
+        { "GETWORD", long_type, 0x178 },
+        { "PUTWORD", long_type, 0x17c },
+        { "TASKWAIT2", long_type, 0x190 },
+        { "EXECUTEB", long_type, 0x194 },
+        { "DEVICEPROCB", long_type, 0x198 },
+        { "LIBCALL", long_type, 0x19c },
+        { "WRITEERR", long_type, 0x1a0 },
+        { "FINDCONHAND", long_type, 0x1a4 },
+        { "FINDFILEHAND", long_type, 0x1a8 },
+        { "EXTDEVNAME", long_type, 0x1ac },
+        { "LOCKB1", long_type, 0x1b0 },
+        { "UNLOCK", long_type, 0x1b4 },
+        { "GETLONG", long_type, 0x1b8 },
+        { "PUTLONG", long_type, 0x1bc },
+        { "OPENFILE", long_type, 0x1c0 },
+        { "DUPLOCK", long_type, 0x1c4 },
+        { "MAKESYSREQ", long_type, 0x1c8 },
+        { "STRCPY", long_type, 0x1cc },
+        { "RUNLOADED", long_type, 0x1e4 },
+        { "LOCKB2", long_type, 0x1ec },
+        { "FINDDEVINFO", long_type, 0x1f0 },
+        { "CREATEDIRB", long_type, 0x1f4 },
+        { "CMPTIME", long_type, 0x1f8 },
+        { "TIMERIO", long_type, 0x1fc },
+        { "SETTIME", long_type, 0x200 },
+        { "FINDCLI", long_type, 0x218 },
+    }
+};
+
 // intution
 TEMP_STRUCT(Window);
 TEMP_STRUCT(Screen);
@@ -2478,6 +2628,16 @@ public:
                 continue;
             }
 
+            // quick hack for BCPL code
+            if (parts[1] == "BCPLCODE") {
+                parts[1] = "CODE";
+                forced_values_.insert({ addr, { regname::A0, 0 } });
+                delayed_forced_values_.push_back({ addr, regname::A2, "DosGlobalVec" });
+                forced_values_.insert({ addr, { regname::A4, addr } }); // Only true if used for function entry!
+                delayed_forced_values_.push_back({ addr, regname::A5, "BcplSupport" });
+                // A6 is return function
+            }
+
             const auto t = parse_type(parts[1]);
             if (!t)
                 throw std::runtime_error { "Invalid type in " + filename + " line " + std::to_string(linenum) + ": " + line };
@@ -2811,6 +2971,26 @@ public:
                                                         {},
                                                         { { regname::D1, "file", &bptr_type }, { regname::D2, "buffer", &unknown_ptr }, { regname::D3, "length", &long_type } },
                                                     } });
+
+        // BCPL stuff
+        alloc_library("DosGlobalVec", DosGlobalVec);
+        static structure_definition bcplcode
+        {
+            "BcplCode",
+            {
+                { "CALL", code_type, 0x00 },
+                { "MUL", code_type, 0x10 },
+                { "DIV", code_type, 0x12 },
+                { "DIV2", code_type, 0x14 },
+            }
+        };
+        const auto fake_bcpl_entry = alloc_library("BcplSupport", bcplcode);
+        functions_.insert({ fake_bcpl_entry, function_description {
+                                                 {},
+                                                 { { regname::A4, "function", &code_ptr } },
+                                             } });
+
+
         //std::cerr << "Fake execbase: $" << hexfmt(exec_base_) << "\n";
     }
 
@@ -3094,9 +3274,11 @@ public:
             }
         }
 
+#if 0
         std::cerr << "exec_base = $" << hexfmt(exec_base_) << "\n";
         for (const auto& l : library_bases_)
             std::cerr << l.first << ": $" << hexfmt(l.second) << "\n";
+#endif
     }
 
 private:
