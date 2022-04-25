@@ -523,6 +523,7 @@ enum class base_data_type {
     bptr_,
     bstr_,
     struct_,
+    bcpl_seglist_,
 };
 
 class structure_definition;
@@ -601,6 +602,7 @@ const type code_ptr { code_type, 0, base_data_type::ptr_ };
 const type copper_code_ptr { copper_code_type, 0, base_data_type::ptr_ };
 const type bptr_type { unknown_type, 0, base_data_type::bptr_ };
 const type bstr_type { base_data_type::bstr_ };
+const type bcpl_seglist_type { base_data_type::bcpl_seglist_ };
 
 std::unordered_map<std::string, const type*> typenames {
     { "UNKNOWN", &unknown_type },
@@ -610,6 +612,7 @@ std::unordered_map<std::string, const type*> typenames {
     { "LONG", &long_type },
     { "CODE", &code_type },
     { "COPPER", &copper_code_type },
+    { "BSEGLIST", &bcpl_seglist_type },
 };
 
 uint32_t sizeof_type(const type& t);
@@ -910,6 +913,8 @@ std::ostream& operator<<(std::ostream& os, const type& t)
         return os << "BSTR";
     case base_data_type::struct_:
         return os << "struct " << t.struct_def()->name();
+    case base_data_type::bcpl_seglist_:
+        return os << "BSEGLIST";
     default:
         assert(false);
         break;
@@ -940,6 +945,8 @@ uint32_t sizeof_type(const type& t)
         return 4;
     case base_data_type::struct_:
         return t.struct_def()->size();
+    case base_data_type::bcpl_seglist_:
+        // ??
     default:
         assert(false);
     }
@@ -2164,6 +2171,17 @@ const structure_definition DosGlobalVec
         { "TIMERIO", long_type, 0x1fc },
         { "SETTIME", long_type, 0x200 },
         { "FINDCLI", long_type, 0x218 },
+        { "globvec_Private", make_array_type(long_type, 0x100), 0x21c },
+    }
+};
+
+const structure_definition BcplSupport {
+    "BcplSupport",
+    {
+        { "CALL", code_type, 0x00 },
+        { "MUL", code_type, 0x10 },
+        { "DIV", code_type, 0x12 },
+        { "DIV2", code_type, 0x14 },
     }
 };
 
@@ -2183,6 +2201,7 @@ const structure_definition IntuitionBase {
         { "MouseX", word_type },
         { "Seconds", long_type },
         { "Micros", long_type },
+        { "ib_Private", make_array_type(long_type, 0x564/4) }, // 0x5d4 is total size in KS1.3 (including the above stuff, but leave a little extra)
 
         { "_LVOOpenIntuition", libvec_code, -30 },
         { "_LVOIntuition", libvec_code, -36 },
@@ -2596,6 +2615,18 @@ public:
 
             std::vector<std::string> parts = split(line.substr(start, end - start), ' ');
 
+            if (parts.size() == 1) {
+                parts = split(parts[0], '=');
+                if (parts.size() == 2) {
+                    const auto [ok, addr] = from_hex(parts[0]);
+                    if (ok) {
+                        function_aliases_.push_back(std::make_pair(addr, parts[1]));
+                        continue;
+                    }
+                }
+                throw std::runtime_error { "Invalid function alias in " + filename + " line " + std::to_string(linenum) + ": " + line };
+            }
+
             if (parts.size() == 2) {
                 const auto [ok, addr] = from_hex(parts[0]);
                 const auto rn = get_reg_and_equal(parts[1]);
@@ -2632,9 +2663,9 @@ public:
             if (parts[1] == "BCPLCODE") {
                 parts[1] = "CODE";
                 forced_values_.insert({ addr, { regname::A0, 0 } });
-                delayed_forced_values_.push_back({ addr, regname::A2, "DosGlobalVec" });
+                delayed_forced_values_.push_back({ addr, regname::A2, DosGlobalVec.name() });
                 forced_values_.insert({ addr, { regname::A4, addr } }); // Only true if used for function entry!
-                delayed_forced_values_.push_back({ addr, regname::A5, "BcplSupport" });
+                delayed_forced_values_.push_back({ addr, regname::A5, BcplSupport.name() });
                 // A6 is return function
             }
 
@@ -2974,17 +3005,7 @@ public:
 
         // BCPL stuff
         alloc_library("DosGlobalVec", DosGlobalVec);
-        static structure_definition bcplcode
-        {
-            "BcplCode",
-            {
-                { "CALL", code_type, 0x00 },
-                { "MUL", code_type, 0x10 },
-                { "DIV", code_type, 0x12 },
-                { "DIV2", code_type, 0x14 },
-            }
-        };
-        const auto fake_bcpl_entry = alloc_library("BcplSupport", bcplcode);
+        const auto fake_bcpl_entry = alloc_library("BcplSupport", BcplSupport);
         functions_.insert({ fake_bcpl_entry, function_description {
                                                  {},
                                                  { { regname::A4, "function", &code_ptr } },
@@ -2994,18 +3015,49 @@ public:
         //std::cerr << "Fake execbase: $" << hexfmt(exec_base_) << "\n";
     }
 
+    std::optional<uint32_t> label_adddress(const std::string& lab)
+    {
+        // TODO: This lookup is slow
+        auto it = std::find_if(labels_.begin(), labels_.end(), [&lab = lab](const auto& l) { return l.second.name == lab; });
+        if (it == labels_.end())
+            return {};
+        return it->first;
+    }
+
     void run()
     {
         handle_predef_info();
         if (!exec_base_)
             add_fakes();
+
         for (const auto& [addr, reg, lab] : delayed_forced_values_) {
-            // TODO: This lookup is slow
-            auto it = std::find_if(labels_.begin(), labels_.end(), [&lab = lab](const auto& l) { return l.second.name == lab; });
-            if (it == labels_.end()) {
+            auto la = label_adddress(lab);
+            if (!la)
                 throw std::runtime_error { "Invalid label \"" + lab + "\" used for forced value at address $" + hexstring(addr) };
+            forced_values_.insert({ addr, { reg, *la } });
+        }
+        for (const auto& [addr, expr] : function_aliases_) {
+            auto base = expr;
+            int32_t ofs = 0;
+            auto pos = base.find_first_of("-");
+            if (pos != std::string::npos) {
+                auto [ok, val] = from_hex(base.substr(pos + 1));
+                if (!ok)
+                    throw std::runtime_error { "Invalid function alias for expression address $" + hexstring(addr) + " \"" + expr + "\"" };
+                base = base.substr(0, pos);
+                ofs = -static_cast<int32_t>(val);
             }
-            forced_values_.insert({ addr, { reg, it->first } });
+            auto la = label_adddress(base);
+            if (!la)
+                throw std::runtime_error { "Invalid function alias for expression address (label not found) $" + hexstring(addr) + " \"" + expr + "\"" };
+
+            auto fit = functions_.find(*la + ofs);
+            if (fit == functions_.end())
+                throw std::runtime_error { "Invalid function alias for expression address (function not found) $" + hexstring(addr) + " \"" + expr + "\"" };
+
+            if (!functions_.insert({ addr, fit->second }).second)
+                throw std::runtime_error { "Invalid function alias for expression address (function already defined there) $" + hexstring(addr) + " \"" + expr + "\"" };
+            add_root(addr, simregs{});
         }
 
         process_roots();
@@ -3307,6 +3359,7 @@ private:
     uint32_t exec_base_ = 0;
     std::map<std::string, uint32_t> library_bases_;
     std::vector<delayed_forced_value> delayed_forced_values_;
+    std::vector<std::pair<uint32_t, std::string>> function_aliases_;
 
     uint32_t fake_process_ = 0;
 
@@ -4476,6 +4529,7 @@ private:
     void maybe_find_copper_list_at(uint32_t addr);
     void handle_data_at(uint32_t addr, const type& t);
     void handle_pointer_to(uint32_t addr, const type& t);
+    void handle_bseglist_at(uint32_t addr, const std::string& name);
     void handle_predef_info();
     uint32_t check_exec_base();
 };
@@ -4634,6 +4688,32 @@ void analyzer::maybe_find_copper_list_at(uint32_t addr)
     add_label(start_addr, "copperlist_" + hexstring(start_addr), make_array_type(copper_code_type, len * 2));
 }
 
+void analyzer::handle_bseglist_at(uint32_t addr, const std::string& name)
+{
+    if (name.empty())
+        throw std::runtime_error{"TODO: Handle nameless BCPL seglist"};
+
+    auto globvec = label_adddress(DosGlobalVec.name());
+    auto supp = label_adddress(BcplSupport.name());
+    if (!globvec || !supp)
+        throw std::runtime_error { "TODO in handle_bseglist_at use delayed lookup for globalvec/bcplsupport?" };
+
+    simregs sr {};
+    sr.a[0] = simval { 0 };
+    sr.a[2] = simval { *globvec };
+    sr.a[5] = simval { *supp };
+    for (uint32_t cnt = 0; addr + 3 <= max_mem && written_[addr] && !data_handled_at_[addr]; ++cnt) {
+        data_handled_at_[addr] = true;
+
+        add_label(addr, name + "_Link" + std::to_string(cnt), bptr_type, false);
+        add_label(addr + 4, name + "_Size" + std::to_string(cnt), long_type, false);
+        const auto code_addr = addr + 8;
+        sr.a[4] = simval { code_addr };
+        add_root(code_addr, sr);
+        addr = get_u32(&data_[addr]) << 2;
+    }
+}
+
 void analyzer::handle_data_at(uint32_t addr, const type& t)
 {
     if (!addr || addr >= max_mem || !written_[addr])
@@ -4689,6 +4769,9 @@ void analyzer::handle_data_at(uint32_t addr, const type& t)
     case base_data_type::struct_:
         handle_struct_at(addr, *t.struct_def());
         break;
+    //case base_data_type::bcpl_seglist_:
+    //    handle_bseglist_at(addr);
+    //    break;
     }
 
     data_handled_at_[addr] = true;
@@ -4754,6 +4837,12 @@ void analyzer::handle_predef_info()
 {
     for (const auto& i : predef_info_) {
         const auto& t = *i.second.t;
+
+        if (&t == &bcpl_seglist_type) {
+            handle_bseglist_at(i.first, i.second.name);
+            continue;
+        }
+
         add_label(i.first, i.second.name, t, false);
         // Don't add root here in case better register values can be inferred
         if (&t != &code_type)
