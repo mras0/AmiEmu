@@ -952,7 +952,7 @@ bool run_timing_tests()
         { "MOVE.B 0.W, D0"                  , 12, 3 },
         { "MOVE.B 0.L, D0"                  , 16, 4 },
         { "MOVE.B 0(pc), D0"                , 12, 3 },
-        { "MOVE.B 0(pc,D0.L), D0"           , 14, 3 },
+        { "MOVE.B 4096(pc,D0.L), D0"        , 14, 3 },
         { "MOVE.B #$12, D0"                 ,  8, 2 },
 
         { "MOVE.W D0, D1"                   ,  4, 1 },
@@ -965,7 +965,7 @@ bool run_timing_tests()
         { "MOVE.W 0.W, D0"                  , 12, 3 },
         { "MOVE.W 0.L, D0"                  , 16, 4 },
         { "MOVE.W 0(pc), D0"                , 12, 3 },
-        { "MOVE.W 0(pc,D0.L), D0"           , 14, 3 },
+        { "MOVE.W 4096(pc,D0.L), D0"        , 14, 3 },
         { "MOVE.W #$12, D0"                 ,  8, 2 },
 
         { "MOVE.L D0, D1"                   ,  4, 1 },
@@ -978,7 +978,7 @@ bool run_timing_tests()
         { "MOVE.L 0.W, D0"                  , 16, 4 },
         { "MOVE.L 0.L, D0"                  , 20, 5 },
         { "MOVE.L 0(pc), D0"                , 16, 4 },
-        { "MOVE.L 0(pc,D0.L), D0"           , 18, 4 },
+        { "MOVE.L 4096(pc,D0.L), D0"        , 18, 4 },
         { "MOVE.L #$12, D0"                 , 12, 3 },
 
         { "MOVE.W D0, (A0)"                 ,  8, 2 },

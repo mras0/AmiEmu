@@ -25,7 +25,7 @@ if (WIN32)
     add_definitions("-DWIN32 -D_WIN32 -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x600")
 endif()
 
-add_definitions("-DDEBUG_BREAK_INST=0xABCD")
+#add_definitions("-DDEBUG_BREAK_INST=0xABCD")
 
 add_library(utils ioutil.cpp ioutil.h color_util.h)
 
