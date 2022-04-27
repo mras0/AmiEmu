@@ -52,7 +52,7 @@ constexpr const char* const cia_regname[16] = {
     "tbhi",
     "todlo",
     "todmid",
-    "todhi ",
+    "todhi",
     "unused",
     "sdr",
     "icr",
@@ -3189,13 +3189,17 @@ public:
                         if (aval.known()) {
                             const int32_t offset = static_cast<int16_t>(ea_data_[i]);
                             const auto addr = aval.raw() + offset;
-                            // Custom reg
-                            if (addr >= 0xDE0000 && addr < 0xE00000) {
+                            if (addr >= 0xA00000 && addr < 0xC00000 && (addr & 0xBFC0FE) == 0xBFC000 && offset % 0x100 == 0) { // CIA (simple offset)
+                                std::string name = cia_regname[(addr >> 8) & 0xf];
+                                std::cout << "cia" << cia_regname[(addr >> 8) & 0xf] << "(A" << (ea & 7) << ")";
+                                extra << " " << desc.str() << " = $" << hexfmt(addr);
+                                break;
+                                // XXX
+                            } else if (addr >= 0xDE0000 && addr < 0xE00000) { // Custom reg
                                 std::cout << custom_regname[(addr >> 1) & 0xff];
                                 if (int ofs = (addr & 1) - (aval.raw() & 0x1ff); ofs != 0)
                                     std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
                                 std::cout << "(A" << (ea & 7) << ")";
-
                                 if (i == 1 && inst.size == opsize::w && inst.type == inst_type::MOVE && ea_val_[0].known()) {
                                     maybe_add_custom_bit_info(extra, addr, static_cast<uint16_t>(ea_val_[0].raw()));
                                 }
