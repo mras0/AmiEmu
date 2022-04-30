@@ -1213,7 +1213,7 @@ private:
                 0,
                 0,
                 num_cylinders - 1,
-                1, // one buffer
+                30, // AROS doesn't seem to like only 1 buffer, KS3.1 puts in 30, so let's do the same
                 0,
                 0x7ffe, // Max transfer
                 0xfffffffe, // Mask
