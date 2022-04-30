@@ -3,7 +3,7 @@ RomStart=0
 ; KS1.2 magic based on http://eab.abime.net/showpost.php?p=1045113&postcount=3
 
 VERSION=0
-REVISION=4
+REVISION=5
 
 DEBUG=0
 
@@ -1140,6 +1140,10 @@ irExit:
         move.l  a4, a1
         jsr     _LVOCloseLibrary(a6)
         move.l  (sp)+, d0
+        beq.b   irNoClose
+        ; FIXME
+        ; Avoid expunge from now on (AROS doesn't keep device open)
+        addq.w  #1, LIB_OPENCNT(a5)
 irNoClose:
         movem.l (sp)+, d1-d7/a0-a6
         rts
@@ -1364,7 +1368,7 @@ Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         moveq   #0, d2
         move.w  RomCodeEnd(pc), d2 ; Number of units
         cmp.l   d2, d0
-        bge.b   OpenError ; Invalid unit
+        bge     OpenError ; Invalid unit
 
         move.l  d0, d4 ; UnitNum in d4
 
@@ -1395,6 +1399,19 @@ Open:   ; ( device:a6, iob:a1, unitnum:d0, flags:d1 )
         move.b  d0, IO_ERROR(a2)
         move.b  #NT_REPLYMSG, LN_TYPE(a2) ; Mark IORqeust as complete
 
+        ifne DEBUG
+        lea     .openmsg(pc), a0
+        bsr     SerPutMsg
+        move.l  a3, d0
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        bra.b   .cont
+.openmsg:
+        dc.b    'Open done res=$', 0
+        even
+.cont:
+        endc ; DEBUG
+
 OpenDone:
         subq.w  #1, LIB_OPENCNT(a6) ; remove temp count
         movem.l (sp)+, d0-d7/a0-a6
@@ -1406,7 +1423,26 @@ OpenError:
         bra     OpenDone
 
 Close:  ; ( device:a6, iob:a1 )
-        movem.l d0-d7/a0-a6, -(sp)
+        movem.l d1-d7/a0-a6, -(sp)
+
+        ifne DEBUG
+        lea     .closemsg(pc), a0
+        bsr     SerPutMsg
+        move.l  a1, d0
+        bsr     SerPutNum
+        lea     .closemsg2(pc), a0
+        bsr     SerPutMsg
+        move.l  IO_UNIT(a1), d0
+        bsr     SerPutNum
+        bsr     SerPutCrLf
+        bra.b   .closecont
+.closemsg:
+        dc.b 'Close unit=$', 0
+.closemsg2:
+        dc.b ' device=$', 0
+        even
+.closecont:
+        endc ; DEBUG
 
         move.l  IO_UNIT(a1), a3
         moveq   #0, d0
@@ -1430,12 +1466,24 @@ CloseDevice:
         bne     CloseEnd
         bsr     Expunge
 CloseEnd:
-        movem.l (sp)+, d0-d7/a0-a6
+        movem.l (sp)+, d1-d7/a0-a6
+        ; Important!! Return D0=NULL here to avoid segment list being unloaded
+        ; AROS doesn't call CloseLibrary with D0=0! (Unlike AmigaOS)
         rts
 
 Expunge:
         ; TODO: Support this (maybe)
         ; Just leak memory for now
+        ifne    DEBUG
+        lea     .expmsg(pc), a0
+        bsr     SerPutMsg
+        bra.s   .cont
+.expmsg:
+        dc.b 'Expunge!\r\n',0
+        even
+.cont:
+        endc ; DEBUG
+
         moveq   #0, d0
         rts
 
