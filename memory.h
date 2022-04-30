@@ -13,6 +13,7 @@ constexpr uint32_t max_fast_size = 0x800000;
 constexpr uint32_t max_slow_size = 0xd80000 - slow_base;
 
 class state_file;
+class memory_handler;
 
 constexpr uint16_t get_u16(const uint8_t* d)
 {
@@ -50,11 +51,19 @@ public:
 
 class default_handler : public memory_area_handler {
 public:
+    explicit default_handler(memory_handler& mem_handler)
+        : mem_handler_ { mem_handler }
+    {
+    }
+
     uint8_t read_u8(uint32_t addr, uint32_t) override;
     uint16_t read_u16(uint32_t addr, uint32_t) override;
     void write_u8(uint32_t addr, uint32_t, uint8_t val) override;
     void write_u16(uint32_t addr, uint32_t, uint16_t val) override;
     void reset() override { }
+
+private:
+    memory_handler& mem_handler_;
 };
 
 class ram_handler : public memory_area_handler {
@@ -79,7 +88,7 @@ private:
 
 class rom_area_handler : public memory_area_handler {
 public:
-    explicit rom_area_handler(class memory_handler& mem_handler, std::vector<uint8_t>&& data);
+    explicit rom_area_handler(memory_handler& mem_handler, std::vector<uint8_t>&& data);
 
     const std::vector<uint8_t>& rom() const
     {
@@ -124,6 +133,12 @@ public:
         memory_interceptor_ = interceptor;
     }
 
+    void set_illegal_access_handler(const memory_interceptor& handler)
+    {
+        assert(!illegal_access_handler_);
+        illegal_access_handler_ = handler;
+    }
+
     void register_handler(memory_area_handler& h, uint32_t base, uint32_t len);
     void unregister_handler(memory_area_handler& h, uint32_t base, uint32_t len);
 
@@ -140,6 +155,12 @@ public:
     void reset();
     void handle_state(state_file& sf);
 
+    void signal_illegal_access(uint32_t addr, uint32_t data, uint8_t size, bool write)
+    {
+        if (illegal_access_handler_)
+            illegal_access_handler_(addr, data, size, write);
+    }
+
 private:
     struct area {
         uint32_t base;
@@ -147,11 +168,12 @@ private:
         memory_area_handler* handler;
     };
     std::vector<area> areas_;
-    default_handler def_handler_;
+    default_handler def_handler_ { *this };
     ram_handler ram_;
     area def_area_ { 0, 1U << 24, &def_handler_ };
     area ram_area_;
     memory_interceptor memory_interceptor_;
+    memory_interceptor illegal_access_handler_;
 
     area& find_area(uint32_t& addr);
     void track(uint32_t addr, uint32_t data, uint8_t size, bool write)

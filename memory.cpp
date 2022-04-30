@@ -22,6 +22,7 @@ uint8_t default_handler::read_u8(uint32_t addr, uint32_t)
     // Don't warn a bunch when scanning for ROM tags / I/O space
     if (addr < 0xf00000 && memwarn())
         std::cerr << "[MEM] Unhandled byte read from $" << hexfmt(addr) << "\n";
+    mem_handler_.signal_illegal_access(addr, 0, 1, false);
     //return 0xff;
     return 0;
 }
@@ -30,6 +31,7 @@ uint16_t default_handler::read_u16(uint32_t addr, uint32_t)
     // Don't warn a bunch when scanning for ROM tags / I/O space
     if (addr < 0xf00000 && memwarn())
         std::cerr << "[MEM] Unhandled word read from $" << hexfmt(addr) << "\n";
+    mem_handler_.signal_illegal_access(addr, 0, 2, false);
     //return 0xffff;
     return 0;
 }
@@ -37,11 +39,13 @@ void default_handler::write_u8(uint32_t addr, uint32_t, uint8_t val)
 {
     if (memwarn())
         std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
+    mem_handler_.signal_illegal_access(addr, val, 1, false);
 }
 void default_handler::write_u16(uint32_t addr, uint32_t, uint16_t val)
 {
     if (memwarn())
         std::cerr << "[MEM] Unhandled write to $" << hexfmt(addr) << " val $" << hexfmt(val) << "\n";
+    mem_handler_.signal_illegal_access(addr, val, 2, false);
 }
 
 ram_handler::ram_handler(uint32_t size)
@@ -172,6 +176,7 @@ void rom_area_handler::write_u8(uint32_t addr, uint32_t offset, uint8_t val)
     }
     if (memwarn())
         std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+    mem_handler_.signal_illegal_access(addr, val, 1, false);
     //throw std::runtime_error { "Write to ROM" };
 }
 
@@ -183,6 +188,7 @@ void rom_area_handler::write_u16(uint32_t addr, uint32_t offset, uint16_t val)
     }
     if (memwarn())
         std::cerr << "[MEM] Write to rom area: " << hexfmt(addr) << " offset " << hexfmt(offset) << " val = $" << hexfmt(val) << "\n";
+    mem_handler_.signal_illegal_access(addr, val, 2, false);
     //throw std::runtime_error { "Write to ROM" };
 }
 

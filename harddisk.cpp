@@ -1571,6 +1571,7 @@ private:
         // constexpr uint16_t TD_GETNUMTRACKS = CMD_NONSTD + 10; // 13
         constexpr uint16_t TD_ADDCHANGEINT = CMD_NONSTD + 11; // 14
         constexpr uint16_t TD_REMCHANGEINT = CMD_NONSTD + 12; // 15
+        //constexpr uint16_t TD_GETGEOMETRY = CMD_NONSTD + 13; // 16
         constexpr uint16_t HD_SCSICMD = 28;
 
         constexpr uint32_t IO_UNIT = 0x18;

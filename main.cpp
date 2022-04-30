@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iomanip>
 #include <variant>
+#include <map>
 
 #include "ioutil.h"
 #include "instruction.h"
@@ -647,6 +648,7 @@ void mem_search(const std::vector<uint8_t>& ram, uint32_t base_address, const st
         return;
     if (!(start_address <= base_address + ram.size() && base_address <= end_address))
         return;
+
     for (size_t i = 0, e = ram.size() - needle.size(); i < e && base_address + i < end_address; ++i) {
         if (base_address + i >= start_address && memcmp(&ram[i], &needle[0], needle.size()) == 0) {
             const auto addr = base_address + static_cast<uint32_t>(i);
@@ -1054,6 +1056,9 @@ int main(int argc, char* argv[])
         uint32_t chip_cycles_count = 0, cpu_cycles_count = 0;
         uint32_t last_vhpos = 0;
         std::vector<uint32_t> breakpoints;
+        int illegal_access_debug_mode = -1; // 0 = print, 1 = break
+        std::vector<cpu_state> cpu_history(1024); // XXX
+        uint32_t cpu_history_pos = 0;
         bool debug_mode = false;
         std::unique_ptr<std::ifstream> debug_script;
         custom_handler::step_result custom_step {};
@@ -1092,7 +1097,7 @@ int main(int argc, char* argv[])
             cycles_todo += cycles;
         });
 
-        auto active_debugger = [&]() {
+        auto activate_debugger = [&]() {
             if (g)
                 g->set_active(false);
             debug_mode = true;
@@ -1160,12 +1165,12 @@ int main(int argc, char* argv[])
             if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
                 if (wait_arg == 0)
                     new_frame = true;
-                active_debugger();
+                activate_debugger();
                 wait_mode = wait_none;
             } else if (!(custom_step.vpos | custom_step.hpos)) {
                 new_frame = true;
                 if (wait_mode == wait_frames && wait_arg-- == 0) {
-                    active_debugger();
+                    activate_debugger();
                     wait_mode = wait_none;
                 }
 
@@ -1308,7 +1313,7 @@ int main(int argc, char* argv[])
             if (!seglist) {
                 std::cerr << "Unable to find seglist for process \"" << process_name << "\"\n";
                 wait_mode = wait_none;
-                active_debugger();
+                activate_debugger();
                 return;
             }
 
@@ -1354,7 +1359,6 @@ int main(int argc, char* argv[])
             std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
         };
         auto load_seg = [&](uint32_t name_ptr, const uint32_t seg_list_bptr) {
-
             disable_bool db { cpu_active };
             std::string name;
             if (name_ptr & 0x80000000) {
@@ -1400,7 +1404,7 @@ int main(int argc, char* argv[])
                         std::cout << " Write of value: $" << hexfmt(data, size * 2) << "\n";
                     else
                         std::cout << " Read\n";
-                    active_debugger();
+                    activate_debugger();
                 }
             }
 
@@ -1459,10 +1463,21 @@ int main(int argc, char* argv[])
             return custom.current_ipl();
         });
 
+        mem.set_illegal_access_handler([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
+            if (illegal_access_debug_mode < 0)
+                return;
+            std::cout << "[MEM] Illegal " << (write ? "write to " : "read from ") << "$" << hexfmt(addr) << " size " << (int)size;
+            if (write)
+                std::cout << " data=$" << hexfmt(data, size * 2);
+            std::cout << " PC=$" << hexfmt(cpu_step.current_pc) << "\n";
+            if (illegal_access_debug_mode)
+                activate_debugger();
+        });
+
         //cpu.trace(&std::cout);
 
         if (cmdline_args.debug)
-            active_debugger();
+            activate_debugger();
 
         auto insert_disk = [&](uint8_t drive, const char* filename, int delay = default_disk_insertion_delay) {
             assert(drive < max_drives && drives[drive]);
@@ -1662,6 +1677,25 @@ int main(int argc, char* argv[])
                                 break;
                             } else {
                                 std::cerr << "Invalid number of arguments\n";
+                            }
+                        } else if (args[0] == "H" || args[0] == "HH") {
+                            uint32_t cnt = 10;
+                            if (args.size() > 1) {
+                                if (auto [valid, cntr] = get_simple_expr(args[1]); valid) {
+                                    cnt = cntr;
+                                } else {
+                                    cnt = 0;
+                                    std::cout << "Invalid number for \"" << args[0] << "\"  \"" << args[1] << "\"\n";
+                                }
+                            }
+                            const uint32_t max_cnt = static_cast<uint32_t>(cpu_history.size());
+                            cnt = std::min(cnt, max_cnt);
+                            auto idx = (cpu_history_pos - 1 - cnt) % max_cnt;
+                            while (cnt--) {
+                                const auto& ch = cpu_history[idx++ % max_cnt];
+                                if (args[0] == "HH")
+                                    print_cpu_state(std::cout, ch);
+                                disasm_stmts(mem, ch.pc, 1);
                             }
                         } else if (args[0] == "il") {
                             if (args.size() > 1) {
@@ -2033,6 +2067,28 @@ int main(int argc, char* argv[])
                             } else {
                                 std::cerr << "Missing arguments address, value(s)\n";
                             }
+                        } else if (args[0] == "wd") {
+                            if (args.size() > 1) {
+                                if (auto [valid, arg] = get_simple_expr(args[1]); valid && (arg == 0) || (arg == 1) || (arg == ~0U)) {
+                                    illegal_access_debug_mode = static_cast<int>(arg);
+                                } else {
+                                    std::cerr << "Invalid argument to wd\n";
+                                }
+                            } else {
+                                illegal_access_debug_mode = -1;
+                            }
+                            std::cout << "Illegal access debug ";
+                            switch (illegal_access_debug_mode) {
+                            case -1:
+                                std::cout << "disabled\n";
+                                break;
+                            case 0:
+                                std::cout << "logging\n";
+                                break;
+                            case 1:
+                                std::cout << "break\n";
+                                break;
+                            }
                         } else if (args[0] == "write_mem") {
                             if (args.size() > 1) {
                                 std::ofstream f(args[1], std::ofstream::binary);
@@ -2171,6 +2227,10 @@ unknown_command:
                     }
                 }
 
+                if (!cpu_step.stopped)
+                    memcpy(&cpu_history[cpu_history_pos++ % cpu_history.size()], &cpu.state(), sizeof(cpu_state));
+
+
                 cpu_active = true;
                 cpu_step = cpu.step();
                 cpu_active = false;
@@ -2181,9 +2241,43 @@ unknown_command:
                     } while (!custom.current_ipl() && !new_frame && !debug_mode);
                 } else {
                     if (cpu_step.exception && exception_break_mask & (1 << cpu_step.exception)) {
-                        active_debugger();
+                        activate_debugger();
                         std::cout << "Breaking on exception " << static_cast<int>(cpu_step.exception) << "\n";
                     }
+
+                    #if 0
+                    if (cpu_step.instruction == 0x4eae) {
+                        // JSR ofs(A6)
+                        if (auto ofs = static_cast<int16_t>(mem.hack_peek_u16(cpu_step.last_pc + 2)); ofs < 0) {
+                            static std::map<uint32_t, std::string> names;
+                            static uint32_t exec_base, dos_base;
+                            const auto a6 = cpu.state().a[6];
+                            std::string name;
+                            if (auto it = names.find(a6); it != names.end()) {
+                                name = it->second;
+                            } else {
+                                auto na = mem.read_u32(a6 + 0x0a); // Name
+                                for (;;) {
+                                    auto b = mem.read_u8(na++);
+                                    if (!b)
+                                        break;
+                                    name.push_back(b);
+                                }
+                                names.insert({ a6, name });
+                                if (name == "exec.library")
+                                    exec_base = a6;
+                                else if (name == "dos.library")
+                                    dos_base = a6;
+                            }
+                            if (a6 == dos_base && ofs == -156 /*unload seg*/) {
+                                print_cpu_state(std::cout, cpu.state());
+                                std::cout << "JSR -" << (-ofs) << "(A6) ; " << name << "\n";
+                                if (cpu.state().d[1] * 4 >= 0xa00000)
+                                    activate_debugger();
+                            }
+                        }
+                    }
+                    #endif
 
                     switch (wait_mode) {
                     case wait_none:
@@ -2223,13 +2317,13 @@ unknown_command:
                         goto check_breakpoint;
                     }
 
-                    active_debugger();
+                    activate_debugger();
                     cpu.trace(nullptr);
                     wait_mode = wait_none;
 
 check_breakpoint:
                     if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
-                        active_debugger();
+                        activate_debugger();
                         std::cout << "Breakpoint hit\n";
                     }
 
@@ -2267,7 +2361,7 @@ check_breakpoint:
                     if (ctrl_c) {
                         ctrl_c = false;
                         signal(SIGINT, &ctrl_c_handler);
-                        active_debugger();
+                        activate_debugger();
                     }
                     if (g) {
                         g->update_image(custom_step.frame);
@@ -2282,7 +2376,7 @@ check_breakpoint:
                 serdata_flush();
                 if (cmdline_args.test_mode)
                     throw;
-                active_debugger();
+                activate_debugger();
             }
         }
 
