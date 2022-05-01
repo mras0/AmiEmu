@@ -689,6 +689,21 @@ std::string read_string(memory_handler& mem, uint32_t ptr)
     return s;
 }
 
+struct disable_bool {
+    disable_bool(bool& val)
+        : val_(val)
+        , orig_val_(val)
+    {
+        val_ = false;
+    }
+    ~disable_bool()
+    {
+        val_ = orig_val_;
+    }
+    bool& val_;
+    const bool orig_val_;
+};
+
 constexpr int default_disk_insertion_delay = 2 * 50;
 
 } // unnamed namespace
@@ -891,30 +906,156 @@ std::vector<uint8_t> patch(std::vector<uint8_t>&& rom)
     return rom;
 }
 
-int main(int argc, char* argv[])
-{
-    try {
-        auto cmdline_args = parse_command_line_arguments(argc, argv);
-        std::unique_ptr<state_file> state;
-        if (!cmdline_args.state_filename.empty()) {
-            state = std::make_unique<state_file>(state_file::dir::load, cmdline_args.state_filename);
-            cmdline_args.handle_state(*state);
-        }
-        disk_drive df0 { "DF0:" }, df1 { "DF1:" };
-        disk_drive* drives[max_drives] = { &df0, &df1 };
-        std::unique_ptr<ram_handler> slow_ram;
-        std::unique_ptr<fastmem_handler> fast_ram;
-        memory_handler mem { cmdline_args.chip_size };
-        rom_area_handler rom { mem, patch(read_file(cmdline_args.rom)) };
-        cia_handler cias { mem, rom, drives };
-        custom_handler custom { mem, cias, slow_base + cmdline_args.slow_size, cmdline_args.floppy_speed };
-        autoconf_handler autoconf { mem };
+class amiga {
+public:
+    explicit amiga(const command_line_arguments& cmdline_args);
+    ~amiga();
 
-        if (cmdline_args.slow_size) {
-            slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
-            mem.register_handler(*slow_ram, slow_base, cmdline_args.slow_size);
+    void run();
+    void handle_machine_state(state_file& sf);
+
+    memory_handler& mem_handler()
+    {
+        return mem;
+    }
+
+private:
+    // Hardware + config
+    command_line_arguments cmdline_args;
+    disk_drive df0 { "DF0:" }, df1 { "DF1:" };
+    disk_drive* drives[max_drives] = { &df0, &df1 };
+    memory_handler mem;
+    rom_area_handler rom;
+    cia_handler cias { mem, rom, drives };
+    custom_handler custom;
+    autoconf_handler autoconf { mem };
+    real_time_clock rtc { mem };
+    m68000 cpu { mem };
+    std::unique_ptr<ram_handler> slow_ram;
+    std::unique_ptr<fastmem_handler> fast_ram;
+    std::unique_ptr<harddisk> hd;
+    std::unique_ptr<debug_board> dbg_board;
+
+    // Serial data handler
+    std::vector<uint8_t> serdata;
+    char escape_sequence[32];
+    uint8_t escape_sequence_pos = 0;
+    uint8_t crlf = 0;
+    void serial_data_handler(uint8_t numbits, uint8_t data);
+    void serial_data_flush();
+
+    //
+    // GUI
+    //
+    static constexpr unsigned steps_per_update = 1000000;
+    unsigned steps_to_update = 0;
+    std::unique_ptr<gui> g;
+    std::vector<gui::event> events;
+    std::vector<uint8_t> pending_disk;
+    uint8_t pending_disk_drive = 0xff;
+    uint32_t disk_chosen_countdown = 0;
+    bool new_frame = false;
+    bool quit = false;
+    void process_event(const gui::event& evt);
+
+    //
+    // Debug stuff
+    //
+    bool debug_mode = false;
+    enum { wait_none,
+        wait_next_inst,
+        wait_exact_pc,
+        wait_exact_inst,
+        wait_rtx,
+        wait_non_rom_pc,
+        wait_vpos,
+        wait_frames,
+        wait_process,
+    } wait_mode = wait_none;
+    uint32_t wait_arg = 0;
+    std::string wait_process_name;
+    uint32_t exception_break_mask = 0;
+    uint32_t chip_cycles_count = 0, cpu_cycles_count = 0;
+    uint32_t last_vhpos = 0;
+    std::vector<uint32_t> breakpoints;
+    int illegal_access_debug_mode = -1; // 0 = print, 1 = break
+    std::vector<cpu_state> cpu_history = std::vector<cpu_state>(1024); // XXX
+    uint32_t cpu_history_pos = 0;
+    std::unique_ptr<std::ifstream> debug_script;
+
+    struct mem_use {
+        bus_use use;
+        uint32_t addr;
+        uint16_t val;
+    };
+
+    std::vector<mem_use> dma_usage = std::vector<mem_use>(vpos_per_field * hpos_per_line / 2);
+    std::vector<memwatch> memwatches;
+    std::vector<uint32_t> tasks;
+    std::unique_ptr<std::ofstream> trace_file;
+
+    void activate_debugger();
+    void check_debug_break();
+    bool check_wait_process_name(const std::string& process_name) const;
+    void check_wait_process(uint32_t process_ptr, const std::string& process_name);
+    void on_task_init(const uint32_t exec_base);
+    void on_task_added(const uint32_t task_ptr, uint32_t initial_pc);
+    void on_task_removed(const uint32_t task_ptr);
+    void on_load_seg(uint32_t name_ptr, const uint32_t seg_list_bptr);
+    void debugger_loop();
+
+    //
+    // Audio
+    //
+    std::unique_ptr<wavedev> audio;
+    std::mutex audio_mutex_;
+    std::condition_variable audio_buffer_ready_cv;
+    std::condition_variable audio_buffer_played_cv;
+    int16_t audio_buffer[2][audio_buffer_size];
+    bool audio_buffer_ready[2] = { false, false };
+    int audio_next_to_play = 0;
+    int audio_next_to_fill = 0;
+
+    void audio_callback(int16_t* buf, size_t sz);
+
+    //
+    // Main stuff
+    //
+    custom_handler::step_result custom_step {};
+    m68000::step_result cpu_step {};
+    bool cpu_active = false;
+    uint32_t cycles_todo = 0;
+    enum { no_reset,
+        cpu_reset,
+        keyboard_reset
+    } reset = no_reset;
+
+    void step();
+
+    void cstep(bool cpu_waiting);
+    void do_all_custom_cylces();
+    uint8_t read_ipl();
+    void on_memory_access(uint32_t addr, uint32_t data, uint8_t size, bool write);
+    void on_illegal_acess(uint32_t addr, uint32_t data, uint8_t size, bool write);
+
+    //
+    // Other stuff
+    //
+
+    void insert_disk(uint8_t drive, const char* filename, int delay = default_disk_insertion_delay);
+};
+
+amiga::amiga(const command_line_arguments& args)
+    : cmdline_args { args }
+    , mem { cmdline_args.chip_size }
+    , rom { mem, patch(read_file(cmdline_args.rom)) }
+    , custom { mem, cias, slow_base + cmdline_args.slow_size, cmdline_args.floppy_speed }
+{
+    if (cmdline_args.slow_size) {
+        slow_ram = std::make_unique<ram_handler>(cmdline_args.slow_size);
+        mem.register_handler(*slow_ram, slow_base, cmdline_args.slow_size);
 #if 0 // XXX: Figure out behavior for custom mirror..
-            // Mirror up to 0xd80000
+      // Mirror up to 0xd80000
             const uint32_t slow_end = slow_base + max_slow_size;
             for (uint32_t addr = slow_base + cmdline_args.slow_size; addr < slow_end; addr += cmdline_args.slow_size) {
                 uint32_t size = cmdline_args.slow_size;
@@ -923,271 +1064,148 @@ int main(int argc, char* argv[])
                 mem.register_handler(*slow_ram, addr, size);
             }
 #endif
-        }
-        if (cmdline_args.fast_size) {
-            fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
-            autoconf.add_device(*fast_ram);
-        }
+    }
+    if (cmdline_args.fast_size) {
+        fast_ram = std::make_unique<fastmem_handler>(mem, cmdline_args.fast_size);
+        autoconf.add_device(*fast_ram);
+    }
+    if (!cmdline_args.df0.empty())
+        df0.insert_disk(load_disk_file(cmdline_args.df0));
+    if (!cmdline_args.df1.empty())
+        df1.insert_disk(load_disk_file(cmdline_args.df1));
 
-        real_time_clock rtc { mem };
+    custom.set_serial_data_handler([this](uint8_t numbits, uint8_t data) { serial_data_handler(numbits, data); });
 
-        m68000 cpu { mem };
-
-        if (!cmdline_args.df0.empty())
-            df0.insert_disk(load_disk_file(cmdline_args.df0));
-        if (!cmdline_args.df1.empty())
-            df1.insert_disk(load_disk_file(cmdline_args.df1));
-
-        std::cout << "Memory configuration: Chip: " << (cmdline_args.chip_size >> 10) << " KB, Slow: " << (cmdline_args.slow_size >> 10) << " KB, Fast: " << (cmdline_args.fast_size >> 10) << " KB\n";
-
-        // rom_tag_scan(rom.rom());
-
-        // Serial data handler
-        std::vector<uint8_t> serdata;
-        char escape_sequence[32];
-        uint8_t escape_sequence_pos = 0;
-        uint8_t crlf = 0;
-        custom.set_serial_data_handler([&]([[maybe_unused]] uint8_t numbits, uint8_t data) {
-            assert(numbits == 8);
-            if (data == 0x1b) {
-                assert(escape_sequence_pos == 0);
-                escape_sequence[escape_sequence_pos++] = 0x1b;
-                return;
-            } else if (escape_sequence_pos) {
-                if (escape_sequence_pos >= sizeof(escape_sequence)) {
-                    // Overflow
-                    assert(0);
-                    escape_sequence_pos = 0;
-                    return;
-                }
-                escape_sequence[escape_sequence_pos++] = data;
-
-                if (isalpha(data)) {
-                    if (data == 'm') {
-                        // ESC CSI 'n' m -> SGR (Select Graphic Rendition)
-                        escape_sequence_pos = 0;
-                        return;
-                    } else if (data == 'H') {
-                        // ESC CSI 'n' ; 'm' H -> Moves the cursor to row n, column m
-                        escape_sequence_pos = 0;
-                        return;
-                    }
-                    std::cout << "TODO: check escape sequence 'ESC" << std::string(escape_sequence + 1, escape_sequence_pos - 1) << "'\n";
-                    escape_sequence_pos = 0;
-                }
-                return;
-            }
-            // std::cout << "Serdata: $" << hexfmt(data) << ": " << (char)(isprint(data) ? data : ' ') << "\n";
-            if (data == '\r') {
-                if (crlf & 1) {
-                    // LF CR
-                    serdata.push_back('\r');
-                    serdata.push_back('\n');
-                    crlf = 0;
-                    return;
-                }
-                crlf |= 2;
-                return;
-            } else if (data == '\n') {
-                if (crlf & 2) {
-                    // CR LF
-                    serdata.push_back('\r');
-                    serdata.push_back('\n');
-                    crlf = 0;
-                    return;
-                }
-                crlf |= 1;
-                return;
-            }
-            if (crlf) {
-                // Plain CR or LF
-                assert(crlf == 1 || crlf == 2);
-                serdata.push_back('\r');
-                serdata.push_back('\n');
-                crlf = 0;
-            }
-            serdata.push_back(data ? data : ' ');
+    if (!cmdline_args.test_mode) {
+        g = std::make_unique<gui>(graphics_width, graphics_height, std::array<std::string, 4> { cmdline_args.df0, cmdline_args.df1, "", "" });
+        df0.set_disk_activity_handler([this](uint8_t track, bool write) {
+            g->disk_activty(0, track, write);
         });
-
-        std::unique_ptr<gui> g;
-        if (!cmdline_args.test_mode)
-            g = std::make_unique<gui>(graphics_width, graphics_height, std::array<std::string, 4> { cmdline_args.df0, cmdline_args.df1, "", "" });
-
-        signal(SIGINT, &ctrl_c_handler);
-
-        auto serdata_flush = [&g, &serdata]() {
-            if (!serdata.empty()) {
-                if (g)
-                    g->serial_data(serdata);
-                else
-                    std::cout << "[SERIAL] " << std::string(serdata.begin(), serdata.end()) << "\n";
-                serdata.clear();
-            }
-        };
-
-        if (g) {
-            df0.set_disk_activity_handler([&](uint8_t track, bool write) {
-                g->disk_activty(0, track, write);
-            });
-            df1.set_disk_activity_handler([&](uint8_t track, bool write) {
-                g->disk_activty(1, track, write);
-            });
-        }
-
-        const unsigned steps_per_update = 1000000;
-        unsigned steps_to_update = 0;
-        std::vector<gui::event> events;
-        std::vector<uint8_t> pending_disk;
-        uint8_t pending_disk_drive = 0xff;
-        uint32_t disk_chosen_countdown = 0;
-        enum { wait_none,
-            wait_next_inst,
-            wait_exact_pc,
-            wait_exact_inst,
-            wait_rtx,
-            wait_non_rom_pc,
-            wait_vpos,
-            wait_frames,
-            wait_process,
-        } wait_mode = wait_none;
-        uint32_t wait_arg = 0;
-        std::string wait_process_name;
-        uint32_t exception_break_mask = 0;
-        uint32_t chip_cycles_count = 0, cpu_cycles_count = 0;
-        uint32_t last_vhpos = 0;
-        std::vector<uint32_t> breakpoints;
-        int illegal_access_debug_mode = -1; // 0 = print, 1 = break
-        std::vector<cpu_state> cpu_history(1024); // XXX
-        uint32_t cpu_history_pos = 0;
-        bool debug_mode = false;
-        std::unique_ptr<std::ifstream> debug_script;
-        custom_handler::step_result custom_step {};
-        m68000::step_result cpu_step {};
-        std::unique_ptr<std::ofstream> trace_file;
-        bool new_frame = false;
-        bool cpu_active = false;
-        uint32_t cycles_todo = 0;
-        std::mutex audio_mutex_;
-        std::condition_variable audio_buffer_ready_cv;
-        std::condition_variable audio_buffer_played_cv;
-        int16_t audio_buffer[2][audio_buffer_size];
-        bool audio_buffer_ready[2] = { false, false };
-        int audio_next_to_play = 0;
-        int audio_next_to_fill = 0;
-        enum { no_reset,
-            cpu_reset,
-            keyboard_reset } reset
-            = no_reset;
-
-        if (!cmdline_args.debug_script.empty()) {
-            debug_script = std::make_unique<std::ifstream>(cmdline_args.debug_script);
-            if (!*debug_script || !debug_script->is_open())
-                throw std::runtime_error { "Debug script not found: " + cmdline_args.debug_script };
-        }
-
-        struct mem_use {
-            bus_use use;
-            uint32_t addr;
-            uint16_t val;
-        };
-        std::vector<mem_use> dma_usage(vpos_per_field * hpos_per_line / 2);
-
-        cpu.set_cycle_handler([&](uint8_t cycles) {
-            assert(cpu_active);
-            cycles_todo += cycles;
+        df1.set_disk_activity_handler([this](uint8_t track, bool write) {
+            g->disk_activty(1, track, write);
         });
+        g->set_on_pause_callback([&](bool pause) {
+            if (audio)
+                audio->set_paused(pause);
+        });
+    }
 
-        auto activate_debugger = [&]() {
-            if (g)
-                g->set_active(false);
-            debug_mode = true;
+    if (!cmdline_args.debug_script.empty()) {
+        debug_script = std::make_unique<std::ifstream>(cmdline_args.debug_script);
+        if (!*debug_script || !debug_script->is_open())
+            throw std::runtime_error { "Debug script not found: " + cmdline_args.debug_script };
+    }
+
+    cpu.set_cycle_handler([this](uint8_t cycles) {
+        assert(cpu_active);
+        cycles_todo += cycles;
+    });
+    cpu.set_read_ipl([this]() {
+        return read_ipl();
+    });
+    mem.set_memory_interceptor([this](uint32_t addr, uint32_t data, uint8_t size, bool write) {
+        on_memory_access(addr, data, size, write);
+    });
+    mem.set_illegal_access_handler([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
+        on_illegal_acess(addr, data, size, write);
+    });
+
+    if (!cmdline_args.hds.empty() || !cmdline_args.shared_folders.empty()) {
+        auto should_disable_autoboot = [&]() {
+            return df0.ofs_bootable_disk_inserted();
         };
+        hd = std::make_unique<harddisk>(mem, cpu_active, should_disable_autoboot, cmdline_args.hds, cmdline_args.shared_folders);
+        autoconf.add_device(hd->autoconf_dev());
+    }
 
-        debugger_functions.push_back({ "get_u8", [&mem](uint32_t addr) -> uint32_t { return mem.read_u8(addr); } });
-        debugger_functions.push_back({ "get_u16", [&mem](uint32_t addr) -> uint32_t { return mem.read_u16(addr); } });
-        debugger_functions.push_back({ "get_u32", [&mem](uint32_t addr) -> uint32_t { return mem.read_u32(addr); } });
-        debugger_functions.push_back({ "extb", [](uint32_t val) { return sext(val, opsize::b); } });
-        debugger_functions.push_back({ "extw", [](uint32_t val) { return sext(val, opsize::w); } });
+    if (cmdline_args.debug_board) {
+        dbg_board = std::make_unique<debug_board>(mem);
+        autoconf.add_device(dbg_board->autoconf_dev());
 
-        std::unique_ptr<wavedev> audio;
+        dbg_board->set_callbacks(
+            [this](uint32_t exec_base) { on_task_init(exec_base); },
+            [this](uint32_t task_ptr, uint32_t initial_pc) { on_task_added(task_ptr, initial_pc); },
+            [this](uint32_t task_ptr) { on_task_removed(task_ptr); },
+            [this](uint32_t name_ptr, uint32_t seg_list_bptr) { on_load_seg(name_ptr, seg_list_bptr); });
+    }
 
-//#define WRITE_SOUND
-#ifdef WRITE_SOUND
-        std::ofstream sound_out { "c:/temp/sound.raw" };
-#endif
+    if (!cmdline_args.nosound && !wavedev::is_null()) {
+        audio = std::make_unique<wavedev>(audio_sample_rate, audio_buffer_size, [this](int16_t* buf, size_t sz) {
+            this->audio_callback(buf, sz);
+        });
+    }
 
-        std::unique_ptr<harddisk> hd;
-        if (!cmdline_args.hds.empty() || !cmdline_args.shared_folders.empty()) {
-            auto should_disable_autoboot = [&]() {
-                return df0.ofs_bootable_disk_inserted();
-            };
-            hd = std::make_unique<harddisk>(mem, cpu_active, should_disable_autoboot, cmdline_args.hds, cmdline_args.shared_folders);
-            autoconf.add_device(hd->autoconf_dev());
+    if (cmdline_args.debug)
+        activate_debugger();
+}
+
+amiga::~amiga()
+{
+    if (audio) {
+        // Make sure audio stops
+        std::unique_lock<std::mutex> lock { audio_mutex_ };
+        audio_buffer_ready[0] = true;
+        audio_buffer_ready[1] = true;
+        audio_buffer_ready_cv.notify_all();
+    }
+}
+
+void amiga::handle_machine_state(state_file& sf)
+{
+    mem.handle_state(sf);
+    if (slow_ram)
+        slow_ram->handle_state(sf);
+    custom.handle_state(sf);
+    cias.handle_state(sf);
+    rtc.handle_state(sf);
+    autoconf.handle_state(sf);
+    cpu.handle_state(sf);
+    sf.handle(cycles_todo);
+    if (sf.loading()) {
+        // Fake up something for the debugger
+        cpu_step.current_pc = cpu_step.last_pc = cpu.state().pc;
+        cpu_step.instruction = cpu.state().prefecth_val;
+    }
+}
+
+void amiga::cstep(bool cpu_waiting)
+{
+    const bool cpu_was_active = cpu_active;
+    cpu_active = false;
+    custom_step = custom.step(cpu_waiting, cpu_step.current_pc);
+    cpu_active = cpu_was_active;
+
+    if (!(custom_step.hpos & 1))
+        dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2] = { custom_step.bus, custom_step.dma_addr, custom_step.dma_val };
+
+    ++chip_cycles_count;
+
+    if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
+        if (wait_arg == 0)
+            new_frame = true;
+        activate_debugger();
+        wait_mode = wait_none;
+    } else if (!(custom_step.vpos | custom_step.hpos)) {
+        new_frame = true;
+        if (wait_mode == wait_frames && wait_arg-- == 0) {
+            activate_debugger();
+            wait_mode = wait_none;
         }
 
-        std::unique_ptr<debug_board> dbg_board;
-        if (cmdline_args.debug_board) {
-            dbg_board = std::make_unique<debug_board>(mem);
-            autoconf.add_device(dbg_board->autoconf_dev());
-        }
-
-        auto handle_machine_state = [&](state_file& sf) {
-            mem.handle_state(sf);
-            if (slow_ram)
-                slow_ram->handle_state(sf);
-            custom.handle_state(sf);
-            cias.handle_state(sf);
-            rtc.handle_state(sf);
-            autoconf.handle_state(sf);
-            cpu.handle_state(sf);
-            sf.handle(cycles_todo);
-            if (sf.loading()) {
-                // Fake up something for the debugger
-                cpu_step.current_pc = cpu_step.last_pc = cpu.state().pc;
-                cpu_step.instruction = cpu.state().prefecth_val;
+        if (audio) {
+            std::unique_lock<std::mutex> lock { audio_mutex_ };
+            if (audio_buffer_ready[audio_next_to_fill]) {
+                audio_buffer_played_cv.wait(lock, [&]() { return !audio_buffer_ready[audio_next_to_fill]; });
             }
-        };
-
-        if (state)
-            handle_machine_state(*state);
-
-        auto cstep = [&](bool cpu_waiting) {
-            const bool cpu_was_active = cpu_active;
-            cpu_active = false;
-            custom_step = custom.step(cpu_waiting, cpu_step.current_pc);
-            cpu_active = cpu_was_active;
-
-            if (!(custom_step.hpos & 1))
-                dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2] = { custom_step.bus, custom_step.dma_addr, custom_step.dma_val };
-
-            ++chip_cycles_count;
-
-            if (wait_mode == wait_vpos && wait_arg == (static_cast<uint32_t>(custom_step.vpos) << 9 | custom_step.hpos)) {
-                if (wait_arg == 0)
-                    new_frame = true;
-                activate_debugger();
-                wait_mode = wait_none;
-            } else if (!(custom_step.vpos | custom_step.hpos)) {
-                new_frame = true;
-                if (wait_mode == wait_frames && wait_arg-- == 0) {
-                    activate_debugger();
-                    wait_mode = wait_none;
-                }
-
-                if (audio) {
-                    std::unique_lock<std::mutex> lock { audio_mutex_ };
-                    if (audio_buffer_ready[audio_next_to_fill]) {
-                        audio_buffer_played_cv.wait(lock, [&]() { return !audio_buffer_ready[audio_next_to_fill]; });
-                    }
-                    memcpy(audio_buffer[audio_next_to_fill], custom_step.audio, sizeof(audio_buffer[audio_next_to_fill]));
-                    audio_buffer_ready[audio_next_to_fill] = true;
-                    audio_next_to_fill = !audio_next_to_fill;
-                }
-                audio_buffer_ready_cv.notify_one();
+            memcpy(audio_buffer[audio_next_to_fill], custom_step.audio, sizeof(audio_buffer[audio_next_to_fill]));
+            audio_buffer_ready[audio_next_to_fill] = true;
+            audio_next_to_fill = !audio_next_to_fill;
+        }
+        audio_buffer_ready_cv.notify_one();
 #ifdef WRITE_SOUND
-                for (int i = 0; i < audio_samples_per_frame; ++i) {
-                    sound_out.write((const char*)&custom_step.audio[i * 2], 2);
-                }
+        for (int i = 0; i < audio_samples_per_frame; ++i) {
+            sound_out.write((const char*)&custom_step.audio[i * 2], 2);
+        }
 #endif
 #if 0
                 static auto last_time = std::chrono::high_resolution_clock::now();
@@ -1200,1188 +1218,1276 @@ int main(int argc, char* argv[])
                     frame_cnt = 0;
                 }
 #endif
-            }
-        };
+    }
+}
 
-        auto do_all_custom_cylces = [&]() {
-            while (cycles_todo >= cmdline_args.cpu_scale) {
-                cstep(false);
-                cycles_todo -= cmdline_args.cpu_scale;
-                cpu_cycles_count += cmdline_args.cpu_scale;
-            }
-        };
+void amiga::do_all_custom_cylces()
+{
+    while (cycles_todo >= cmdline_args.cpu_scale) {
+        cstep(false);
+        cycles_todo -= cmdline_args.cpu_scale;
+        cpu_cycles_count += cmdline_args.cpu_scale;
+    }
+}
 
-        if (!cmdline_args.nosound && !wavedev::is_null()) {
-            audio = std::make_unique<wavedev>(audio_sample_rate, audio_buffer_size, [&](int16_t* buf, size_t sz) {
-                static_assert(2 * audio_samples_per_frame == audio_buffer_size);
-                constexpr auto warn_interval = std::chrono::seconds(2);
-                static auto last_warning = std::chrono::steady_clock::now() - warn_interval;
-                const auto now = std::chrono::steady_clock::now();
-                static unsigned num_warnings = 0;
-                assert(sz == audio_samples_per_frame);
-                {
-                    std::unique_lock<std::mutex> lock { audio_mutex_ };
-                    if (!audio_buffer_ready[audio_next_to_play]) {
-                        ++num_warnings;
-                        memset(buf, 0, sz * 2 * sizeof(int16_t));
-                        // Deadlocks with SDL
-                        // audio_buffer_ready_cv.wait(lock, [&]() { return audio_buffer_ready[audio_next_to_play]; });
-                    } else {
-                        memcpy(buf, audio_buffer[audio_next_to_play], sz * 2 * sizeof(int16_t));
-                    }
-                    audio_buffer_ready[audio_next_to_play] = false;
-                    audio_next_to_play = !audio_next_to_play;
-                }
-                audio_buffer_played_cv.notify_one();
-                if (num_warnings && now - last_warning > warn_interval) {
-                    std::cerr << "Audio buffer not ready! (" << num_warnings << ")\n";
-                    last_warning = now;
-                    num_warnings = 0;
-                }
-            });
-        }
+uint8_t amiga::read_ipl()
+{
+    ///// HACK: Delay IPL change from Paula by 3 CCKs.
+    ///// Reality is more complicated: https://github.com/dirkwhoffmann/vAmiga/issues/274
+    ///// And below isn't correct if Paula IPL changes between delay start and end, but let's see...
+    /// if (cpu_ipl_delay) {
+    ///    if (--cpu_ipl_delay == 0)
+    ///        cpu_ipl = custom_step.ipl;
+    ///} else if (cpu_ipl != custom_step.ipl) {
+    ///    // Add longer delay for INT2/INT6 (CIA timer interrupts) to match timing of Razor1911-Voyage...
+    ///    cpu_ipl_delay = (custom_step.ipl == 2 || custom_step.ipl == 6) ? 16 : 12;
+    ///}
 
-        // Make sure audio stops
-        struct at_exit {
-            explicit at_exit(std::function<void()> ae)
-                : ae_ { ae }
-            {
-                assert(ae_);
-            }
+    do_all_custom_cylces(); // Sync
+    if (DEBUG_INTS)
+        std::cout << "PC=$" << hexfmt(cpu.state().pc) << " vpos=$" << hexfmt(custom_step.vpos) << " hpos=$" << hexfmt(custom_step.hpos) << " (clock $" << hexfmt(custom_step.hpos >> 1, 2) << ") IPL Poll\n";
+    return custom.current_ipl();
+}
 
-            ~at_exit()
-            {
-                ae_();
-            }
-
-        private:
-            std::function<void()> ae_;
-        } kill_audio([&]() {
-            std::unique_lock<std::mutex> lock { audio_mutex_ };
-            audio_buffer_ready[0] = true;
-            audio_buffer_ready[1] = true;
-            audio_buffer_ready_cv.notify_all();
-        });
-
-        if (g) {
-            g->set_on_pause_callback([&](bool pause) {
-                if (audio)
-                    audio->set_paused(pause);
-            });
-        }
-
-        constexpr uint32_t min_rom_addr = 0x00e0'0000;
-
-        std::vector<memwatch> memwatches;
-        std::vector<uint32_t> tasks;
-
-        struct disable_bool {
-            disable_bool(bool& val) : val_(val), orig_val_(val)
-            {
-                val_ = false;
-            }
-            ~disable_bool()
-            {
-                val_ = orig_val_;
-            }
-            bool& val_;
-            const bool orig_val_;
-        };
-
-        auto check_wait_process_name = [&](const std::string& process_name) {
-            assert(!cpu_active); // should already be disabled
-            auto end_pos = process_name.find_last_of(":/");
-            auto prname = toupper_str(end_pos != std::string::npos ? process_name.substr(end_pos + 1) : process_name);
-            return prname == toupper_str(wait_process_name);
-        };
-
-        auto check_wait_process = [&](uint32_t process_ptr, const std::string& process_name) {
-            if (wait_mode != wait_process || !check_wait_process_name(process_name))
-                return;
-            wait_process_name.clear();
-            uint32_t seglist = 0;
-            if (auto cli_ptr = mem.read_u32(process_ptr + pr_CLI) << 2; cli_ptr) {
-                seglist = mem.read_u32(cli_ptr + cli_Module) << 2;
-            } else if (auto seglist_array = mem.read_u32(process_ptr + pr_SegList) << 2; seglist_array) {
-                // HACK HACK HACK
-                // Ignore the size in the seglist array. It seems to report 2 for programs started from the WB
-                // even though entry 3 works fine..
-                //auto sz = mem.read_u32(seglist_array);
-                seglist = mem.read_u32(seglist_array + 4 * 3) << 2; // Entry 3
-            }
-
-            if (!seglist) {
-                std::cerr << "Unable to find seglist for process \"" << process_name << "\"\n";
-                wait_mode = wait_none;
-                activate_debugger();
-                return;
-            }
-
-            std::cout << "Setting breakpoint for \"" << process_name << "\" at $" << hexfmt(wait_arg) << "\n";
-
-            wait_mode = wait_exact_pc;
-            wait_arg = seglist + 4;
-        };
-
-        auto task_init = [&](const uint32_t exec_base) {
-            disable_bool db { cpu_active };
-            constexpr uint32_t ThisTask = 276;
-            // Bit of a hack, but add initial process (could scan task lists instead, but doesn't seem to be necessary)
-            tasks.push_back(mem.read_u32(exec_base + ThisTask));
-        };
-        auto task_added = [&](const uint32_t task_ptr, [[maybe_unused]] uint32_t initial_pc) {
-            disable_bool db { cpu_active };
-            const auto type = mem.read_u8(task_ptr + ln_Type);
-            if (type != NT_TASK && type != NT_PROCESS) {
-                std::cerr << "Warning AddTask called with wrong node type $" << hexfmt(type) << " address $" << hexfmt(task_ptr) << "\n";
-                return;
-            }
-            if (auto it = std::find(tasks.begin(), tasks.end(), task_ptr); it != tasks.end()) {
-                std::cerr << "Task with address $" << hexfmt(task_ptr) << " already added!\n";
-                return;
-            }
-            tasks.push_back(task_ptr);
-            const auto task_name = read_string(mem, mem.read_u32(task_ptr + ln_Name));
-            std::cout << (type == NT_TASK ? "Task" : "Process") << " \"" << task_name << "\" started address $" << hexfmt(task_ptr) << " initialPC=$" << hexfmt(initial_pc) << "\n";
-            if (type == NT_PROCESS)
-                check_wait_process(task_ptr, task_name);
-        };
-        auto task_removed = [&](const uint32_t task_ptr) {
-            disable_bool db { cpu_active };
-            auto it = std::find(tasks.begin(), tasks.end(), task_ptr);
-            const auto type = mem.read_u8(task_ptr + ln_Type);
-            const char* type_name = (type == NT_TASK ? "Task" : "Process");
-            if (it == tasks.end()) {
-                std::cerr << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" with address $" << hexfmt(task_ptr) << " removed but not previously known!\n";
-                return;
-            }
-            tasks.erase(it);
-            std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
-        };
-        auto load_seg = [&](uint32_t name_ptr, const uint32_t seg_list_bptr) {
-            disable_bool db { cpu_active };
-            std::string name;
-            if (name_ptr & 0x80000000) {
-                // BSTR
-                name_ptr = (name_ptr & ~0x80000000) * 4;
-                int len = mem.read_u8(name_ptr++);
-                for (int i = 0; i < len; ++i)
-                    name.push_back(mem.read_u8(name_ptr++));
-            } else {
-                name = read_string(mem, name_ptr);
-            }
-            std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
-
-            if (wait_mode != wait_process)
-                return;
-            if (check_wait_process_name(name)) {
-                wait_mode = wait_exact_pc;
-                wait_arg = (seg_list_bptr + 1) << 2;
-                wait_process_name.clear();
-                std::cout << "Setting breakpoint for \"" << name << "\" at $" << hexfmt(wait_arg) << "\n";
-            }
-        };
-
-        if (dbg_board)
-            dbg_board->set_callbacks(task_init, task_added, task_removed, load_seg);
-        
-
-        mem.set_memory_interceptor([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
-            for (const auto& mw : memwatches) {
-                if (!mw.enabled)
-                    continue;
-                if (mw.size && mw.size != size)
-                    continue;
-                if (write) {
-                    if (!(mw.flags & memwatch::write))
-                        continue;
-                } else if (!(mw.flags & memwatch::read))
-                    continue;
-                const auto end = mw.address + (mw.size ? mw.size : 4);
-                if (addr < end && mw.address < addr + size) {
-                    std::cout << "PC=" << hexfmt(cpu_step.last_pc) << " Memwatch $" << hexfmt(&mw - &memwatches[0]) << " " << mw << " hit! Address=$" << hexfmt(addr) << " Access size=" << (int)size;
-                    if (write)
-                        std::cout << " Write of value: $" << hexfmt(data, size * 2) << "\n";
-                    else
-                        std::cout << " Read\n";
-                    activate_debugger();
-                }
-            }
-
-            if (!cpu_active)
-                return;
-            assert(size == 1 || size == 2);
-            (void)size;
-            if (addr < max_chip_size || (addr >= slow_base && addr < custom_base_addr + custom_mem_size)) {
-                // Sync with Agnus
-                cycles_todo += 2;
-                do_all_custom_cylces();
-                while (!custom_step.free_chip_cycle) {
-                    ++cpu_cycles_count;
-                    cstep(true);
-                }
-                assert(!(custom_step.hpos & 1));
-                auto& du = dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2];
-                du = { write ? bus_use::cpu_write : bus_use::cpu_read, addr, write ? static_cast<uint16_t>(data) : mem.hack_peek_u16(addr) };
-                cycles_todo += 2;
-            } else if (addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size) {
-                // Get up to date
-                do_all_custom_cylces();
-                // Sync with EClock
-                //
-                // Eclock is low for 6 system clocks and then high for 4 during which the transfer happens
-                // And address needs to be latched 3 cycles before EClk rises or falls
-                while (custom_step.eclock_cycle != 3) {
-                    ++cpu_cycles_count;
-                    cstep(false);
-                }
-                while (custom_step.eclock_cycle) {
-                    ++cpu_cycles_count;
-                    cstep(false);
-                }
-            } else {
-                cycles_todo += 4;
-            }
-        });
-
-        cpu.set_read_ipl([&]() {
-            ///// HACK: Delay IPL change from Paula by 3 CCKs.
-            ///// Reality is more complicated: https://github.com/dirkwhoffmann/vAmiga/issues/274
-            ///// And below isn't correct if Paula IPL changes between delay start and end, but let's see...
-            ///if (cpu_ipl_delay) {
-            ///    if (--cpu_ipl_delay == 0)
-            ///        cpu_ipl = custom_step.ipl;
-            ///} else if (cpu_ipl != custom_step.ipl) {
-            ///    // Add longer delay for INT2/INT6 (CIA timer interrupts) to match timing of Razor1911-Voyage...
-            ///    cpu_ipl_delay = (custom_step.ipl == 2 || custom_step.ipl == 6) ? 16 : 12;
-            ///} 
-
-
-            do_all_custom_cylces(); // Sync
-            if (DEBUG_INTS)
-                std::cout << "PC=$" << hexfmt(cpu.state().pc) << " vpos=$" << hexfmt(custom_step.vpos) << " hpos=$" << hexfmt(custom_step.hpos) << " (clock $" << hexfmt(custom_step.hpos >> 1, 2) << ") IPL Poll\n";
-            return custom.current_ipl();
-        });
-
-        mem.set_illegal_access_handler([&](uint32_t addr, uint32_t data, uint8_t size, bool write) {
-            if (illegal_access_debug_mode < 0)
-                return;
-            std::cout << "[MEM] Illegal " << (write ? "write to " : "read from ") << "$" << hexfmt(addr) << " size " << (int)size;
+void amiga::on_memory_access(uint32_t addr, uint32_t data, uint8_t size, bool write)
+{
+    for (const auto& mw : memwatches) {
+        if (!mw.enabled)
+            continue;
+        if (mw.size && mw.size != size)
+            continue;
+        if (write) {
+            if (!(mw.flags & memwatch::write))
+                continue;
+        } else if (!(mw.flags & memwatch::read))
+            continue;
+        const auto end = mw.address + (mw.size ? mw.size : 4);
+        if (addr < end && mw.address < addr + size) {
+            std::cout << "PC=" << hexfmt(cpu_step.last_pc) << " Memwatch $" << hexfmt(&mw - &memwatches[0]) << " " << mw << " hit! Address=$" << hexfmt(addr) << " Access size=" << (int)size;
             if (write)
-                std::cout << " data=$" << hexfmt(data, size * 2);
-            std::cout << " PC=$" << hexfmt(cpu_step.current_pc) << "\n";
-            if (illegal_access_debug_mode)
-                activate_debugger();
-        });
-
-        //cpu.trace(&std::cout);
-
-        if (cmdline_args.debug)
+                std::cout << " Write of value: $" << hexfmt(data, size * 2) << "\n";
+            else
+                std::cout << " Read\n";
             activate_debugger();
+        }
+    }
 
-        auto insert_disk = [&](uint8_t drive, const char* filename, int delay = default_disk_insertion_delay) {
-            assert(drive < max_drives && drives[drive]);
+    if (!cpu_active)
+        return;
+    assert(size == 1 || size == 2);
+    (void)size;
+    if (addr < max_chip_size || (addr >= slow_base && addr < custom_base_addr + custom_mem_size)) {
+        // Sync with Agnus
+        cycles_todo += 2;
+        do_all_custom_cylces();
+        while (!custom_step.free_chip_cycle) {
+            ++cpu_cycles_count;
+            cstep(true);
+        }
+        assert(!(custom_step.hpos & 1));
+        auto& du = dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2];
+        du = { write ? bus_use::cpu_write : bus_use::cpu_read, addr, write ? static_cast<uint16_t>(data) : mem.hack_peek_u16(addr) };
+        cycles_todo += 2;
+    } else if (addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size) {
+        // Get up to date
+        do_all_custom_cylces();
+        // Sync with EClock
+        //
+        // Eclock is low for 6 system clocks and then high for 4 during which the transfer happens
+        // And address needs to be latched 3 cycles before EClk rises or falls
+        while (custom_step.eclock_cycle != 3) {
+            ++cpu_cycles_count;
+            cstep(false);
+        }
+        while (custom_step.eclock_cycle) {
+            ++cpu_cycles_count;
+            cstep(false);
+        }
+    } else {
+        cycles_todo += 4;
+    }
+}
 
-            std::vector<uint8_t> disk;
-            if (*filename) {
-                std::cout << "Reading " << filename << "\n";
-                try {
-                    disk = load_disk_file(filename);
-                } catch (const std::exception& e) {
-                    std::cerr << "Failed to read " << filename << ": " << e.what() << "\n";
-                    return;
-                }
-            }
-            // Hack: overwrite cmdline args for disk file
-            if (drive == 0) {
-                cmdline_args.df0 = filename;
-            } else {
-                assert(drive == 1);
-                cmdline_args.df1 = filename;
-            }
-            std::cout << drives[drive]->name() << " Ejecting\n";
-            drives[drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
-            if (!*filename)
+void amiga::on_illegal_acess(uint32_t addr, uint32_t data, uint8_t size, bool write)
+{
+    if (illegal_access_debug_mode < 0)
+        return;
+    std::cout << "[MEM] Illegal " << (write ? "write to " : "read from ") << "$" << hexfmt(addr) << " size " << (int)size;
+    if (write)
+        std::cout << " data=$" << hexfmt(data, size * 2);
+    std::cout << " PC=$" << hexfmt(cpu_step.current_pc) << "\n";
+    if (illegal_access_debug_mode)
+        activate_debugger();
+}
+
+void amiga::audio_callback(int16_t* buf, size_t sz)
+{
+    static_assert(2 * audio_samples_per_frame == audio_buffer_size);
+    constexpr auto warn_interval = std::chrono::seconds(2);
+    static auto last_warning = std::chrono::steady_clock::now() - warn_interval;
+    const auto now = std::chrono::steady_clock::now();
+    static unsigned num_warnings = 0;
+    assert(sz == audio_samples_per_frame);
+    {
+        std::unique_lock<std::mutex> lock { audio_mutex_ };
+        if (!audio_buffer_ready[audio_next_to_play]) {
+            ++num_warnings;
+            memset(buf, 0, sz * 2 * sizeof(int16_t));
+            // Deadlocks with SDL
+            // audio_buffer_ready_cv.wait(lock, [&]() { return audio_buffer_ready[audio_next_to_play]; });
+        } else {
+            memcpy(buf, audio_buffer[audio_next_to_play], sz * 2 * sizeof(int16_t));
+        }
+        audio_buffer_ready[audio_next_to_play] = false;
+        audio_next_to_play = !audio_next_to_play;
+    }
+    audio_buffer_played_cv.notify_one();
+    if (num_warnings && now - last_warning > warn_interval) {
+        std::cerr << "Audio buffer not ready! (" << num_warnings << ")\n";
+        last_warning = now;
+        num_warnings = 0;
+    }
+}
+
+void amiga::serial_data_handler([[maybe_unused]] uint8_t numbits, uint8_t data)
+{
+    assert(numbits == 8);
+    if (data == 0x1b) {
+        assert(escape_sequence_pos == 0);
+        escape_sequence[escape_sequence_pos++] = 0x1b;
+        return;
+    } else if (escape_sequence_pos) {
+        if (escape_sequence_pos >= sizeof(escape_sequence)) {
+            // Overflow
+            assert(0);
+            escape_sequence_pos = 0;
+            return;
+        }
+        escape_sequence[escape_sequence_pos++] = data;
+
+        if (isalpha(data)) {
+            if (data == 'm') {
+                // ESC CSI 'n' m -> SGR (Select Graphic Rendition)
+                escape_sequence_pos = 0;
                 return;
-            if (delay && !disk_chosen_countdown) {
-                assert(pending_disk.empty());
-                disk_chosen_countdown = delay; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
-                pending_disk = std::move(disk);
-                pending_disk_drive = drive;
-            } else {
-                std::cout << drives[drive]->name() << " Inserting disk (" << filename << ")\n";
-                drives[drive]->insert_disk(std::move(disk));
+            } else if (data == 'H') {
+                // ESC CSI 'n' ; 'm' H -> Moves the cursor to row n, column m
+                escape_sequence_pos = 0;
+                return;
             }
-        };
+            std::cout << "TODO: check escape sequence 'ESC" << std::string(escape_sequence + 1, escape_sequence_pos - 1) << "'\n";
+            escape_sequence_pos = 0;
+        }
+        return;
+    }
+    // std::cout << "Serdata: $" << hexfmt(data) << ": " << (char)(isprint(data) ? data : ' ') << "\n";
+    if (data == '\r') {
+        if (crlf & 1) {
+            // LF CR
+            serdata.push_back('\r');
+            serdata.push_back('\n');
+            crlf = 0;
+            return;
+        }
+        crlf |= 2;
+        return;
+    } else if (data == '\n') {
+        if (crlf & 2) {
+            // CR LF
+            serdata.push_back('\r');
+            serdata.push_back('\n');
+            crlf = 0;
+            return;
+        }
+        crlf |= 1;
+        return;
+    }
+    if (crlf) {
+        // Plain CR or LF
+        assert(crlf == 1 || crlf == 2);
+        serdata.push_back('\r');
+        serdata.push_back('\n');
+        crlf = 0;
+    }
+    serdata.push_back(data ? data : ' ');
+}
 
-        for (bool quit = false; !quit;) {
-            try {
-                if (!events.empty()) {
-                    auto evt = events[0];
-                    events.erase(events.begin());
-                    switch (evt.type) {
-                    case gui::event_type::quit:
-                        quit = true;
-                        break;
-                    case gui::event_type::reset:
-                        reset = keyboard_reset;
-                        break;
-                    case gui::event_type::keyboard:
-                        cias.keyboard_event(evt.keyboard.pressed, evt.keyboard.scancode);
-                        break;
-                    case gui::event_type::mouse_button:
-                        if (evt.mouse_button.left)
-                            cias.set_button_state(0, evt.mouse_button.pressed);
-                        else
-                            custom.set_rbutton_state(evt.mouse_button.pressed);
-                        break;
-                    case gui::event_type::mouse_move:
-                        custom.mouse_move(evt.mouse_move.dx, evt.mouse_move.dy);
-                        break;
-                    case gui::event_type::disk_inserted:
-                        assert(evt.disk_inserted.drive < max_drives && drives[evt.disk_inserted.drive]);
-                        insert_disk(evt.disk_inserted.drive, evt.disk_inserted.filename);
-                        break;
-                    case gui::event_type::debug_mode:
-                        debug_mode = true;
-                        break;
-                    case gui::event_type::joystick: {
-                        cias.set_button_state(1, evt.joystick.button1);
-                        uint16_t dat = 0;
-                        if (evt.joystick.left)
-                            dat |= 1 << 9;
-                        if (evt.joystick.right)
-                            dat |= 1 << 1;
-                        if (evt.joystick.up ^ evt.joystick.left)
-                            dat |= 1 << 8;
-                        if (evt.joystick.down ^ evt.joystick.right)
-                            dat |= 1 << 0;
-                        custom.set_joystate(dat, evt.joystick.button2);
-                        break;
-                    }
-                    default:
-                        assert(0);
-                    }
-                }
+void amiga::serial_data_flush()
+{
+    if (!serdata.empty()) {
+        if (g)
+            g->serial_data(serdata);
+        else
+            std::cout << "[SERIAL] " << std::string(serdata.begin(), serdata.end()) << "\n";
+        serdata.clear();
+    }
+}
 
-                if (debug_mode) {
-                    const auto& s = cpu.state();
-                    if (g) {
-                        serdata_flush();
-                        g->set_debug_memory(mem.ram(), custom.get_regs());
-                        g->set_debug_windows_visible(true);
-                        g->update_image(custom_step.frame);
-                    }
+void amiga::activate_debugger()
+{
+    if (g)
+        g->set_active(false);
+    debug_mode = true;
+}
 
-                    // Match Winuae output
-                    // Cycles: 8 Chip, 16 CPU. (V=0 H=31 -> V=0 H=39)
-                    const uint32_t vhpos = custom_step.vpos << 8 | custom_step.hpos >> 1;
-                    std::cout << "Cycles: " << (chip_cycles_count >> 1) << " Chip, " << cpu_cycles_count << " CPU. (V=" << (last_vhpos >> 8) << " H=" << (last_vhpos & 0xff) << " -> V=" << (vhpos >> 8) << " H=" << (vhpos & 0xff) << ")\n";
-                    last_vhpos = vhpos;
-                    chip_cycles_count = cpu_cycles_count = 0;
+void amiga::check_debug_break()
+{
 
-                    cpu.show_state(std::cout);
-                    disasm_stmts(mem, cpu_step.current_pc, 1);
+    // TODO refactor
 
-                    debugger_cpu_state = s;
+    constexpr uint32_t min_rom_addr = 0x00e0'0000;
 
-                    uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
-                    for (;;) {
-                        std::string line;
-                        if (debug_script) {
-                            for (;;) {
-                                if (!std::getline(*debug_script, line)) {
-                                    debug_script.reset();
-                                    line.clear();
-                                    break;
-                                }
-                                line = trim(line);
-                                if (!line.empty() && line[0] != '#') {
-                                    std::cout << "> " << line << "\n";
-                                    break;
-                                }
-                            }
-                        }
-                        if (line.empty()) {
-                            if (g) {
-                                if (!g->debug_prompt(line)) {
-                                    debug_mode = false;
-                                    quit = true;
-                                    break;
-                                }
-                            } else {
-                                std::cout << "> " << std::flush;
-                                if (!std::getline(std::cin, line)) {
-                                    debug_mode = false;
-                                    quit = true;
-                                    break;
-                                }
-                            }
-                        }
-                        const auto args = split_line(line);
-                        if (args.empty() || args[0].empty() || args[0][0] == '#')
-                            continue;
-                        if (args[0] == "c") {
-                            custom.show_debug_state(std::cout);
-                        } else if (args[0] == "d") {
-                            auto [valid, pc, lines] = get_addr_and_lines(args, disasm_pc, 10);
-                            if (valid) {
-                                disasm_pc = pc;
-                                disasm_pc += disasm_stmts(mem, disasm_pc, lines);
-                            }
-                        } else if (args[0] == "e") {
-                            custom.show_registers(std::cout);
-                        } else if (args[0] == "f") {
-                            if (args.size() > 1) {
-                                auto [valid, pc] = get_simple_expr(args[1]);
-                                if (valid && !(pc & 1)) {
-                                    if (auto it = std::find(breakpoints.begin(), breakpoints.end(), pc); it != breakpoints.end()) {
-                                        breakpoints.erase(it);
-                                        std::cout << "Breakpoint removed\n";
-                                    } else {
-                                        breakpoints.push_back(pc);
-                                    }
-                                } else {
-                                    std::cerr << "Invalid address\n";
-                                }
-                            } else {
-                                wait_mode = wait_non_rom_pc;
-                                break;
-                            }
-                        } else if (args[0] == "fd") {
-                            breakpoints.clear();
-                            std::cout << "All breakpoints deleted\n";
-                        } else if (args[0] == "fi") {
-                            if (args.size() > 1) {
-                                auto [valid, inst] = get_simple_expr(args[1]);
-                                if (valid && inst < 0x10000) {
-                                    wait_mode = wait_exact_inst;
-                                    wait_arg = inst;
-                                    break;
-                                } else {
-                                    std::cerr << "Invalid instruction\n";
-                                }
-                            } else {
-                                wait_mode = wait_rtx;
-                                break;
-                            }
-                        } else if (args[0] == "g") {
-                            if (args.size() == 2) {
-                                if (const auto [ok, addr] = get_simple_expr(args[1]); ok) {
-                                    const_cast<cpu_state&>(s).pc = addr;
-                                    break;
-                                } else {
-                                    std::cerr << "Invalid address\n";
-                                }
-                            } else if (args.size() == 1) {
-                                break;
-                            } else {
-                                std::cerr << "Invalid number of arguments\n";
-                            }
-                        } else if (args[0] == "H" || args[0] == "HH") {
-                            uint32_t cnt = 10;
-                            if (args.size() > 1) {
-                                if (auto [valid, cntr] = get_simple_expr(args[1]); valid) {
-                                    cnt = cntr;
-                                } else {
-                                    cnt = 0;
-                                    std::cout << "Invalid number for \"" << args[0] << "\"  \"" << args[1] << "\"\n";
-                                }
-                            }
-                            const uint32_t max_cnt = static_cast<uint32_t>(cpu_history.size());
-                            cnt = std::min(cnt, max_cnt);
-                            auto idx = (cpu_history_pos - 1 - cnt) % max_cnt;
-                            while (cnt--) {
-                                const auto& ch = cpu_history[idx++ % max_cnt];
-                                if (args[0] == "HH")
-                                    print_cpu_state(std::cout, ch);
-                                disasm_stmts(mem, ch.pc, 1);
-                            }
-                        } else if (args[0] == "il") {
-                            if (args.size() > 1) {
-                                if (auto [valid, mask] = get_simple_expr(args[1]); valid)
-                                    exception_break_mask = mask;
-                                else
-                                    std::cerr << "Invalid mask\n";
-                            } else {
-                                exception_break_mask = ~0U;
-                            }
-                            std::cout << "Exception break mask: $" << hexfmt(exception_break_mask) << "\n";
-                        } else if (args[0] == "insert_disk") {
-                            if (args.size() >= 2) {
-                                const int drive = args[1].length() == 1 && isdigit(args[1][0]) ? args[1][0] - '0' : -1;
-                                if (drive >= 0 && drive < max_drives && drives[drive]) {
-                                    int delay = default_disk_insertion_delay;
-                                    if (args.size() >= 4) {
-                                        auto d = get_simple_expr(args[3]);
-                                        if (d.first)
-                                            delay = d.second;
-                                        else
-                                            delay = -1;
-                                    }
-                                    if (delay >= 0)
-                                        insert_disk(static_cast<uint8_t>(drive), args.size() >= 3 ? unquote(args[2]).c_str() : "", delay);
-                                    else
-                                        std::cerr << "Invalid delay";
-                                } else {
-                                    std::cerr << "Invalid drive";
-                                }
-                            } else {
-                                std::cerr << "Drive missing\n";
-                            }
-                        } else if (args[0] == "m") {
-                            auto [valid, addr, lines] = get_addr_and_lines(args, hexdump_addr, 20);
-                            addr &= ~1;
-                            if (valid) {
-                                std::vector<uint8_t> data(lines * 16);
-                                for (size_t i = 0; i < lines * 8; ++i)
-                                    put_u16(&data[2 * i], mem.read_u16(static_cast<uint32_t>(addr + 2 * i)));
-                                hexdump16(std::cout, addr, data.data(), data.size());
-                                hexdump_addr = addr + lines * 16;
-                            }
-                        } else if (args[0][0] == 'o') {
-                            if (args[0] == "o") {
-                                auto [valid, addr, lines] = get_addr_and_lines(args, cop_addr, 20);
-                                if (valid) {
-                                    cop_addr = addr & ~1;
-                                    cop_addr += copper_disasm(mem, cop_addr, lines);
-                                }
-                            } else if (args[0] == "o1") {
-                                cop_addr = custom.copper_ptr(1);
-                                cop_addr += copper_disasm(mem, cop_addr, 20);
-                            } else if (args[0] == "o2") {
-                                cop_addr = custom.copper_ptr(2);
-                                cop_addr += copper_disasm(mem, cop_addr, 20);
-                            } else {
-                                goto unknown_command;
-                            }
-                        } else if (args[0] == "q") {
-                            quit = true;
-                            break;
-                        } else if (args[0] == "r") {
-                            if (args.size() == 1) {
-                                cpu.show_state(std::cout);
-                            } else if (args.size() == 3) {
-                                const auto [size, ptr] = get_register_address(args[1].c_str(), s);
-                                if (size) {
-                                    assert((size == 2 || size == 4) && ptr);
-                                    if (const auto [ok, val] = get_simple_expr(args[2]); ok) {
-                                        if (size == 2) {
-                                            if (val < 65536)
-                                                *reinterpret_cast<uint16_t*>(const_cast<void*>(ptr)) = static_cast<uint16_t>(val);
-                                            else
-                                                std::cerr << "Value out of range for 16-bit register\n";
-                                        } else {
-                                            *reinterpret_cast<uint32_t*>(const_cast<void*>(ptr)) = val;
-                                        }
-                                    } else {
-                                        std::cerr << "Invalid value\n";
-                                    }
-                                }
-                            } else {
-                                std::cerr << "Invalid number of arguments\n";
-                            }
-                        } else if (args[0] == "reset") {
-                            reset = keyboard_reset;
-                        } else if (args[0] == "s") {
-                            if (args.size() > 1 && !args[1].empty()) {
-                                std::vector<uint8_t> needle;
-                                bool ok = true;
-                                if (args[1][0] == '"') {
-                                    assert(args[1].back() == '"');
-                                    needle = std::vector<uint8_t>(args[1].begin() + 1, args[1].end() - 1);
-                                } else {
-                                    auto bytes = unhex_bytes(args[1]);
-                                    if (!bytes) {
-                                        std::cerr << "Invalid bytes\n";
-                                        ok = false;
-                                    } else {
-                                        needle = std::move(*bytes);
-                                    }
-                                }
-                                uint32_t start_address = 0;
-                                uint32_t end_address = 1 << 24;
-                                if (ok && args.size() > 2) {
-                                    std::tie(ok, start_address) = get_simple_expr(args[2]);
-                                    if (!ok)
-                                        std::cerr << "Invalid start address\n";
-                                }
-                                if (ok && args.size() > 3) {
-                                    std::tie(ok, end_address) = get_simple_expr(args[3]);
-                                    if (!ok)
-                                        std::cerr << "Invalid length\n";
-                                    end_address += start_address;
-                                }
-                                if (ok) {
-                                    unsigned match_count = 0;
-                                    mem_search(mem.ram(), 0, needle, start_address, end_address, match_count);
-                                    if (slow_ram)
-                                        mem_search(slow_ram->ram(), slow_base, needle, start_address, end_address, match_count);
-                                    if (fast_ram)
-                                        mem_search(fast_ram->ram(), fast_ram->base_address(), needle, start_address, end_address, match_count);
-                                    mem_search(rom.rom(), 0xf80000, needle, start_address, end_address, match_count); // Meh, not correct but w/e
-                                    if (!match_count)
-                                        debugger_ans = 0xffffffff;
-                                }
-                            } else {
-                                std::cerr << "Missing arguments\n";
-                            }
-                        } else if (args[0] == "t") {
-                            wait_arg = ~0U;
-                            if (args.size() > 1) {
-                                auto fh = get_simple_expr(args[1]);
-                                if (fh.first && fh.second > 0) {
-                                    wait_arg = fh.second - 1;
-                                } else {
-                                    std::cout << "Invalid argument (expected number of instructions)\n";
-                                }
-                            } else {
-                                wait_arg = 0;
-                            }
-                            if (wait_arg != ~0U) {
-                                wait_mode = wait_next_inst;
-                                if (wait_arg > 0)
-                                    cpu.trace(&std::cout);
-                            }
-                            break;
-                        } else if (args[0] == "trace_file") {
-                            if (args.size() > 1) {
-                                auto f = std::make_unique<std::ofstream>(args[1].c_str());
-                                if (*f) {
-                                    trace_file.reset(f.release());
-                                    debug_stream = trace_file.get();
-                                    std::cout << "Tracing to \"" << args[1] << "\"\n";
-                                } else {
-                                    std::cout << "Error creating \"" << args[1] << "\"\n";
-                                }
-                            } else {
-                                std::cout << "Tracing to screen\n";
-                                trace_file.reset();
-                                debug_stream = &std::cout;
-                            }
-                        } else if (args[0] == "trace_flags") {
-                            if (args.size() > 1) {
-                                auto fh = get_simple_expr(args[1]);
-                                if (fh.first) {
-                                    debug_flags = fh.second;
-                                } else {
-                                    debug_flags = 0;
-                                    for (size_t i = 1; i < args.size(); ++i) {
-                                        if (args[i] == "copper")
-                                            debug_flags |= debug_flag_copper;
-                                        else if (args[i] == "bpl")
-                                            debug_flags |= debug_flag_bpl;
-                                        else if (args[i] == "sprite")
-                                            debug_flags |= debug_flag_sprite;
-                                        else if (args[i] == "disk")
-                                            debug_flags |= debug_flag_disk;
-                                        else if (args[i] == "blitter")
-                                            debug_flags |= debug_flag_blitter;
-                                        else if (args[i] == "audio")
-                                            debug_flags |= debug_flag_audio;
-                                        else if (args[i] == "cia")
-                                            debug_flags |= debug_flag_cia;
-                                        else if (args[i] == "ints")
-                                            debug_flags |= debug_flag_ints;
-                                        else
-                                            std::cerr << "Unknown trace flag \"" << args[i] << "\"\n";
-                                    }
-                                }
-                            }
-                            std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
-                        } else if (args[0] == "v") {
-                            uint32_t v = 0, h = 0;
-                            if (args.size() > 1) {
-                                auto vh = get_simple_expr(args[1]);
-                                if (!vh.first || vh.second >= vpos_per_field)
-                                    goto vcmdinvalidargs;
-                                v = vh.second;
-                                if (args.size() > 2) {
-                                    auto hh = get_simple_expr(args[2]);
-                                    if (!hh.first || hh.second >= hpos_per_line / 2)
-                                        goto vcmdinvalidargs;
-                                    h = hh.second;
-                                }
-                            }
-                            if (0) {
-                            vcmdinvalidargs:
-                                std::cerr << "Invalid args to v\n";
-                            } else {
-                                std::cout << "Line $" << hexfmt(v, 2) << "\n";
-                                const auto outer_end = std::min(static_cast<uint32_t>(hpos_per_line / 2), h + 80);
-                                for (uint32_t outer_hp = h; outer_hp < outer_end;) {
-                                    const auto end = std::min(outer_hp + 8, outer_end);
-                                    for (int infoline = 0; infoline < 4; ++infoline) {
-                                        for (uint32_t hp = outer_hp; hp < end; ++hp) {
-                                            std::cout << " ";
-                                            if (infoline == 0) {
-                                                std::cout << "[" << hexfmt(hp, 2) << " " << std::setw(3) << std::right << hp << "] ";
-                                                continue;
-                                            }
-                                            const auto& mi = dma_usage[v * (hpos_per_line / 2) + hp];
-                                            if (mi.use == bus_use::none || (infoline > 1 && mi.use == bus_use::refresh)) {
-                                                std::cout << "         ";
-                                                continue;
-                                            }
-                                            if (infoline == 1) {
-                                                std::cout << std::setw(8) << std::left;
-                                                switch (mi.use) {
-                                                case bus_use::none:
-                                                    assert(false);
-                                                    break;
-                                                case bus_use::refresh:
-                                                    std::cout << "REFRESH";
-                                                    break;
-                                                case bus_use::disk:
-                                                    std::cout << "DISK";
-                                                    break;
-                                                case bus_use::audio:
-                                                    std::cout << "AUDIO";
-                                                    break;
-                                                case bus_use::bitplane:
-                                                    std::cout << "BITPLANE";
-                                                    break;
-                                                case bus_use::sprite:
-                                                    std::cout << "SPRITE";
-                                                    break;
-                                                case bus_use::copper:
-                                                    std::cout << "COPPER";
-                                                    break;
-                                                case bus_use::blitter:
-                                                    std::cout << "BLITTER";
-                                                    break;
-                                                case bus_use::cpu_read:
-                                                    std::cout << "CPU R";
-                                                    break;
-                                                case bus_use::cpu_write:
-                                                    std::cout << "CPU W";
-                                                    break;
-                                                }
-                                            } else if (infoline == 2) {
-                                                std::cout << "    " << hexfmt(mi.val);
-                                            } else if (infoline == 3) {
-                                                std::cout << hexfmt(mi.addr);
-                                            } else {
-                                                assert(false);
-                                            }
-                                            std::cout << " ";
-                                        }
-                                        std::cout << "\n";
-                                    }
-                                    std::cout << "\n";
-                                    outer_hp = end;
-                                }
-                            }
-                        } else if (args[0] == "w") {
-                            if (args.size() > 1) {
-                                auto [nvalid, num] = get_simple_expr(args[1]);
-                                if (!nvalid)
-                                    goto memwatch_invalid_args;
-                                if (args.size() == 2) {
-                                    if (num >= memwatches.size()) {
-                                        std::cerr << "memwatch index out of range\n";
-                                        goto memwatch_invalid_args;
-                                    }
-                                    memwatches[num].enabled = false;
-                                    std::cout << "Memwatch $" << hexfmt(num) << " disabled\n";
-                                } else {
-                                    if (args.size() < 5) {
-                                        std::cerr << "Too few arguments\n";
-                                        goto memwatch_invalid_args;
-                                    }
-                                    auto [avalid, address] = get_simple_expr(args[2]);
-                                    auto [svalid, size] = get_simple_expr(args[3]);
-                                    uint8_t flags = 0;
-                                    for (const char c : args[4]) {
-                                        if (c == 'r' || c == 'R')
-                                            flags |= memwatch::read;
-                                        else if (c == 'w' || c == 'W')
-                                            flags |= memwatch::write;
-                                        else {
-                                            std::cerr << "Invalid mode (r/w)\n";
-                                            goto memwatch_invalid_args;
-                                        }
-                                    }
-                                    if (!avalid || !svalid || !flags)
-                                        goto memwatch_invalid_args;
-                                    if (size != 0 && size != 1 && size != 2 && size != 4) {
-                                        std::cerr << "Invalid size\n";
-                                        goto memwatch_invalid_args;
-                                    }
-                                    if (num >= memwatches.size())
-                                        memwatches.resize(num + 1);
-                                    auto& mw = memwatches[num];
-                                    mw.enabled = true;
-                                    mw.address = address;
-                                    mw.size = static_cast<uint8_t>(size);
-                                    mw.flags = static_cast<memwatch::flagtype>(flags);
-                                    std::cout << "Added memwatch $" << hexfmt(num) << ": " << mw << "\n";
-                                }
-                            } else {
-                            memwatch_invalid_args:
-                                std::cerr << "Invalid arguments to memwatch\n";
-                            }
-                        } else if (args[0] == "W") {
-                            if (args.size() > 2) {
-                                auto [avalid, address] = get_simple_expr(args[1]);
-                                if (avalid) {
-                                    for (uint32_t i = 2; i < args.size(); ++i) {
-                                        const auto& a = args[i];
-                                        uint8_t size = 0;
-                                        if (a.length() == 2)
-                                            size = 1;
-                                        else if (a.length() == 4)
-                                            size = 2;
-                                        else if (a.length() == 8)
-                                            size = 4;
-                                        else {
-                                            std::cerr << "Invalid length for value \"" << a << "\n";
-                                            break;
-                                        }
-                                        auto [dvalid, data] = get_simple_expr(args[i]);
-                                        if (!dvalid) {
-                                            std::cerr << "Invalid value \"" << a << "\n";
-                                            break;
-                                        }
-                                        if (size > 1 && (address & 1)) {
-                                            std::cerr << "Won't write to odd address " << hexfmt(address) << "\n";
-                                            break;
-                                        }
-                                        switch (size) {
-                                        case 1:
-                                            mem.write_u8(address, static_cast<uint8_t>(data));
-                                            break;
-                                        case 2:
-                                            mem.write_u16(address, static_cast<uint16_t>(data));
-                                            break;
-                                        case 4:
-                                            mem.write_u32(address, data);
-                                            break;
-                                        }
-                                        std::cout << "Wrote $" << hexfmt(data, size * 2) << " to $" << hexfmt(address) << "\n";
-                                        address += size;
-                                    }
-                                } else {
-                                    std::cerr << "Invalid adddress\n";
-                                }
-                            } else {
-                                std::cerr << "Missing arguments address, value(s)\n";
-                            }
-                        } else if (args[0] == "wd") {
-                            if (args.size() > 1) {
-                                if (auto [valid, arg] = get_simple_expr(args[1]); valid && (arg == 0) || (arg == 1) || (arg == ~0U)) {
-                                    illegal_access_debug_mode = static_cast<int>(arg);
-                                } else {
-                                    std::cerr << "Invalid argument to wd\n";
-                                }
-                            } else {
-                                illegal_access_debug_mode = -1;
-                            }
-                            std::cout << "Illegal access debug ";
-                            switch (illegal_access_debug_mode) {
-                            case -1:
-                                std::cout << "disabled\n";
-                                break;
-                            case 0:
-                                std::cout << "logging\n";
-                                break;
-                            case 1:
-                                std::cout << "break\n";
-                                break;
-                            }
-                        } else if (args[0] == "write_mem") {
-                            if (args.size() > 1) {
-                                std::ofstream f(args[1], std::ofstream::binary);
-                                if (f) {
-                                    auto write_part = [&f](const void* data, uint32_t size, uint32_t base) {
-                                        uint8_t part_header[8];
-                                        put_u32(&part_header[0], base);
-                                        put_u32(&part_header[4], size);
-                                        f.write("PART", 4);
-                                        f.write(reinterpret_cast<const char*>(part_header), sizeof(part_header));
-                                        f.write(reinterpret_cast<const char*>(data), size);
-                                    };
-                                    f.write("MEMDUMP!", 8);
-                                    write_part(mem.ram().data(), static_cast<uint32_t>(mem.ram().size()), 0);
-                                    if (fast_ram && fast_ram->base_address())
-                                        write_part(fast_ram->ram().data(), static_cast<uint32_t>(fast_ram->ram().size()), fast_ram->base_address());
-                                    if (slow_ram)
-                                        write_part(slow_ram->ram().data(), static_cast<uint32_t>(slow_ram->ram().size()), slow_base);
-                                    f.write("REGS", 4);
-                                    auto put_reg = [&f](uint32_t val) {
-                                        uint8_t dat[4];
-                                        put_u32(dat, val);
-                                        f.write(reinterpret_cast<const char*>(dat), 4);
-                                    };
-                                    put_reg(s.pc);
-                                    put_reg(s.sr);
-                                    for (int i = 0; i < 8; ++i)
-                                        put_reg(s.d[i]);
-                                    for (int i = 0; i < 8; ++i)
-                                        put_reg(s.A(i));
-                                    put_reg(s.sr & srm_s ? s.usp : s.ssp);
-                                } else {
-                                    std::cerr << "Error creating \"" << args[1] << "\"\n";
-                                }
-                            } else {
-                                std::cerr << "Missing argument (file)\n";
-                            }
-                        } else if (args[0] == "write_screenshot") {
-                            if (args.size() > 1) {
-                                try {
-                                    write_bmp(args[1], custom_step.frame, graphics_width, graphics_height, graphics_width);
-                                } catch (const std::exception& e) {
-                                    std::cerr << e.what() << '\n';
-                                }
-                            } else {
-                                std::cerr << "Missing argument (file)\n";
-                            }
-                        } else if (args[0] == "write_state") {
-                            if (args.size() > 1) {
-                                assert(cycles_todo == 0);
-                                state_file sf{ state_file::dir::save, args[1] };
-                                cmdline_args.handle_state(sf);
-                                handle_machine_state(sf);
-                            } else {
-                                std::cout << "Missing argument (file)\n";
-                            }
-                        } else if (args[0] == "z") {
-                            wait_mode = wait_exact_pc;
-                            wait_arg = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
-                            break;
-                        } else if (args[0] == "zf") {
-                            // Wait for next frame(s)
-                            if (args.size() > 1) {
-                                auto [valid, count] = get_simple_expr(args[1]);
-                                if (valid) {
-                                    wait_mode = wait_frames;
-                                    wait_arg = count;
-                                    break;
-                                } else {
-                                    std::cerr << "Invalid argument (expected number of frames)\n";
-                                }
-                            } else {
-                                wait_mode = wait_vpos;
-                                wait_arg = 0;
-                                break;
-                            }
-                        } else if (args[0] == "zp") {
-                            if (dbg_board) {
-                                if (args.size() > 1 && !args[1].empty() && args[1][0] == '"') {
-                                    // TODO: WinUAE also supports process address
-                                    wait_mode = wait_process;
-                                    wait_process_name = unquote(args[1]);
-                                } else {
-                                    std::cerr << "Missing or invalid argument for zp (quoted process name)\n";
-                                }
-                            } else {
-                                std::cerr << "Debug board required\n";
-                            }
-                        } else if (args[0] == "zv") {
-                            // Wait for video position
-                            if (args.size() > 1) {
-                                uint32_t waitpos = 0;
-                                auto vpos = get_simple_expr(args[1]);
-                                if (vpos.first && vpos.second <= 313) {
-                                    waitpos = vpos.second << 9;
-                                    if (args.size() > 2) {
-                                        auto hpos = get_simple_expr(args[2]);
-                                        if (hpos.first && hpos.second < 455) {
-                                            waitpos |= hpos.second;
-                                        } else {
-                                            std::cout << "Invalid hpos\n";
-                                            waitpos = ~0U;
-                                        }
-                                    }
-                                    if (waitpos != ~0U) {
-                                        wait_mode = wait_vpos;
-                                        wait_arg = waitpos;
-                                        break;
-                                    }
-                                } else {
-                                    std::cout << "Invalid vpos\n";
-                                }
-                            } else {
-                                std::cout << "Missing argument(s) vpos [hpos]\n";
-                            }
-                        } else if (args[0][0] == '?') {
-                            std::string expr = args[0].substr(1);
-                            for (size_t i = 1; i < args.size(); ++i)
-                                expr += args[i];
-                            const auto [valid, num] = get_simple_expr(expr);
-                            if (valid) {
-                                std::cout << "$" << hexfmt(num) << " = %" << binfmt(num) << " = " << num << "\n";
-                                debugger_ans = num;
-                            } else {
-                                std::cout << "Invalid expression\n";
-                            }
-                        } else {
-unknown_command:
-                            std::cout << "Unknown command \"" << args[0] << "\"\n";
-                        }
-                    }
-                    debug_mode = false;
-                    if (g) {
-                        g->set_debug_windows_visible(false);
-                        g->set_active(true);
-                    }
-                }
+    if (cpu_step.exception && exception_break_mask & (1 << cpu_step.exception)) {
+        std::cout << "Breaking on exception " << static_cast<int>(cpu_step.exception) << "\n";
+        goto activate;
+    }
 
-                if (!cpu_step.stopped)
-                    memcpy(&cpu_history[cpu_history_pos++ % cpu_history.size()], &cpu.state(), sizeof(cpu_state));
-
-
-                cpu_active = true;
-                cpu_step = cpu.step();
-                cpu_active = false;
-                   
-                if (cpu_step.stopped) {
-                    do {
-                        cstep(false);
-                    } while (!custom.current_ipl() && !new_frame && !debug_mode);
-                } else {
-                    if (cpu_step.exception && exception_break_mask & (1 << cpu_step.exception)) {
-                        activate_debugger();
-                        std::cout << "Breaking on exception " << static_cast<int>(cpu_step.exception) << "\n";
-                    }
-
-                    #if 0
-                    if (cpu_step.instruction == 0x4eae) {
-                        // JSR ofs(A6)
-                        if (auto ofs = static_cast<int16_t>(mem.hack_peek_u16(cpu_step.last_pc + 2)); ofs < 0) {
-                            static std::map<uint32_t, std::string> names;
-                            static uint32_t exec_base, dos_base;
-                            const auto a6 = cpu.state().a[6];
-                            std::string name;
-                            if (auto it = names.find(a6); it != names.end()) {
-                                name = it->second;
-                            } else {
-                                auto na = mem.read_u32(a6 + 0x0a); // Name
-                                for (;;) {
-                                    auto b = mem.read_u8(na++);
-                                    if (!b)
-                                        break;
-                                    name.push_back(b);
-                                }
-                                names.insert({ a6, name });
-                                if (name == "exec.library")
-                                    exec_base = a6;
-                                else if (name == "dos.library")
-                                    dos_base = a6;
-                            }
-                            if (a6 == dos_base && ofs == -156 /*unload seg*/) {
-                                print_cpu_state(std::cout, cpu.state());
-                                std::cout << "JSR -" << (-ofs) << "(A6) ; " << name << "\n";
-                                if (cpu.state().d[1] * 4 >= 0xa00000)
-                                    activate_debugger();
-                            }
-                        }
-                    }
-                    #endif
-
-                    switch (wait_mode) {
-                    case wait_none:
 #ifdef DEBUG_BREAK_INST
-                        if (cpu_step.instruction == debug_break_instruction_num)
-                            break;
+    if (cpu_step.instruction == debug_break_instruction_num)
+        goto activate;
 #endif
-                        goto check_breakpoint;
-                    case wait_next_inst:
-                        if (wait_arg) {
-                            --wait_arg;
-                            goto check_breakpoint;
-                        }
-                        break;
-                    case wait_exact_pc:
-                        if (cpu_step.current_pc != wait_arg)
-                            goto check_breakpoint;
-                        break;
-                    case wait_exact_inst:
-                        if (cpu_step.instruction != wait_arg)
-                            goto check_breakpoint;
-                        break;
-                    case wait_rtx:
-                        if (cpu_step.instruction != 0x4e73 && cpu_step.instruction != 0x4e75 && cpu_step.instruction != 0x4e77) // RTE, RTS or RTR
-                            goto check_breakpoint;
-                        break;
-                    case wait_non_rom_pc:
-                        if (cpu_step.current_pc >= min_rom_addr)
-                            goto check_breakpoint;
-                        // Ignore if next instruction is JMP ABS.L to ROM
-                        if (mem.read_u16(cpu_step.current_pc)  == 0x4ef9 && mem.read_u32(cpu_step.current_pc + 2) >= min_rom_addr)
-                            goto check_breakpoint;
-                        break;
-                    case wait_vpos: // Handled in cstep
-                    case wait_frames:
-                    case wait_process: // Handled elsewhere
-                        goto check_breakpoint;
-                    }
 
+#if 0
+    if (cpu_step.instruction == 0x4eae) {
+        // JSR ofs(A6)
+        if (auto ofs = static_cast<int16_t>(mem.hack_peek_u16(cpu_step.last_pc + 2)); ofs < 0) {
+            static std::map<uint32_t, std::string> names;
+            static uint32_t exec_base, dos_base;
+            const auto a6 = cpu.state().a[6];
+            std::string name;
+            if (auto it = names.find(a6); it != names.end()) {
+                name = it->second;
+            } else {
+                auto na = mem.read_u32(a6 + 0x0a); // Name
+                for (;;) {
+                    auto b = mem.read_u8(na++);
+                    if (!b)
+                        break;
+                    name.push_back(b);
+                }
+                names.insert({ a6, name });
+                if (name == "exec.library")
+                    exec_base = a6;
+                else if (name == "dos.library")
+                    dos_base = a6;
+            }
+            if (a6 == dos_base && ofs == -156 /*unload seg*/) {
+                print_cpu_state(std::cout, cpu.state());
+                std::cout << "JSR -" << (-ofs) << "(A6) ; " << name << "\n";
+                if (cpu.state().d[1] * 4 >= 0xa00000)
                     activate_debugger();
-                    cpu.trace(nullptr);
-                    wait_mode = wait_none;
+            }
+        }
+    }
+#endif
+
+    switch (wait_mode) {
+    case wait_none:
+        goto check_breakpoint;
+    case wait_next_inst:
+        if (wait_arg) {
+            --wait_arg;
+            goto check_breakpoint;
+        }
+        break;
+    case wait_exact_pc:
+        if (cpu_step.current_pc != wait_arg)
+            goto check_breakpoint;
+        break;
+    case wait_exact_inst:
+        if (cpu_step.instruction != wait_arg)
+            goto check_breakpoint;
+        break;
+    case wait_rtx:
+        if (cpu_step.instruction != 0x4e73 && cpu_step.instruction != 0x4e75 && cpu_step.instruction != 0x4e77) // RTE, RTS or RTR
+            goto check_breakpoint;
+        break;
+    case wait_non_rom_pc:
+        if (cpu_step.current_pc >= min_rom_addr)
+            goto check_breakpoint;
+        // Ignore if next instruction is JMP ABS.L to ROM
+        if (mem.read_u16(cpu_step.current_pc) == 0x4ef9 && mem.read_u32(cpu_step.current_pc + 2) >= min_rom_addr)
+            goto check_breakpoint;
+        break;
+    case wait_vpos: // Handled in cstep
+    case wait_frames:
+    case wait_process: // Handled elsewhere
+        goto check_breakpoint;
+    }
+
+activate:
+    activate_debugger();
+    cpu.trace(nullptr);
+    wait_mode = wait_none;
+    return;
 
 check_breakpoint:
-                    if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
-                        activate_debugger();
-                        std::cout << "Breakpoint hit\n";
-                    }
+    if (auto it = std::find(breakpoints.begin(), breakpoints.end(), cpu_step.current_pc); it != breakpoints.end()) {
+        std::cout << "Breakpoint hit\n";
+        goto activate;
+    }
+}
 
-                    if (cpu_step.instruction == reset_instruction_num)
-                        reset = cpu_reset;
-                    do_all_custom_cylces();
-                }
+bool amiga::check_wait_process_name(const std::string& process_name) const
+{
+    assert(!cpu_active); // should already be disabled
+    auto end_pos = process_name.find_last_of(":/");
+    auto prname = toupper_str(end_pos != std::string::npos ? process_name.substr(end_pos + 1) : process_name);
+    return prname == toupper_str(wait_process_name);
+}
 
-                if (reset != no_reset) {
-                    std::cout << (reset == cpu_reset ? "CPU reset" : "Keyboard reset") << "\n";
-                    if (!debug_mode) {
-                        tasks.clear();
-                        mem.reset();
-                        if (reset != cpu_reset)
-                            cpu.reset();
-                        reset = no_reset;
-                    }
-                }
+void amiga::check_wait_process(uint32_t process_ptr, const std::string& process_name)
+{
+    if (wait_mode != wait_process || !check_wait_process_name(process_name))
+        return;
+    wait_process_name.clear();
+    uint32_t seglist = 0;
+    if (auto cli_ptr = mem.read_u32(process_ptr + pr_CLI) << 2; cli_ptr) {
+        seglist = mem.read_u32(cli_ptr + cli_Module) << 2;
+    } else if (auto seglist_array = mem.read_u32(process_ptr + pr_SegList) << 2; seglist_array) {
+        // HACK HACK HACK
+        // Ignore the size in the seglist array. It seems to report 2 for programs started from the WB
+        // even though entry 3 works fine..
+        // auto sz = mem.read_u32(seglist_array);
+        seglist = mem.read_u32(seglist_array + 4 * 3) << 2; // Entry 3
+    }
 
-                if (new_frame) {
-                    if (disk_chosen_countdown) {
-                        if (--disk_chosen_countdown == 0) {
-                            std::cout << drives[pending_disk_drive]->name() << " Inserting disk\n";
-                            drives[pending_disk_drive]->insert_disk(std::move(pending_disk));
-                            pending_disk_drive = 0xff;
-                        }
-                    }
-                    new_frame = false;
-                    goto update;
+    if (!seglist) {
+        std::cerr << "Unable to find seglist for process \"" << process_name << "\"\n";
+        wait_mode = wait_none;
+        activate_debugger();
+        return;
+    }
+
+    std::cout << "Setting breakpoint for \"" << process_name << "\" at $" << hexfmt(wait_arg) << "\n";
+
+    wait_mode = wait_exact_pc;
+    wait_arg = seglist + 4;
+}
+
+void amiga::on_task_init(const uint32_t exec_base)
+{
+    disable_bool db { cpu_active };
+    constexpr uint32_t ThisTask = 276;
+    // Bit of a hack, but add initial process (could scan task lists instead, but doesn't seem to be necessary)
+    tasks.push_back(mem.read_u32(exec_base + ThisTask));
+}
+
+void amiga::on_task_added(const uint32_t task_ptr, [[maybe_unused]] uint32_t initial_pc)
+{
+    disable_bool db { cpu_active };
+    const auto type = mem.read_u8(task_ptr + ln_Type);
+    if (type != NT_TASK && type != NT_PROCESS) {
+        std::cerr << "Warning AddTask called with wrong node type $" << hexfmt(type) << " address $" << hexfmt(task_ptr) << "\n";
+        return;
+    }
+    if (auto it = std::find(tasks.begin(), tasks.end(), task_ptr); it != tasks.end()) {
+        std::cerr << "Task with address $" << hexfmt(task_ptr) << " already added!\n";
+        return;
+    }
+    tasks.push_back(task_ptr);
+    const auto task_name = read_string(mem, mem.read_u32(task_ptr + ln_Name));
+    std::cout << (type == NT_TASK ? "Task" : "Process") << " \"" << task_name << "\" started address $" << hexfmt(task_ptr) << " initialPC=$" << hexfmt(initial_pc) << "\n";
+    if (type == NT_PROCESS)
+        check_wait_process(task_ptr, task_name);
+}
+
+void amiga::on_task_removed(const uint32_t task_ptr)
+{
+    disable_bool db { cpu_active };
+    auto it = std::find(tasks.begin(), tasks.end(), task_ptr);
+    const auto type = mem.read_u8(task_ptr + ln_Type);
+    const char* type_name = (type == NT_TASK ? "Task" : "Process");
+    if (it == tasks.end()) {
+        std::cerr << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" with address $" << hexfmt(task_ptr) << " removed but not previously known!\n";
+        return;
+    }
+    tasks.erase(it);
+    std::cout << type_name << " \"" << read_string(mem, mem.read_u32(task_ptr + ln_Name)) << "\" removed address $" << hexfmt(task_ptr) << "\n";
+}
+
+void amiga::on_load_seg(uint32_t name_ptr, const uint32_t seg_list_bptr)
+{
+    disable_bool db { cpu_active };
+    std::string name;
+    if (name_ptr & 0x80000000) {
+        // BSTR
+        name_ptr = (name_ptr & ~0x80000000) * 4;
+        int len = mem.read_u8(name_ptr++);
+        for (int i = 0; i < len; ++i)
+            name.push_back(mem.read_u8(name_ptr++));
+    } else {
+        name = read_string(mem, name_ptr);
+    }
+    std::cout << "LoadSeg \"" << name << "\" seglist=$" << hexfmt(seg_list_bptr) << "\n";
+
+    if (wait_mode != wait_process)
+        return;
+    if (check_wait_process_name(name)) {
+        wait_mode = wait_exact_pc;
+        wait_arg = (seg_list_bptr + 1) << 2;
+        wait_process_name.clear();
+        std::cout << "Setting breakpoint for \"" << name << "\" at $" << hexfmt(wait_arg) << "\n";
+    }
+}
+
+void amiga::debugger_loop()
+{
+    const auto& s = cpu.state();
+    if (g) {
+        serial_data_flush();
+        g->set_debug_memory(mem.ram(), custom.get_regs());
+        g->set_debug_windows_visible(true);
+        g->update_image(custom_step.frame);
+    }
+
+    // Match Winuae output
+    // Cycles: 8 Chip, 16 CPU. (V=0 H=31 -> V=0 H=39)
+    const uint32_t vhpos = custom_step.vpos << 8 | custom_step.hpos >> 1;
+    std::cout << "Cycles: " << (chip_cycles_count >> 1) << " Chip, " << cpu_cycles_count << " CPU. (V=" << (last_vhpos >> 8) << " H=" << (last_vhpos & 0xff) << " -> V=" << (vhpos >> 8) << " H=" << (vhpos & 0xff) << ")\n";
+    last_vhpos = vhpos;
+    chip_cycles_count = cpu_cycles_count = 0;
+
+    cpu.show_state(std::cout);
+    disasm_stmts(mem, cpu_step.current_pc, 1);
+
+    debugger_cpu_state = s;
+
+    uint32_t disasm_pc = s.pc, hexdump_addr = 0, cop_addr = custom.copper_ptr(0);
+    for (;;) {
+        std::string line;
+        if (debug_script) {
+            for (;;) {
+                if (!std::getline(*debug_script, line)) {
+                    debug_script.reset();
+                    line.clear();
+                    break;
                 }
-                if (!steps_to_update--) {
-                update:
-                    serdata_flush();
-                    steps_to_update = steps_per_update;
-                    if (ctrl_c) {
-                        ctrl_c = false;
-                        signal(SIGINT, &ctrl_c_handler);
-                        activate_debugger();
-                    }
-                    if (g) {
-                        g->update_image(custom_step.frame);
-                        g->led_state(cias.power_led_on());
-                        auto new_events = g->update();
-                        events.insert(events.end(), new_events.begin(), new_events.end());
-                    }
+                line = trim(line);
+                if (!line.empty() && line[0] != '#') {
+                    std::cout << "> " << line << "\n";
+                    break;
                 }
-            } catch (const std::exception& e) {
-                cpu.show_state(std::cerr);
-                std::cerr << "\n" << e.what() << "\n\n";
-                serdata_flush();
-                if (cmdline_args.test_mode)
-                    throw;
-                activate_debugger();
             }
         }
+        if (line.empty()) {
+            if (g) {
+                if (!g->debug_prompt(line)) {
+                    debug_mode = false;
+                    quit = true;
+                    break;
+                }
+            } else {
+                std::cout << "> " << std::flush;
+                if (!std::getline(std::cin, line)) {
+                    debug_mode = false;
+                    quit = true;
+                    break;
+                }
+            }
+        }
+        const auto args = split_line(line);
+        if (args.empty() || args[0].empty() || args[0][0] == '#')
+            continue;
+        if (args[0] == "c") {
+            custom.show_debug_state(std::cout);
+        } else if (args[0] == "d") {
+            auto [valid, pc, lines] = get_addr_and_lines(args, disasm_pc, 10);
+            if (valid) {
+                disasm_pc = pc;
+                disasm_pc += disasm_stmts(mem, disasm_pc, lines);
+            }
+        } else if (args[0] == "e") {
+            custom.show_registers(std::cout);
+        } else if (args[0] == "f") {
+            if (args.size() > 1) {
+                auto [valid, pc] = get_simple_expr(args[1]);
+                if (valid && !(pc & 1)) {
+                    if (auto it = std::find(breakpoints.begin(), breakpoints.end(), pc); it != breakpoints.end()) {
+                        breakpoints.erase(it);
+                        std::cout << "Breakpoint removed\n";
+                    } else {
+                        breakpoints.push_back(pc);
+                    }
+                } else {
+                    std::cerr << "Invalid address\n";
+                }
+            } else {
+                wait_mode = wait_non_rom_pc;
+                break;
+            }
+        } else if (args[0] == "fd") {
+            breakpoints.clear();
+            std::cout << "All breakpoints deleted\n";
+        } else if (args[0] == "fi") {
+            if (args.size() > 1) {
+                auto [valid, inst] = get_simple_expr(args[1]);
+                if (valid && inst < 0x10000) {
+                    wait_mode = wait_exact_inst;
+                    wait_arg = inst;
+                    break;
+                } else {
+                    std::cerr << "Invalid instruction\n";
+                }
+            } else {
+                wait_mode = wait_rtx;
+                break;
+            }
+        } else if (args[0] == "g") {
+            if (args.size() == 2) {
+                if (const auto [ok, addr] = get_simple_expr(args[1]); ok) {
+                    const_cast<cpu_state&>(s).pc = addr;
+                    break;
+                } else {
+                    std::cerr << "Invalid address\n";
+                }
+            } else if (args.size() == 1) {
+                break;
+            } else {
+                std::cerr << "Invalid number of arguments\n";
+            }
+        } else if (args[0] == "H" || args[0] == "HH") {
+            uint32_t cnt = 10;
+            if (args.size() > 1) {
+                if (auto [valid, cntr] = get_simple_expr(args[1]); valid) {
+                    cnt = cntr;
+                } else {
+                    cnt = 0;
+                    std::cout << "Invalid number for \"" << args[0] << "\"  \"" << args[1] << "\"\n";
+                }
+            }
+            const uint32_t max_cnt = static_cast<uint32_t>(cpu_history.size());
+            cnt = std::min(cnt, max_cnt);
+            auto idx = (cpu_history_pos - 1 - cnt) % max_cnt;
+            while (cnt--) {
+                const auto& ch = cpu_history[idx++ % max_cnt];
+                if (args[0] == "HH")
+                    print_cpu_state(std::cout, ch);
+                disasm_stmts(mem, ch.pc, 1);
+            }
+        } else if (args[0] == "il") {
+            if (args.size() > 1) {
+                if (auto [valid, mask] = get_simple_expr(args[1]); valid)
+                    exception_break_mask = mask;
+                else
+                    std::cerr << "Invalid mask\n";
+            } else {
+                exception_break_mask = ~0U;
+            }
+            std::cout << "Exception break mask: $" << hexfmt(exception_break_mask) << "\n";
+        } else if (args[0] == "insert_disk") {
+            if (args.size() >= 2) {
+                const int drive = args[1].length() == 1 && isdigit(args[1][0]) ? args[1][0] - '0' : -1;
+                if (drive >= 0 && drive < max_drives && drives[drive]) {
+                    int delay = default_disk_insertion_delay;
+                    if (args.size() >= 4) {
+                        auto d = get_simple_expr(args[3]);
+                        if (d.first)
+                            delay = d.second;
+                        else
+                            delay = -1;
+                    }
+                    if (delay >= 0)
+                        insert_disk(static_cast<uint8_t>(drive), args.size() >= 3 ? unquote(args[2]).c_str() : "", delay);
+                    else
+                        std::cerr << "Invalid delay";
+                } else {
+                    std::cerr << "Invalid drive";
+                }
+            } else {
+                std::cerr << "Drive missing\n";
+            }
+        } else if (args[0] == "m") {
+            auto [valid, addr, lines] = get_addr_and_lines(args, hexdump_addr, 20);
+            addr &= ~1;
+            if (valid) {
+                std::vector<uint8_t> data(lines * 16);
+                for (size_t i = 0; i < lines * 8; ++i)
+                    put_u16(&data[2 * i], mem.read_u16(static_cast<uint32_t>(addr + 2 * i)));
+                hexdump16(std::cout, addr, data.data(), data.size());
+                hexdump_addr = addr + lines * 16;
+            }
+        } else if (args[0][0] == 'o') {
+            if (args[0] == "o") {
+                auto [valid, addr, lines] = get_addr_and_lines(args, cop_addr, 20);
+                if (valid) {
+                    cop_addr = addr & ~1;
+                    cop_addr += copper_disasm(mem, cop_addr, lines);
+                }
+            } else if (args[0] == "o1") {
+                cop_addr = custom.copper_ptr(1);
+                cop_addr += copper_disasm(mem, cop_addr, 20);
+            } else if (args[0] == "o2") {
+                cop_addr = custom.copper_ptr(2);
+                cop_addr += copper_disasm(mem, cop_addr, 20);
+            } else {
+                goto unknown_command;
+            }
+        } else if (args[0] == "q") {
+            quit = true;
+            break;
+        } else if (args[0] == "r") {
+            if (args.size() == 1) {
+                cpu.show_state(std::cout);
+            } else if (args.size() == 3) {
+                const auto [size, ptr] = get_register_address(args[1].c_str(), s);
+                if (size) {
+                    assert((size == 2 || size == 4) && ptr);
+                    if (const auto [ok, val] = get_simple_expr(args[2]); ok) {
+                        if (size == 2) {
+                            if (val < 65536)
+                                *reinterpret_cast<uint16_t*>(const_cast<void*>(ptr)) = static_cast<uint16_t>(val);
+                            else
+                                std::cerr << "Value out of range for 16-bit register\n";
+                        } else {
+                            *reinterpret_cast<uint32_t*>(const_cast<void*>(ptr)) = val;
+                        }
+                    } else {
+                        std::cerr << "Invalid value\n";
+                    }
+                }
+            } else {
+                std::cerr << "Invalid number of arguments\n";
+            }
+        } else if (args[0] == "reset") {
+            reset = keyboard_reset;
+        } else if (args[0] == "s") {
+            if (args.size() > 1 && !args[1].empty()) {
+                std::vector<uint8_t> needle;
+                bool ok = true;
+                if (args[1][0] == '"') {
+                    assert(args[1].back() == '"');
+                    needle = std::vector<uint8_t>(args[1].begin() + 1, args[1].end() - 1);
+                } else {
+                    auto bytes = unhex_bytes(args[1]);
+                    if (!bytes) {
+                        std::cerr << "Invalid bytes\n";
+                        ok = false;
+                    } else {
+                        needle = std::move(*bytes);
+                    }
+                }
+                uint32_t start_address = 0;
+                uint32_t end_address = 1 << 24;
+                if (ok && args.size() > 2) {
+                    std::tie(ok, start_address) = get_simple_expr(args[2]);
+                    if (!ok)
+                        std::cerr << "Invalid start address\n";
+                }
+                if (ok && args.size() > 3) {
+                    std::tie(ok, end_address) = get_simple_expr(args[3]);
+                    if (!ok)
+                        std::cerr << "Invalid length\n";
+                    end_address += start_address;
+                }
+                if (ok) {
+                    unsigned match_count = 0;
+                    mem_search(mem.ram(), 0, needle, start_address, end_address, match_count);
+                    if (slow_ram)
+                        mem_search(slow_ram->ram(), slow_base, needle, start_address, end_address, match_count);
+                    if (fast_ram)
+                        mem_search(fast_ram->ram(), fast_ram->base_address(), needle, start_address, end_address, match_count);
+                    mem_search(rom.rom(), 0xf80000, needle, start_address, end_address, match_count); // Meh, not correct but w/e
+                    if (!match_count)
+                        debugger_ans = 0xffffffff;
+                }
+            } else {
+                std::cerr << "Missing arguments\n";
+            }
+        } else if (args[0] == "t") {
+            wait_arg = ~0U;
+            if (args.size() > 1) {
+                auto fh = get_simple_expr(args[1]);
+                if (fh.first && fh.second > 0) {
+                    wait_arg = fh.second - 1;
+                } else {
+                    std::cout << "Invalid argument (expected number of instructions)\n";
+                }
+            } else {
+                wait_arg = 0;
+            }
+            if (wait_arg != ~0U) {
+                wait_mode = wait_next_inst;
+                if (wait_arg > 0)
+                    cpu.trace(&std::cout);
+            }
+            break;
+        } else if (args[0] == "trace_file") {
+            if (args.size() > 1) {
+                auto f = std::make_unique<std::ofstream>(args[1].c_str());
+                if (*f) {
+                    trace_file.reset(f.release());
+                    debug_stream = trace_file.get();
+                    std::cout << "Tracing to \"" << args[1] << "\"\n";
+                } else {
+                    std::cout << "Error creating \"" << args[1] << "\"\n";
+                }
+            } else {
+                std::cout << "Tracing to screen\n";
+                trace_file.reset();
+                debug_stream = &std::cout;
+            }
+        } else if (args[0] == "trace_flags") {
+            if (args.size() > 1) {
+                auto fh = get_simple_expr(args[1]);
+                if (fh.first) {
+                    debug_flags = fh.second;
+                } else {
+                    debug_flags = 0;
+                    for (size_t i = 1; i < args.size(); ++i) {
+                        if (args[i] == "copper")
+                            debug_flags |= debug_flag_copper;
+                        else if (args[i] == "bpl")
+                            debug_flags |= debug_flag_bpl;
+                        else if (args[i] == "sprite")
+                            debug_flags |= debug_flag_sprite;
+                        else if (args[i] == "disk")
+                            debug_flags |= debug_flag_disk;
+                        else if (args[i] == "blitter")
+                            debug_flags |= debug_flag_blitter;
+                        else if (args[i] == "audio")
+                            debug_flags |= debug_flag_audio;
+                        else if (args[i] == "cia")
+                            debug_flags |= debug_flag_cia;
+                        else if (args[i] == "ints")
+                            debug_flags |= debug_flag_ints;
+                        else
+                            std::cerr << "Unknown trace flag \"" << args[i] << "\"\n";
+                    }
+                }
+            }
+            std::cout << "debug flags: $" << hexfmt(debug_flags) << "\n";
+        } else if (args[0] == "v") {
+            uint32_t v = 0, h = 0;
+            if (args.size() > 1) {
+                auto vh = get_simple_expr(args[1]);
+                if (!vh.first || vh.second >= vpos_per_field)
+                    goto vcmdinvalidargs;
+                v = vh.second;
+                if (args.size() > 2) {
+                    auto hh = get_simple_expr(args[2]);
+                    if (!hh.first || hh.second >= hpos_per_line / 2)
+                        goto vcmdinvalidargs;
+                    h = hh.second;
+                }
+            }
+            if (0) {
+            vcmdinvalidargs:
+                std::cerr << "Invalid args to v\n";
+            } else {
+                std::cout << "Line $" << hexfmt(v, 2) << "\n";
+                const auto outer_end = std::min(static_cast<uint32_t>(hpos_per_line / 2), h + 80);
+                for (uint32_t outer_hp = h; outer_hp < outer_end;) {
+                    const auto end = std::min(outer_hp + 8, outer_end);
+                    for (int infoline = 0; infoline < 4; ++infoline) {
+                        for (uint32_t hp = outer_hp; hp < end; ++hp) {
+                            std::cout << " ";
+                            if (infoline == 0) {
+                                std::cout << "[" << hexfmt(hp, 2) << " " << std::setw(3) << std::right << hp << "] ";
+                                continue;
+                            }
+                            const auto& mi = dma_usage[v * (hpos_per_line / 2) + hp];
+                            if (mi.use == bus_use::none || (infoline > 1 && mi.use == bus_use::refresh)) {
+                                std::cout << "         ";
+                                continue;
+                            }
+                            if (infoline == 1) {
+                                std::cout << std::setw(8) << std::left;
+                                switch (mi.use) {
+                                case bus_use::none:
+                                    assert(false);
+                                    break;
+                                case bus_use::refresh:
+                                    std::cout << "REFRESH";
+                                    break;
+                                case bus_use::disk:
+                                    std::cout << "DISK";
+                                    break;
+                                case bus_use::audio:
+                                    std::cout << "AUDIO";
+                                    break;
+                                case bus_use::bitplane:
+                                    std::cout << "BITPLANE";
+                                    break;
+                                case bus_use::sprite:
+                                    std::cout << "SPRITE";
+                                    break;
+                                case bus_use::copper:
+                                    std::cout << "COPPER";
+                                    break;
+                                case bus_use::blitter:
+                                    std::cout << "BLITTER";
+                                    break;
+                                case bus_use::cpu_read:
+                                    std::cout << "CPU R";
+                                    break;
+                                case bus_use::cpu_write:
+                                    std::cout << "CPU W";
+                                    break;
+                                }
+                            } else if (infoline == 2) {
+                                std::cout << "    " << hexfmt(mi.val);
+                            } else if (infoline == 3) {
+                                std::cout << hexfmt(mi.addr);
+                            } else {
+                                assert(false);
+                            }
+                            std::cout << " ";
+                        }
+                        std::cout << "\n";
+                    }
+                    std::cout << "\n";
+                    outer_hp = end;
+                }
+            }
+        } else if (args[0] == "w") {
+            if (args.size() > 1) {
+                auto [nvalid, num] = get_simple_expr(args[1]);
+                if (!nvalid)
+                    goto memwatch_invalid_args;
+                if (args.size() == 2) {
+                    if (num >= memwatches.size()) {
+                        std::cerr << "memwatch index out of range\n";
+                        goto memwatch_invalid_args;
+                    }
+                    memwatches[num].enabled = false;
+                    std::cout << "Memwatch $" << hexfmt(num) << " disabled\n";
+                } else {
+                    if (args.size() < 5) {
+                        std::cerr << "Too few arguments\n";
+                        goto memwatch_invalid_args;
+                    }
+                    auto [avalid, address] = get_simple_expr(args[2]);
+                    auto [svalid, size] = get_simple_expr(args[3]);
+                    uint8_t flags = 0;
+                    for (const char c : args[4]) {
+                        if (c == 'r' || c == 'R')
+                            flags |= memwatch::read;
+                        else if (c == 'w' || c == 'W')
+                            flags |= memwatch::write;
+                        else {
+                            std::cerr << "Invalid mode (r/w)\n";
+                            goto memwatch_invalid_args;
+                        }
+                    }
+                    if (!avalid || !svalid || !flags)
+                        goto memwatch_invalid_args;
+                    if (size != 0 && size != 1 && size != 2 && size != 4) {
+                        std::cerr << "Invalid size\n";
+                        goto memwatch_invalid_args;
+                    }
+                    if (num >= memwatches.size())
+                        memwatches.resize(num + 1);
+                    auto& mw = memwatches[num];
+                    mw.enabled = true;
+                    mw.address = address;
+                    mw.size = static_cast<uint8_t>(size);
+                    mw.flags = static_cast<memwatch::flagtype>(flags);
+                    std::cout << "Added memwatch $" << hexfmt(num) << ": " << mw << "\n";
+                }
+            } else {
+            memwatch_invalid_args:
+                std::cerr << "Invalid arguments to memwatch\n";
+            }
+        } else if (args[0] == "W") {
+            if (args.size() > 2) {
+                auto [avalid, address] = get_simple_expr(args[1]);
+                if (avalid) {
+                    for (uint32_t i = 2; i < args.size(); ++i) {
+                        const auto& a = args[i];
+                        uint8_t size = 0;
+                        if (a.length() == 2)
+                            size = 1;
+                        else if (a.length() == 4)
+                            size = 2;
+                        else if (a.length() == 8)
+                            size = 4;
+                        else {
+                            std::cerr << "Invalid length for value \"" << a << "\n";
+                            break;
+                        }
+                        auto [dvalid, data] = get_simple_expr(args[i]);
+                        if (!dvalid) {
+                            std::cerr << "Invalid value \"" << a << "\n";
+                            break;
+                        }
+                        if (size > 1 && (address & 1)) {
+                            std::cerr << "Won't write to odd address " << hexfmt(address) << "\n";
+                            break;
+                        }
+                        switch (size) {
+                        case 1:
+                            mem.write_u8(address, static_cast<uint8_t>(data));
+                            break;
+                        case 2:
+                            mem.write_u16(address, static_cast<uint16_t>(data));
+                            break;
+                        case 4:
+                            mem.write_u32(address, data);
+                            break;
+                        }
+                        std::cout << "Wrote $" << hexfmt(data, size * 2) << " to $" << hexfmt(address) << "\n";
+                        address += size;
+                    }
+                } else {
+                    std::cerr << "Invalid adddress\n";
+                }
+            } else {
+                std::cerr << "Missing arguments address, value(s)\n";
+            }
+        } else if (args[0] == "wd") {
+            if (args.size() > 1) {
+                if (auto [valid, arg] = get_simple_expr(args[1]); valid && ((arg == 0) || (arg == 1) || (arg == ~0U))) {
+                    illegal_access_debug_mode = static_cast<int>(arg);
+                } else {
+                    std::cerr << "Invalid argument to wd\n";
+                }
+            } else {
+                illegal_access_debug_mode = -1;
+            }
+            std::cout << "Illegal access debug ";
+            switch (illegal_access_debug_mode) {
+            case -1:
+                std::cout << "disabled\n";
+                break;
+            case 0:
+                std::cout << "logging\n";
+                break;
+            case 1:
+                std::cout << "break\n";
+                break;
+            }
+        } else if (args[0] == "write_mem") {
+            if (args.size() > 1) {
+                std::ofstream f(args[1], std::ofstream::binary);
+                if (f) {
+                    auto write_part = [&f](const void* data, uint32_t size, uint32_t base) {
+                        uint8_t part_header[8];
+                        put_u32(&part_header[0], base);
+                        put_u32(&part_header[4], size);
+                        f.write("PART", 4);
+                        f.write(reinterpret_cast<const char*>(part_header), sizeof(part_header));
+                        f.write(reinterpret_cast<const char*>(data), size);
+                    };
+                    f.write("MEMDUMP!", 8);
+                    write_part(mem.ram().data(), static_cast<uint32_t>(mem.ram().size()), 0);
+                    if (fast_ram && fast_ram->base_address())
+                        write_part(fast_ram->ram().data(), static_cast<uint32_t>(fast_ram->ram().size()), fast_ram->base_address());
+                    if (slow_ram)
+                        write_part(slow_ram->ram().data(), static_cast<uint32_t>(slow_ram->ram().size()), slow_base);
+                    f.write("REGS", 4);
+                    auto put_reg = [&f](uint32_t val) {
+                        uint8_t dat[4];
+                        put_u32(dat, val);
+                        f.write(reinterpret_cast<const char*>(dat), 4);
+                    };
+                    put_reg(s.pc);
+                    put_reg(s.sr);
+                    for (int i = 0; i < 8; ++i)
+                        put_reg(s.d[i]);
+                    for (int i = 0; i < 8; ++i)
+                        put_reg(s.A(i));
+                    put_reg(s.sr & srm_s ? s.usp : s.ssp);
+                } else {
+                    std::cerr << "Error creating \"" << args[1] << "\"\n";
+                }
+            } else {
+                std::cerr << "Missing argument (file)\n";
+            }
+        } else if (args[0] == "write_screenshot") {
+            if (args.size() > 1) {
+                try {
+                    write_bmp(args[1], custom_step.frame, graphics_width, graphics_height, graphics_width);
+                } catch (const std::exception& e) {
+                    std::cerr << e.what() << '\n';
+                }
+            } else {
+                std::cerr << "Missing argument (file)\n";
+            }
+        } else if (args[0] == "write_state") {
+            if (args.size() > 1) {
+                assert(cycles_todo == 0);
+                state_file sf { state_file::dir::save, args[1] };
+                cmdline_args.handle_state(sf);
+                handle_machine_state(sf);
+            } else {
+                std::cout << "Missing argument (file)\n";
+            }
+        } else if (args[0] == "z") {
+            wait_mode = wait_exact_pc;
+            wait_arg = s.pc + instructions[mem.read_u16(s.pc)].ilen * 2;
+            break;
+        } else if (args[0] == "zf") {
+            // Wait for next frame(s)
+            if (args.size() > 1) {
+                auto [valid, count] = get_simple_expr(args[1]);
+                if (valid) {
+                    wait_mode = wait_frames;
+                    wait_arg = count;
+                    break;
+                } else {
+                    std::cerr << "Invalid argument (expected number of frames)\n";
+                }
+            } else {
+                wait_mode = wait_vpos;
+                wait_arg = 0;
+                break;
+            }
+        } else if (args[0] == "zp") {
+            if (dbg_board) {
+                if (args.size() > 1 && !args[1].empty() && args[1][0] == '"') {
+                    // TODO: WinUAE also supports process address
+                    wait_mode = wait_process;
+                    wait_process_name = unquote(args[1]);
+                } else {
+                    std::cerr << "Missing or invalid argument for zp (quoted process name)\n";
+                }
+            } else {
+                std::cerr << "Debug board required\n";
+            }
+        } else if (args[0] == "zv") {
+            // Wait for video position
+            if (args.size() > 1) {
+                uint32_t waitpos = 0;
+                auto vpos = get_simple_expr(args[1]);
+                if (vpos.first && vpos.second <= 313) {
+                    waitpos = vpos.second << 9;
+                    if (args.size() > 2) {
+                        auto hpos = get_simple_expr(args[2]);
+                        if (hpos.first && hpos.second < 455) {
+                            waitpos |= hpos.second;
+                        } else {
+                            std::cout << "Invalid hpos\n";
+                            waitpos = ~0U;
+                        }
+                    }
+                    if (waitpos != ~0U) {
+                        wait_mode = wait_vpos;
+                        wait_arg = waitpos;
+                        break;
+                    }
+                } else {
+                    std::cout << "Invalid vpos\n";
+                }
+            } else {
+                std::cout << "Missing argument(s) vpos [hpos]\n";
+            }
+        } else if (args[0][0] == '?') {
+            std::string expr = args[0].substr(1);
+            for (size_t i = 1; i < args.size(); ++i)
+                expr += args[i];
+            const auto [valid, num] = get_simple_expr(expr);
+            if (valid) {
+                std::cout << "$" << hexfmt(num) << " = %" << binfmt(num) << " = " << num << "\n";
+                debugger_ans = num;
+            } else {
+                std::cout << "Invalid expression\n";
+            }
+        } else {
+        unknown_command:
+            std::cout << "Unknown command \"" << args[0] << "\"\n";
+        }
+    }
+    debug_mode = false;
+    if (g) {
+        g->set_debug_windows_visible(false);
+        g->set_active(true);
+    }
+}
 
-        std::cout << "Exited\n";
-        cpu.show_state(std::cout);
+void amiga::process_event(const gui::event& evt)
+{
+    switch (evt.type) {
+    case gui::event_type::quit:
+        quit = true;
+        break;
+    case gui::event_type::reset:
+        reset = keyboard_reset;
+        break;
+    case gui::event_type::keyboard:
+        cias.keyboard_event(evt.keyboard.pressed, evt.keyboard.scancode);
+        break;
+    case gui::event_type::mouse_button:
+        if (evt.mouse_button.left)
+            cias.set_button_state(0, evt.mouse_button.pressed);
+        else
+            custom.set_rbutton_state(evt.mouse_button.pressed);
+        break;
+    case gui::event_type::mouse_move:
+        custom.mouse_move(evt.mouse_move.dx, evt.mouse_move.dy);
+        break;
+    case gui::event_type::disk_inserted:
+        assert(evt.disk_inserted.drive < max_drives && drives[evt.disk_inserted.drive]);
+        insert_disk(evt.disk_inserted.drive, evt.disk_inserted.filename);
+        break;
+    case gui::event_type::debug_mode:
+        debug_mode = true;
+        break;
+    case gui::event_type::joystick: {
+        cias.set_button_state(1, evt.joystick.button1);
+        uint16_t dat = 0;
+        if (evt.joystick.left)
+            dat |= 1 << 9;
+        if (evt.joystick.right)
+            dat |= 1 << 1;
+        if (evt.joystick.up ^ evt.joystick.left)
+            dat |= 1 << 8;
+        if (evt.joystick.down ^ evt.joystick.right)
+            dat |= 1 << 0;
+        custom.set_joystate(dat, evt.joystick.button2);
+        break;
+    }
+    default:
+        assert(0);
+    }
+}
+
+void amiga::insert_disk(uint8_t drive, const char* filename, int delay)
+{
+    assert(drive < max_drives && drives[drive]);
+
+    std::vector<uint8_t> disk;
+    if (*filename) {
+        std::cout << "Reading " << filename << "\n";
+        try {
+            disk = load_disk_file(filename);
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to read " << filename << ": " << e.what() << "\n";
+            return;
+        }
+    }
+    // Hack: overwrite cmdline args for disk file
+    if (drive == 0) {
+        cmdline_args.df0 = filename;
+    } else {
+        assert(drive == 1);
+        cmdline_args.df1 = filename;
+    }
+    std::cout << drives[drive]->name() << " Ejecting\n";
+    drives[drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
+    if (!*filename)
+        return;
+    if (delay && !disk_chosen_countdown) {
+        assert(pending_disk.empty());
+        disk_chosen_countdown = delay; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
+        pending_disk = std::move(disk);
+        pending_disk_drive = drive;
+    } else {
+        std::cout << drives[drive]->name() << " Inserting disk (" << filename << ")\n";
+        drives[drive]->insert_disk(std::move(disk));
+    }
+}
+
+void amiga::run()
+{
+    while (!quit) {
+        try {
+            step();
+        } catch (const std::exception& e) {
+            cpu.show_state(std::cerr);
+            std::cerr << "\n"
+                      << e.what() << "\n\n";
+            serial_data_flush();
+            if (cmdline_args.test_mode)
+                throw;
+            activate_debugger();
+        }
+    }
+}
+
+void amiga::step()
+{
+    if (!events.empty()) {
+        auto evt = events[0];
+        events.erase(events.begin());
+        process_event(evt);
+    }
+
+    if (debug_mode)
+        debugger_loop();
+
+    if (!cpu_step.stopped)
+        memcpy(&cpu_history[cpu_history_pos++ % cpu_history.size()], &cpu.state(), sizeof(cpu_state));
+
+    cpu_active = true;
+    cpu_step = cpu.step();
+    cpu_active = false;
+
+    if (cpu_step.stopped) {
+        do {
+            cstep(false);
+        } while (!custom.current_ipl() && !new_frame && !debug_mode);
+    } else {
+        check_debug_break();
+
+        if (cpu_step.instruction == reset_instruction_num)
+            reset = cpu_reset;
+        do_all_custom_cylces();
+    }
+
+    if (reset != no_reset) {
+        std::cout << (reset == cpu_reset ? "CPU reset" : "Keyboard reset") << "\n";
+        if (!debug_mode) {
+            tasks.clear();
+            mem.reset();
+            if (reset != cpu_reset)
+                cpu.reset();
+            reset = no_reset;
+        }
+    }
+
+    if (new_frame) {
+        if (disk_chosen_countdown) {
+            if (--disk_chosen_countdown == 0) {
+                std::cout << drives[pending_disk_drive]->name() << " Inserting disk\n";
+                drives[pending_disk_drive]->insert_disk(std::move(pending_disk));
+                pending_disk_drive = 0xff;
+            }
+        }
+        new_frame = false;
+        goto update;
+    }
+    if (!steps_to_update--) {
+    update:
+        serial_data_flush();
+        steps_to_update = steps_per_update;
+        if (ctrl_c) {
+            ctrl_c = false;
+            signal(SIGINT, &ctrl_c_handler);
+            activate_debugger();
+        }
+        if (g) {
+            g->update_image(custom_step.frame);
+            g->led_state(cias.power_led_on());
+            auto new_events = g->update();
+            events.insert(events.end(), new_events.begin(), new_events.end());
+        }
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    try {
+        auto cmdline_args = parse_command_line_arguments(argc, argv);
+        std::unique_ptr<state_file> state;
+        if (!cmdline_args.state_filename.empty()) {
+            state = std::make_unique<state_file>(state_file::dir::load, cmdline_args.state_filename);
+            cmdline_args.handle_state(*state);
+        }
+
+        signal(SIGINT, &ctrl_c_handler);
+
+        amiga amiga_ { cmdline_args };
+        if (state)
+            amiga_.handle_machine_state(*state);
+
+        debugger_functions.push_back({ "get_u8", [&mem = amiga_.mem_handler()](uint32_t addr) -> uint32_t { return mem.read_u8(addr); } });
+        debugger_functions.push_back({ "get_u16", [&mem = amiga_.mem_handler()](uint32_t addr) -> uint32_t { return mem.read_u16(addr); } });
+        debugger_functions.push_back({ "get_u32", [&mem = amiga_.mem_handler()](uint32_t addr) -> uint32_t { return mem.read_u32(addr); } });
+        debugger_functions.push_back({ "extb", [](uint32_t val) { return sext(val, opsize::b); } });
+        debugger_functions.push_back({ "extw", [](uint32_t val) { return sext(val, opsize::w); } });
+
+        amiga_.run();
 
     } catch (const std::exception& e) {
         std::cerr << e.what() << "\n";
