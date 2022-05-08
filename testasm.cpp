@@ -484,6 +484,7 @@ Foo:
     { "blah=1\n\tifeq blah\n\tdc.b 'Hello 9a',13,10\n\tendc\n MOVEQ #0,d0\n", {0x7000 } },
     { " MOVEQ #':', d0\n", { 0x703a } },
     { " DC.L 'DOS\\0'\n", { 0x444f, 0x5300 } },
+    { "x:\n\tORG $1234\ny: move.l #x, d0\n\tmove.l #y, d1\n\tmove.l #z, d2\n\torg $42\nz:", { 0x203c, 0x0000, 0x1000, 0x223c, 0x0000, 0x1234, 0x243c, 0x0000, 0x0042 } },
     };
 
     for (const auto& tc : test_cases) {

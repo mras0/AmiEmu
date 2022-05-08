@@ -66,17 +66,15 @@ target_link_libraries(m68kasm PRIVATE utils m68k)
 add_executable(m68kdisasm m68kdisasm.cpp)
 target_link_libraries(m68kdisasm PRIVATE utils m68k)
 
-set(EXPROM_BASE 40)
-
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
-  COMMAND m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm -ofmt header -org ${EXPROM_BASE} -o ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
+  COMMAND m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm -ofmt header -o ${CMAKE_CURRENT_BINARY_DIR}/exprom.h
   DEPENDS m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/exprom.asm
   )
 
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/debug_exprom.h
-  COMMAND m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/debug_exprom.asm -ofmt header -org ${EXPROM_BASE} -o ${CMAKE_CURRENT_BINARY_DIR}/debug_exprom.h
+  COMMAND m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/debug_exprom.asm -ofmt header -o ${CMAKE_CURRENT_BINARY_DIR}/debug_exprom.h
   DEPENDS m68kasm ${CMAKE_CURRENT_SOURCE_DIR}/debug_exprom.asm
   )
 
@@ -126,4 +124,3 @@ add_executable(amiemu
 set_source_files_properties(exprom.asm debug_exprom.h PROPERTIES HEADER_FILE_ONLY TRUE)
 target_link_libraries(amiemu PRIVATE utils m68k ${DRIVER_LIBS})
 target_include_directories(amiemu PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${DRIVER_INC_DIR})
-target_compile_definitions(amiemu PRIVATE EXPROM_BASE=0x${EXPROM_BASE})

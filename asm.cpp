@@ -143,6 +143,7 @@ constexpr bool range16(uint32_t val)
     X(dc      , "DC"      ) \
     X(even    , "EVEN"    ) \
     X(equ     , "EQU"     ) \
+    X(org     , "ORG"     ) \
     X(rs      , "RS"      ) \
     X(rsreset , "RSRESET" ) \
     X(rsset   , "RSSET"   ) \
@@ -360,6 +361,10 @@ public:
                     result_.push_back(0);
                     ++pc_;
                 }
+            } else if (token_type_ == token_type::org) {
+                get_token();
+                pc_ = get_constant_expr();
+                skip_to_eol();
             } else if (token_type_ == token_type::rsreset) {
                 rs_value_ = 0;
             } else if (token_type_ == token_type::rsset) {

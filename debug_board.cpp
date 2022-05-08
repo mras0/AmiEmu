@@ -12,6 +12,8 @@ namespace {
 
 #include "debug_exprom.h"
 
+constexpr uint32_t EXPROM_BASE = 0x40; // Must match value in debug_exprom.asm
+
 }
 
 class debug_board::impl final : public memory_area_handler, public autoconf_device {

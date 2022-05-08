@@ -1,6 +1,11 @@
-RomStart=0
-
+;
+; Can be compiled with vasm: vasmm68k_mot exprom.asm -Fbin -phxass
+;
 ; KS1.2 magic based on http://eab.abime.net/showpost.php?p=1045113&postcount=3
+;
+    ORG $40
+
+RomStart=0
 
 VERSION=0
 REVISION=5
@@ -397,7 +402,7 @@ DiagStart:
 
 RomTag:
             dc.w    RTC_MATCHWORD      ; UWORD RT_MATCHWORD
-rt_Match:   dc.l    Romtag-DiagStart   ; APTR  RT_MATCHTAG
+rt_Match:   dc.l    RomTag-DiagStart   ; APTR  RT_MATCHTAG
 rt_End:     dc.l    EndCopy-DiagStart  ; APTR  RT_ENDSKIP
             dc.b    RTF_AUTOINIT+RTF_COLDSTART ; UBYTE RT_FLAGS
             dc.b    VERSION            ; UBYTE RT_VERSION

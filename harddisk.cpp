@@ -23,6 +23,8 @@ namespace {
 
 #include "exprom.h"
 
+constexpr uint32_t EXPROM_BASE = 0x40; // Must match value in exprom.asm
+
 // Shared with exprom
 // constexpr uint32_t handler_SysBase = 0x00;
 // constexpr uint32_t handler_DosBase = 0x04;

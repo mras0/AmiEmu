@@ -1,3 +1,9 @@
+;
+; Can be compiled with vasm: vasmm68k_mot debug_exprom.asm -Fbin -phxass
+;
+
+    ORG $40
+
 OP_INIT=1
 OP_ADDTASK=2
 OP_REMTASK=3
