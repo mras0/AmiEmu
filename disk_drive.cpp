@@ -253,6 +253,9 @@ public:
 
         const uint8_t tracknum = !s_.side + s_.cyl * 2;
 
+        if (disk_activity_handler_)
+            disk_activity_handler_(tracknum, true);
+
         if (DEBUG_DISK)
             *debug_stream << name_ << " writing track $" << hexfmt(tracknum) << "\n";
 
