@@ -3,6 +3,7 @@
 #include <cassert>
 #include <ostream>
 #include <cstring>
+#include <fstream>
 #include "ioutil.h"
 #include "memory.h"
 #include "debug.h"
@@ -25,17 +26,18 @@ constexpr uint32_t MOTOR_ON_CNT   = ECLOCK_FREQ / 20; // 50ms
 static_assert(DISK_SIZE == 901120); // 880K
 
 constexpr uint32_t fill = 0xaaaaaaaa; // MFM encoded 0
+constexpr uint32_t mfm_mask = 0x55555555;
 
 void put_split_long(uint8_t* dest, uint32_t l)
 {
-    put_u32(dest, (l >> 1) & 0x55555555); // odd
-    put_u32(dest + 4, l & 0x55555555);    // even
+    put_u32(dest, (l >> 1) & mfm_mask); // odd
+    put_u32(dest + 4, l & mfm_mask); // even
 }
 
 void put_split_long_fill(uint8_t* dest, uint32_t l)
 {
-    put_u32(dest, ((l >> 1) & 0x55555555) | fill); // odd
-    put_u32(dest + 4, (l & 0x55555555) | fill);    // even
+    put_u32(dest, ((l >> 1) & mfm_mask) | fill); // odd
+    put_u32(dest + 4, (l & mfm_mask) | fill); // even
 }
 
 uint32_t checksum(const uint8_t* data, uint32_t nlongs)
@@ -48,6 +50,11 @@ uint32_t checksum(const uint8_t* data, uint32_t nlongs)
     return csum;
 }
 
+uint32_t decode_long(const uint8_t* src)
+{
+    return (get_u32(src) & mfm_mask) << 1 | (get_u32(src + 4) & mfm_mask);
+}
+
 }
 
 
@@ -58,6 +65,11 @@ public:
     {
     }
 
+    ~impl()
+    {
+        flush();
+    }
+
     const std::string& name() const
     {
         return name_;
@@ -65,11 +77,13 @@ public:
 
     void insert_disk(std::vector<uint8_t>&& data)
     {
+        flush();
+
         if (DEBUG_DISK)
             *debug_stream << name_ << " Inserting disk of size $" << hexfmt(data.size(), 8) << "\n";
         data_ = std::move(data);
 
-        if (data.empty())
+        if (data_.empty())
             return;
 
         if (data_.size() != DISK_SIZE) {
@@ -103,7 +117,7 @@ public:
         if (data_.empty()) {
             flags &= ~DSKF_CHANGE;
         } else {
-            flags &= ~DSKF_PROT;
+            //flags &= ~DSKF_PROT;
         }
 
         // Even if no disk is inserted track0 sensor works (a1000 bootrom)
@@ -207,6 +221,69 @@ public:
         std::memset(dest, 0xaa, MFM_GAP_SIZE_WORDS * 2);
     }
 
+    void write_mfm_track(const uint8_t* src)
+    {
+        if (!s_.motor)
+            throw std::runtime_error { name_ + " Reading while motor is not on" };
+
+        if (data_.empty())
+            throw std::runtime_error { name_ + " Writing with no disk in drive" };
+
+        #if 0
+        uint32_t wpos = 0;
+        while (wpos < MFM_TRACK_SIZE_WORDS && get_u16(&src[2 * wpos]) != MFM_SYNC)
+            ++wpos;
+        if (wpos + NUMSECS * MFM_SECTOR_SIZE_WORDS > MFM_TRACK_SIZE_WORDS)
+            throw std::runtime_error { name_ + " Trying to write invalid MFM data" };
+        #endif
+
+        // For ease, shuffle the data so it starts with a sync word (if present)
+        std::vector<uint8_t> data(2 * MFM_TRACK_SIZE_WORDS);
+        for (uint32_t wpos = 0;; ++wpos) {
+            if (wpos >= MFM_TRACK_SIZE_WORDS)
+                throw std::runtime_error { name_ + " no sync word found in written MFM data" };
+            if (get_u16(&src[2 * wpos]) != MFM_SYNC)
+                continue;
+            const auto byte_ofs = wpos * 2; 
+            const auto first_part = 2 * MFM_TRACK_SIZE_WORDS - byte_ofs;
+            memcpy(&data[0], &src[byte_ofs], first_part);
+            memcpy(&data[first_part], &src[0], byte_ofs);
+            break;
+        }
+
+        const uint8_t tracknum = !s_.side + s_.cyl * 2;
+
+        if (DEBUG_DISK)
+            *debug_stream << name_ << " writing track $" << hexfmt(tracknum) << "\n";
+
+        uint16_t sector_mask = 0;
+        for (int seccnt = 0; seccnt < NUMSECS; ++seccnt) {
+            const auto ofs = seccnt * MFM_SECTOR_SIZE_WORDS * 2;
+            if (get_u16(&data[ofs]) != MFM_SYNC || get_u16(&data[ofs + 2]) != MFM_SYNC)
+                throw std::runtime_error { name_ + " invalid MFM data" };
+
+            const auto info = decode_long(&data[ofs + 4]);
+            const auto sec = (info >> 8) & 0xff;
+            if (info >> 24 != 0xff || ((info >> 16) & 0xff) != tracknum || sec > NUMSECS || (sec + (info & 0xff)) != NUMSECS)
+                throw std::runtime_error { name_ + " invalid MFM data (info long=$" + hexstring(info) + ")" };
+
+            if (sector_mask & (1 << sec))
+                throw std::runtime_error { name_ + " sector " + std::to_string(sec) + " found twice in MFM data" };
+
+            sector_mask |= 1 << sec;
+
+            // TODO: Verify checksums..
+            uint8_t* raw_data = &data_[(tracknum * NUMSECS + sec) * TD_SECTOR];
+            for (int i = 0; i < 512; ++i) {
+                const uint8_t odd  = data[ofs + 60 + i] & 0x55;
+                const uint8_t even = data[ofs + 60 + 512 + i] & 0x55;
+                raw_data[i] = odd << 1 | even;
+            }
+        }
+
+        dirty_ = true;
+    }
+
     void set_disk_activity_handler(const disk_activity_handler& handler)
     {
         assert(!disk_activity_handler_);
@@ -241,6 +318,7 @@ public:
 private:
     std::string name_;
     std::vector<uint8_t> data_;
+    bool dirty_ = false;
     struct state {
         bool motor         = false;
         bool side          = false;          // false = upper head, true = lower head
@@ -250,6 +328,25 @@ private:
         uint32_t index_cnt = DISK_INDEX_CNT; // Countdown to next DSKINDEX event (once per revolution)
     } s_;
     disk_activity_handler disk_activity_handler_;
+
+    void flush()
+    {
+        if (data_.empty() || !dirty_)
+            return;
+        dirty_ = false;
+
+        auto filename = name_;
+        assert(filename.size() == 4 && filename.back() == ':');
+        filename.erase(3);
+        filename += "_modified.adf";
+        if (debug_stream)
+            *debug_stream << name_ << " has been written. Saving as " << filename << "\n";
+        std::ofstream out { filename, std::ofstream::binary };
+        if (out && out.is_open() && out.write(reinterpret_cast<const char*>(&data_[0]), data_.size()))
+            return;
+        if (debug_stream)
+            *debug_stream << name_ << " error writing " << filename << "\n";
+    }
 };
 
 disk_drive::disk_drive(const std::string& name)
@@ -292,6 +389,11 @@ void disk_drive::dir_step()
 void disk_drive::read_mfm_track(uint8_t* dest)
 {
     impl_->read_mfm_track(dest);
+}
+
+void disk_drive::write_mfm_track(const uint8_t* src)
+{
+    impl_->write_mfm_track(src);
 }
 
 void disk_drive::set_disk_activity_handler(const disk_activity_handler& handler)

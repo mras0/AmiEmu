@@ -1667,7 +1667,6 @@ public:
 
     bool do_disk_dma()
     {
-        TODO_ASSERT(!(s_.dsklen_act & 0x4000)); // Write not supported
         if (s_.dskwait) {
             --s_.dskwait;
             if (DEBUG_DISK && !s_.dskwait)
@@ -1676,64 +1675,85 @@ public:
         }
         
         const uint16_t nwords = s_.dsklen_act & 0x3FFF;
+        const bool write = !!(s_.dsklen_act & 0x4000);
         TODO_ASSERT(nwords > 0);
 
-        if (!s_.dskread) {
-            if (DEBUG_DISK)
-                DBGOUT << "Reading track\n";
-            assert(s_.dskpos == 0);
-            cia_.active_drive().read_mfm_track(s_.mfm_track);
-            s_.dskread = true;
-            s_.dskwait = 0;
-
-            // TODO: More correct drive emulation. (Probably with real speed, but we still want "turbo" mode supported)
-            // 
-            // Note: This is tricky, so be sure to retest if making changes
-            // Zool expects to be able to start a new read with no gap between sectors (i.e. don't advance mfmpos any more here)
-            // Rink-a-dink (using a Rob Northen loader) expects to be able to do a short read of $20 words (the header) and then the subsequent sector knowing its number
-            // RSI Mega demo 1 is also picky - Reads $18c9 words (less than a full track) and doesn't like it if it can't get a good "fit"
-            // Other loaders that have been troublesome:  batman, obliterator, james pond 1, speedball 2, desert dream
-            // Flower/Anarchy doesn't work if floppy speed is > 100%
-            if (nwords >= MFM_TRACK_SIZE_WORDS - MFM_GAP_SIZE_WORDS)
-                s_.mfm_pos = 0; // If the loader is able to handle a full track (minus the gap) then give it a clean fit to work around any issues
-            else
-                s_.mfm_pos %= MFM_TRACK_SIZE_WORDS; // Otherwise let it think that it's processing data as fast as possible (no gaps)
-            return false;
-        }
-
-        if (!s_.dsksync_passed && (s_.adkcon & 0x400)) {
-            for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
-                if (get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]) == s_.dsksync) {
-                    if (DEBUG_DISK)
-                        DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(s_.mfm_pos) << "\n";
-                    ++s_.mfm_pos;
-                    // XXX: FIXME: Shouldn't be done here
-                    s_.intreq |= INTF_DSKSYNC;
-                    s_.dsksync_passed = true;
-                    s_.dskbyt = 1 << 15 | 1 << 12 | (s_.dsksync & 0xff); // XXX
-                    s_.dskwait = 10; // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
-                    return false;
-                }
-                ++s_.mfm_pos;
+        if (write) {
+            // Pretty hacky...
+            if (s_.dskpos == 0) {
+                if (DEBUG_DISK)
+                    DBGOUT << "Disk writing starting nwords=$" << hexfmt(nwords) << "\n";
+                if (nwords * 2 < sizeof(s_.mfm_track))
+                    std::cerr << "[DISK] WARNING writing less than full track nwords=$" << hexfmt(nwords) << "\n";
             }
-            TODO_ASSERT(!"Sync word not found?");
-        }
+            for (uint32_t i = 0; i < floppy_speed_ && s_.dskpos < nwords; ++i) {
+                const auto data = chip_read(s_.dskpt);
+                s_.dskpt += 2;
+                put_u16(&s_.mfm_track[(s_.dskpos % MFM_TRACK_SIZE_WORDS) * 2], data);
+                ++s_.dskpos;
+            }
+            if (s_.dskpos < nwords)
+                return true;
+            cia_.active_drive().write_mfm_track(s_.mfm_track);
+        } else {
+            // Read
+            if (!s_.dskread) {
+                if (DEBUG_DISK)
+                    DBGOUT << "Reading track\n";
+                assert(s_.dskpos == 0);
+                cia_.active_drive().read_mfm_track(s_.mfm_track);
+                s_.dskread = true;
+                s_.dskwait = 0;
 
-        if (DEBUG_DISK && !s_.dskpos)
-            DBGOUT << "Disk reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm pos=$" << hexfmt(s_.mfm_pos) << " dsksync_passed=" << s_.dsksync_passed  << "\n";
+                // TODO: More correct drive emulation. (Probably with real speed, but we still want "turbo" mode supported)
+                //
+                // Note: This is tricky, so be sure to retest if making changes
+                // Zool expects to be able to start a new read with no gap between sectors (i.e. don't advance mfmpos any more here)
+                // Rink-a-dink (using a Rob Northen loader) expects to be able to do a short read of $20 words (the header) and then the subsequent sector knowing its number
+                // RSI Mega demo 1 is also picky - Reads $18c9 words (less than a full track) and doesn't like it if it can't get a good "fit"
+                // Other loaders that have been troublesome:  batman, obliterator, james pond 1, speedball 2, desert dream
+                // Flower/Anarchy doesn't work if floppy speed is > 100%
+                if (nwords >= MFM_TRACK_SIZE_WORDS - MFM_GAP_SIZE_WORDS)
+                    s_.mfm_pos = 0; // If the loader is able to handle a full track (minus the gap) then give it a clean fit to work around any issues
+                else
+                    s_.mfm_pos %= MFM_TRACK_SIZE_WORDS; // Otherwise let it think that it's processing data as fast as possible (no gaps)
+                return false;
+            }
 
-        // 400% floppy speed corrupts display at start of "flower"/Anarchy Germany (https://www.pouet.net/prod.php?which=3037)
-        for (uint32_t i = 0; i < floppy_speed_ && s_.dskpos < nwords; ++i) {
-            const auto data = get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]);
-            chip_write(s_.dskpt, data);
-            s_.dskbyt = 1 << 15 | (data == s_.dsksync ? 1 << 12 : 0) | (data & 0xff); // XXX
-            s_.dskpt += 2;
-            ++s_.mfm_pos;
-            ++s_.dskpos;
+            if (!s_.dsksync_passed && (s_.adkcon & 0x400)) {
+                for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
+                    if (get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]) == s_.dsksync) {
+                        if (DEBUG_DISK)
+                            DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(s_.mfm_pos) << "\n";
+                        ++s_.mfm_pos;
+                        // XXX: FIXME: Shouldn't be done here
+                        s_.intreq |= INTF_DSKSYNC;
+                        s_.dsksync_passed = true;
+                        s_.dskbyt = 1 << 15 | 1 << 12 | (s_.dsksync & 0xff); // XXX
+                        s_.dskwait = 10; // HACK: Some demos (e.g. desert dream clear intreq after starting the read, so delay a bit)
+                        return false;
+                    }
+                    ++s_.mfm_pos;
+                }
+                TODO_ASSERT(!"Sync word not found?");
+            }
+
+            if (DEBUG_DISK && !s_.dskpos)
+                DBGOUT << "Disk reading $" << hexfmt(nwords) << " words to $" << hexfmt(s_.dskpt) << " mfm pos=$" << hexfmt(s_.mfm_pos) << " dsksync_passed=" << s_.dsksync_passed << "\n";
+
+            // 400% floppy speed corrupts display at start of "flower"/Anarchy Germany (https://www.pouet.net/prod.php?which=3037)
+            for (uint32_t i = 0; i < floppy_speed_ && s_.dskpos < nwords; ++i) {
+                const auto data = get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]);
+                chip_write(s_.dskpt, data);
+                s_.dskbyt = 1 << 15 | (data == s_.dsksync ? 1 << 12 : 0) | (data & 0xff); // XXX
+                s_.dskpt += 2;
+                ++s_.mfm_pos;
+                ++s_.dskpos;
+            }
         }
         if (s_.dskpos == nwords) {
             if (DEBUG_DISK)
-                DBGOUT << "Disk read done $" << hexfmt(nwords) << " words read\n";
+                DBGOUT << "Disk operation done $" << hexfmt(nwords) << " words " << (write ? "written" : "read") << "\n";
             // XXX: FIXME: Shouldn't be done here
             s_.intreq |= INTF_DSKBLK;
             s_.dsklen_act = 0;
