@@ -1202,10 +1202,10 @@ void amiga::cstep(bool cpu_waiting)
             audio_next_to_fill = !audio_next_to_fill;
         }
         audio_buffer_ready_cv.notify_one();
+
 #ifdef WRITE_SOUND
-        for (int i = 0; i < audio_samples_per_frame; ++i) {
-            sound_out.write((const char*)&custom_step.audio[i * 2], 2);
-        }
+        static std::ofstream sound_out { "c:/temp/sound.raw", std::ofstream::binary };
+        sound_out.write((const char*)custom_step.audio, 4 * audio_samples_per_frame);
 #endif
 #if 0
                 static auto last_time = std::chrono::high_resolution_clock::now();

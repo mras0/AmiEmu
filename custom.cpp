@@ -910,7 +910,7 @@ struct custom_state {
         {
             percnt = per;
             if (per && per < 113)
-                per = 113;
+                percnt = 113;
         }
 
         float filtered_output(float scale)
@@ -1780,6 +1780,7 @@ public:
                 continue;
             }
 
+            int16_t dat = 0;
             switch (ch.state) {
             case custom_state::audio_channel_state::inactive:
                 if (active) {
@@ -1791,7 +1792,7 @@ public:
                     if (DEBUG_AUDIO)
                         DBGOUT << "Audio channel " << (int)idx << " starting\n";
                 }
-                break;
+                continue;
             case custom_state::audio_channel_state::dma_samp1:
                 ch.actdat = ch.dat;
                 if (ch.percnt == 1) {
@@ -1804,6 +1805,7 @@ public:
                 } else {
                     ch.percnt--; // period 0 => period 65536
                 }
+                dat = static_cast<int8_t>(ch.actdat >> 8);
                 break;
             case custom_state::audio_channel_state::dma_samp2:
                 if (ch.percnt == 1) {
@@ -1814,26 +1816,18 @@ public:
                 } else {
                     ch.percnt--; // period 0 => period 65536
                 }
+                dat = static_cast<int8_t>(ch.actdat & 0xff);
                 break;
             default:
-                break;
+                continue;
             }
 
-            int16_t dat = 0;
-            if (ch.state == custom_state::audio_channel_state::dma_samp1)
-                dat = static_cast<int8_t>(ch.actdat >> 8);
-            else if (ch.state == custom_state::audio_channel_state::dma_samp2)
-                dat = static_cast<int8_t>(ch.actdat & 0xff);
-            else
-                continue;
             ch.output += dat * ch.vol;
         }
-        static int cnt = 0;
-        ++cnt;
 
-        // Mix 2 samples per line
-        if (s_.hpos == 0 || (s_.hpos >> 1) == 1 + hpos_per_line / 4) {
-            auto buf = &audio_buf_[s_.vpos * 4 + 2 * (s_.hpos ? 1 : 0)];
+        // Mix 2 samples per line (but not at hpos = 0 to make life easier for main audio handling)
+        if (s_.hpos == 2 || (s_.hpos >> 1) == 2 + hpos_per_line / 4) {
+            auto buf = &audio_buf_[s_.vpos * 4 + 2 * (s_.hpos > 2 ? 1 : 0)];
             const float a = 1.0f / (1 + hpos_per_line / 4);
             buf[0] = static_cast<int16_t>(2 * (s_.audio_channels[0].filtered_output(a) + s_.audio_channels[3].filtered_output(a)));
             buf[1] = static_cast<int16_t>(2 * (s_.audio_channels[1].filtered_output(a) + s_.audio_channels[2].filtered_output(a)));
@@ -1841,7 +1835,6 @@ public:
             s_.audio_channels[1].output = 0;
             s_.audio_channels[2].output = 0;
             s_.audio_channels[3].output = 0;
-            cnt = 0;
         }
 
     }
