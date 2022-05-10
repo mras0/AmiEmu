@@ -10,7 +10,7 @@ Clone the repository and build:
 
 Then run the emulator:
 
-`amiemu -rom <path to rom file> -df0 <path to adf/rom/executable>`
+`amiemu -rom <path to rom file> -df0 <path to adf/dms/executable>`
 
 Use `amiemu -?` to see a list of command line options.
 
