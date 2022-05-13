@@ -1858,15 +1858,11 @@ public:
             auto& ch = s_.audio_channels[idx];
             const bool active = dma_master && !!(s_.dmacon & (1 << idx));
 
-            auto stop = [&]() {
+            if (ch.state != custom_state::audio_channel_state::inactive && !active) {
                 if (DEBUG_AUDIO)
                     DBGOUT << "Audio channel " << (int)idx << " stopping\n";
                 ch.state = custom_state::audio_channel_state::inactive;
                 ch.dmareq = false;
-            };
-
-            if (ch.state != custom_state::audio_channel_state::inactive && !active) {
-                stop();
                 continue;
             }
 
@@ -1985,9 +1981,7 @@ public:
             return;
         }
 
-        s_.spr_active_mask &= ~spr_active_disp_mask;
-
-        bool start_checks_needed = false;
+        s_.spr_active_mask &= ~(spr_active_disp_mask | spr_active_check_mask);
 
         for (int spr = 0; spr < 8; ++spr) {
             const uint8_t mask = 1 << spr;
@@ -2006,7 +2000,7 @@ public:
                         DBGOUT << "Sprite " << (int)spr << " DMA state=" << !!(s_.spr_dma_active_mask & mask) << " Turning DMA on\n";
                     s_.spr_dma_active_mask |= mask;
                 } else if (ss.vstart > spr_vpos_check && ss.vstart < vpos_per_field) {
-                    start_checks_needed = true;
+                    s_.spr_active_mask |= spr_active_check_mask;
                 }
             }
             if (s_.spr_hold[spr]) {
@@ -2026,9 +2020,6 @@ public:
                 // Note: sprite stays armed here (e.g. vAmigaTS manual1)
             }
         }
-
-        if (!start_checks_needed)
-            s_.spr_active_mask &= ~spr_active_check_mask;
     }
 
     void do_pixels(bool vert_disp, uint16_t display_vpos, uint16_t display_hpos, uint8_t pixel)

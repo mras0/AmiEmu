@@ -1085,8 +1085,9 @@ amiga::amiga(const command_line_arguments& args)
             g->disk_activty(1, track, write);
         });
         g->set_on_pause_callback([&](bool pause) {
-            if (audio)
+            if (audio) {
                 audio->set_paused(pause);
+            }
         });
     }
 
@@ -1223,11 +1224,12 @@ void amiga::cstep(bool cpu_waiting)
 
 void amiga::do_all_custom_cylces()
 {
-    while (cycles_todo >= cmdline_args.cpu_scale) {
+    const uint32_t n = cycles_todo / cmdline_args.cpu_scale;
+    for (uint32_t i = 0; i < n; ++i)
         cstep(false);
-        cycles_todo -= cmdline_args.cpu_scale;
-        cpu_cycles_count += cmdline_args.cpu_scale;
-    }
+
+    cycles_todo -= cmdline_args.cpu_scale * n;
+    cpu_cycles_count += cmdline_args.cpu_scale * n;
 }
 
 uint8_t amiga::read_ipl()
@@ -2321,7 +2323,7 @@ void amiga::process_event(const gui::event& evt)
         insert_disk(evt.disk_inserted.drive, evt.disk_inserted.filename);
         break;
     case gui::event_type::debug_mode:
-        debug_mode = true;
+        activate_debugger();
         break;
     case gui::event_type::joystick: {
         cias.set_button_state(1, evt.joystick.button1);

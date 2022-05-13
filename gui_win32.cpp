@@ -4,6 +4,7 @@
 #include <array>
 #include <iostream>
 #include <thread>
+#include <atomic>
 #include "ioutil.h"
 #include "color_util.h"
 #include "memory.h"
@@ -23,13 +24,13 @@ namespace {
 
 constexpr uint8_t gfx_scale = 2;
 
-void throw_system_error(const std::string& what, const unsigned error_code = GetLastError())
+[[noreturn]] void throw_system_error(const std::string& what, const unsigned error_code = GetLastError())
 {
     assert(error_code != ERROR_SUCCESS);
     throw std::system_error(error_code, std::system_category(), what);
 }
 
-void throw_com_error(const std::string& what, HRESULT hr)
+[[noreturn]] void throw_com_error(const std::string& what, HRESULT hr)
 {
     assert(FAILED(hr));
     throw std::runtime_error { what + " failed: 0x" + hexstring(hr) };
@@ -1344,7 +1345,7 @@ private:
     on_drop callback_;
 };
 
-bool quitting; // Bit of a hack
+std::atomic<bool> quitting; // Bit of a hack
 
 }
 
@@ -1355,77 +1356,74 @@ public:
         quitting = false;
         SetProcessDPIAware(); // Avoid GUI scaling (must be called before any windows are created)
 
-        std::unique_ptr<impl> wnd { new impl { width, height, disk_filenames } };
-        RECT r = { 0, 0, width * gfx_scale, height * gfx_scale + extra_height };
-        AdjustWindowRect(&r, default_window_style_, FALSE);
-        wnd->do_create(title_, default_window_style_, 100, 100, r.right - r.left, r.bottom - r.top, nullptr);
-
-        // Position serial data window to the right of the main window
-        GetWindowRect(wnd->handle(), &r);
-        wnd->ser_data_ = serial_data_window::create(r.right + 10, r.top);
-        wnd->mem_vis_window_ = memory_visualizer_window::create(r.right + 10, r.top);
-        SetFocus(wnd->handle());
-
-        return wnd.release();
+        return new impl { width, height, disk_filenames };
     }
 
     ~impl()
     {
-        OleUninitialize();
         quitting = true; // Going away!
+        thread_.detach();
+        OleUninitialize();
     }
 
     std::vector<event> update()
     {
-        MSG msg;
-        events_.clear();
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (quitting || msg.message == WM_QUIT) {
-                return { event { event_type::quit, {} } };
-            }
-            handle_message(msg);
+        if (quitting) {
+            return { event { event_type::quit, {} } };
         }
-        return std::move(events_);
+        std::vector<event> res;
+        perform([this, &res]() {
+            std::swap(res, events_);
+        });
+        return res;
     }
 
     void update_image(const uint32_t* data)
     {
-        bitmap_window_->update_image(data);
-        for (int i = 0; i < 4; ++i) {
-            if (disk_activity_[i].countdown) {
-                repaint_extra();
-                --disk_activity_[i].countdown;
+        perform([this, data]() {
+            bitmap_window_->update_image(data);
+            for (int i = 0; i < 4; ++i) {
+                if (disk_activity_[i].countdown) {
+                    repaint_extra();
+                    --disk_activity_[i].countdown;
+                }
             }
-        }
+        });
     }
 
     void led_state(uint8_t s)
     {
         assert(s < 2);
-        if (s != led_state_) {
-            led_state_ = s;
-            repaint_extra();
-        }
+        perform([this, s]() {
+            if (s != led_state_) {
+                led_state_ = s;
+                repaint_extra();
+            }
+        });
     }
 
     void serial_data(const std::vector<uint8_t>& data)
     {
-        ser_data_->append_text(std::string { data.begin(), data.end() });
+        perform([this, data]() {
+            ser_data_->append_text(std::string { data.begin(), data.end() });
+        });
     }
 
     void set_active(bool act)
     {
-        if (act) {
-            SetFocus(handle());
-            SetForegroundWindow(handle());
-            active_ = true;
-        } else {
-            if (mouse_captured_)
-                release_mouse();
-            SetFocus(GetConsoleWindow());
-            SetForegroundWindow(GetConsoleWindow());
-            active_ = false;
-        }
+        perform([this, act]() {
+            if (act) {
+                SetFocus(handle());
+                SetForegroundWindow(handle());
+                active_ = true;
+            } else {
+                if (mouse_captured_)
+                    release_mouse();
+                SetFocus(GetConsoleWindow());
+                SetForegroundWindow(GetConsoleWindow());
+                active_ = false;
+            }
+        });
         if (on_pause_)
             on_pause_(!act);
     }
@@ -1457,10 +1455,12 @@ public:
     void disk_activty(uint8_t idx, uint8_t track, bool write)
     {
         assert(idx < 4);
-        disk_activity_[idx].track = track;
-        disk_activity_[idx].write = write;
-        disk_activity_[idx].countdown = disk_activity_countdown_max;
-        repaint_extra();
+        perform([=, this]() {
+            disk_activity_[idx].track = track;
+            disk_activity_[idx].write = write;
+            disk_activity_[idx].countdown = disk_activity_countdown_max;
+            repaint_extra();
+        });
     }
 
 private:
@@ -1490,19 +1490,73 @@ private:
     DWORD old_style_ = 0;
     drop_target drop_target_;
     static constexpr auto default_window_style_ = (WS_VISIBLE | WS_OVERLAPPEDWINDOW) & ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    std::thread thread_;
 
     impl(int width, int height, const std::array<std::string, 4>& disk_filenames)
         : width_ { width }
         , height_ { height }
         , disk_filenames_ { disk_filenames }
     {
-        if (const auto hr = OleInitialize(nullptr); FAILED(hr))
-            throw_com_error("OleInitialize", hr);
+        HANDLE hStartEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+        if (!hStartEvent)
+            throw_system_error("CreateEvent");
+
+        thread_ = std::thread([this, hStartEvent]() {
+            {
+                MSG msg;
+                PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE); // Make sure thread message queue is created
+            }
+            try {
+                init();
+                SetEvent(hStartEvent);
+                thread_main_loop();
+            } catch (const std::exception& e) {
+                MessageBoxA(nullptr, e.what(), "Fatal error", MB_ICONERROR);
+            }
+        });
+
+        WaitForSingleObject(hStartEvent, INFINITE);
+        CloseHandle(hStartEvent);
     }
 
+    void thread_main_loop()
+    {
+        MSG msg;
+        while (GetMessage(&msg, nullptr, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+
+    void perform(const std::function<void(void)>& f)
+    {
+        if (quitting)
+            return;
+
+        assert(std::this_thread::get_id() != thread_.get_id());
+
+        SendMessage(handle(), WM_APP, 0, reinterpret_cast<LPARAM>(&f));
+    }
+    
     static void modify_window_class(WNDCLASS& wc)
     {
         wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    }
+
+    void init()
+    {
+        if (const auto hr = OleInitialize(nullptr); FAILED(hr))
+            throw_com_error("OleInitialize", hr);
+
+        RECT r = { 0, 0, width_ * gfx_scale, height_ * gfx_scale + extra_height };
+        AdjustWindowRect(&r, default_window_style_, FALSE);
+        do_create(title_, default_window_style_, 100, 100, r.right - r.left, r.bottom - r.top, nullptr);
+
+        // Position serial data window to the right of the main window
+        GetWindowRect(handle(), &r);
+        ser_data_ = serial_data_window::create(r.right + 10, r.top);
+        mem_vis_window_ = memory_visualizer_window::create(r.right + 10, r.top);
+        SetFocus(handle());
     }
 
     void repaint_extra()
@@ -1614,6 +1668,11 @@ private:
     LRESULT wndproc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         switch (uMsg) {
+        case WM_APP: {
+            const auto& f = *reinterpret_cast<std::function<void(void)>*>(lParam);
+            f();
+            return 0;
+        }
         case WM_SYSKEYDOWN:
         case WM_KEYDOWN:
             if (active_ && !(lParam & 0x4000'0000) && wParam != VK_F11 && wParam != VK_F12)
@@ -1622,7 +1681,7 @@ private:
         case WM_SYSKEYUP:
         case WM_KEYUP:
             if (wParam == VK_F4 && GetKeyState(VK_MENU) < 0)
-                PostQuitMessage(0);
+                SendMessage(hwnd, WM_CLOSE, 0, 0);
             else if (!active_)
                 return 0;
             else if (wParam == VK_F11) {
@@ -1636,7 +1695,6 @@ private:
                 if (GetKeyState(VK_SHIFT) < 0) {
                     evt.type = event_type::debug_mode;
                     events_.push_back(evt);
-                    set_active(false);
                 } else {
                     if (on_pause_)
                         on_pause_(true);
@@ -1842,32 +1900,9 @@ void gui::set_active(bool act)
 
 bool gui::debug_prompt(std::string& line)
 {
-    const DWORD gui_thread = GetCurrentThreadId();
-
-    // Yes, waste a thread for each line..
-    std::thread t {
-        [&]() {
-            std::cout << "> " << std::flush;
-            std::getline(std::cin, line);
-            PostThreadMessage(gui_thread, WM_APP, 0, 0);
-        }
-    };
-
-    MSG msg;
-    while (GetMessage(&msg, nullptr, 0, 0) && msg.message != WM_QUIT) {
-        if (msg.message == WM_APP)
-            break;
-        impl_->handle_message(msg);
-    }
-
-    if (msg.message == WM_QUIT) {
-        PostQuitMessage(static_cast<int>(msg.wParam));
-        t.detach(); // We don't care about the result any more (dangerous)
-    } else {
-        t.join();
-    }
-
-    return !!std::cin && msg.message != WM_QUIT;
+    std::cout << "> " << std::flush;
+    std::getline(std::cin, line);
+    return !!std::cin && !quitting;
 }
 
 void gui::set_debug_memory(const std::vector<uint8_t>& mem, const std::vector<uint16_t>& custom)
