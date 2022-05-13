@@ -726,6 +726,19 @@ constexpr T ror(T val, unsigned amt)
     return val >> amt | val << (sizeof(T) * CHAR_BIT - amt);
 }
 
+constexpr uint16_t interleave8(uint8_t x, uint8_t y)
+{
+    // https://graphics.stanford.edu/~seander/bithacks.html#Interleave64bitOps
+    return ((x * 0x0101010101010101ULL & 0x8040201008040201ULL) * 0x0102040810204081ULL >> 49) & 0x5555 | ((y * 0x0101010101010101ULL & 0x8040201008040201ULL) * 0x0102040810204081ULL >> 48) & 0xAAAA;
+}
+
+constexpr uint32_t interleave16(uint16_t x, uint16_t y)
+{
+    const auto lo = interleave8(static_cast<uint8_t>(x), static_cast<uint8_t>(y));
+    const auto hi = interleave8(static_cast<uint8_t>(x >> 8), static_cast<uint8_t>(y >> 8));
+    return hi << 16 | lo;
+}
+
 constexpr float pi = 3.1415926535897932385f;
 
 //template <float cutoff_frequeny>
@@ -763,6 +776,9 @@ enum class copper_state {
     jmp_delay1,
     jmp_delay2,
 };
+
+constexpr uint8_t spr_active_disp_mask = 1 << 0;  // Any sprites displayed this line?
+constexpr uint8_t spr_active_check_mask = 1 << 1; // Any more sprite checks necessary this frame?
 
 struct custom_state {
     // Internal state
@@ -810,11 +826,10 @@ struct custom_state {
     bool cdang;
     copper_state copstate;
 
-    bool spr_dma_active[8];
-    bool spr_armed[8]; // armed by writing to SPRxDATA, disarmed by writing to SPRxCTL
-    uint16_t spr_hold_a[8];
-    uint16_t spr_hold_b[8];
-    uint8_t spr_hold_cnt[8];
+    uint8_t spr_dma_active_mask;
+    uint8_t spr_armed_mask; // armed by writing to SPRxDATA, disarmed by writing to SPRxCTL
+    uint8_t spr_active_mask;
+    uint32_t spr_hold[8];
 
     uint16_t bltw;
     uint16_t blth;
@@ -920,24 +935,6 @@ struct custom_state {
 
     } audio_channels[4];
 
-    uint16_t sprite_vpos_start(uint8_t spr)
-    {
-        assert(spr < 8);
-        return (sprpos[spr] >> 8) | (sprctl[spr] & 4) << 6;
-    }
-
-    uint16_t sprite_vpos_end(uint8_t spr)
-    {
-        assert(spr < 8);
-        return (sprctl[spr] >> 8) | (sprctl[spr] & 2) << 7;
-    }
-
-    uint16_t sprite_hpos_start(uint8_t spr)
-    {
-        assert(spr < 8);
-        return ((sprpos[spr] & 0xff) << 1) | (sprctl[spr] & 1);
-    }
-
     void update_blitter_line()
     {
         auto incx = [&]() {
@@ -1024,6 +1021,8 @@ public:
         if (sf.loading()) {
             for (int i = 0; i < 32; ++i)
                 col32_[i] = rgb4_to_8(s_.color[i]);
+            for (int spr = 0; spr < 8; ++spr)
+                sprite_state_[spr].recalc(s_.sprpos[spr], s_.sprctl[spr]);
         }
     }
 
@@ -1882,17 +1881,74 @@ public:
         return true;
     }
 
-    void do_pixels(bool vert_disp, uint16_t display_vpos, uint16_t display_hpos, uint8_t* pixel_temp, const uint8_t* spriteidx)
+    void do_sprites(const uint16_t display_hpos)
+    {
+        if (!(s_.spr_active_mask | s_.spr_armed_mask | s_.spr_dma_active_mask))
+            return;
+
+        // Sprite vpos check is 4 CCKs ahead
+        const uint16_t spr_vpos_check = s_.vpos + (s_.hpos + 8 >= hpos_per_line);
+
+        // Actually only need to do end check
+        if (spr_vpos_check <= sprite_dma_start_vpos && !s_.spr_dma_active_mask) {
+            return;
+        }
+
+        s_.spr_active_mask &= ~spr_active_disp_mask;
+
+        bool start_checks_needed = false;
+
+        for (int spr = 0; spr < 8; ++spr) {
+            const uint8_t mask = 1 << spr;
+            auto& ss = sprite_state_[spr];
+
+            if (s_.spr_dma_active_mask & mask) {
+                // end check is always active (vAmigaTS spritedma10)
+                if (spr_vpos_check == ss.vend) {
+                    if (DEBUG_SPRITE)
+                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << !!(s_.spr_dma_active_mask & mask) << " Turning DMA off\n";
+                    s_.spr_dma_active_mask &= ~mask;
+                }
+            } else {
+                if (ss.vstart == spr_vpos_check) {
+                    if (DEBUG_SPRITE)
+                        DBGOUT << "Sprite " << (int)spr << " DMA state=" << !!(s_.spr_dma_active_mask & mask) << " Turning DMA on\n";
+                    s_.spr_dma_active_mask |= mask;
+                } else if (ss.vstart > spr_vpos_check && ss.vstart < vpos_per_field) {
+                    start_checks_needed = true;
+                }
+            }
+            if (s_.spr_hold[spr]) {
+                if ((ss.idx = s_.spr_hold[spr] >> 30) != 0)
+                    s_.spr_active_mask |= spr_active_disp_mask;
+                s_.spr_hold[spr] <<= 2;
+            } else {
+                ss.idx = 0;
+            }
+
+            // Need to check AFTER shifting out pixels to both avoid gaps in clouds in Brian the Lion and support
+            // sprite overlay in Platon-HAM-Eager-Final which contains copper writes to SPR0POS that align exactly with sprite start
+            if ((s_.spr_armed_mask & mask) && ss.hpos == display_hpos) {
+                if (DEBUG_SPRITE)
+                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << !!(s_.spr_dma_active_mask & mask) << " Armed and HPOS ($" << hexfmt(ss.hpos) << ") matches!\n";
+                s_.spr_hold[spr] = interleave16(s_.sprdata[spr], s_.sprdatb[spr]);
+                // Note: sprite stays armed here (e.g. vAmigaTS manual1)
+            }
+        }
+
+        if (!start_checks_needed)
+            s_.spr_active_mask &= ~spr_active_check_mask;
+    }
+
+    void do_pixels(bool vert_disp, uint16_t display_vpos, uint16_t display_hpos, uint8_t* pixel_temp)
     {
         const unsigned disp_pixel = display_hpos * 2 - hires_min_pixel;
         if (disp_pixel >= graphics_width)
             return;
-        const bool horiz_disp = display_hpos >= (s_.diwstrt & 0xff) && display_hpos < (0x100 | (s_.diwstop & 0xff));
-
         uint32_t* row = &gfx_buf_[(display_vpos - vblank_end_vpos) * 2 * graphics_width + disp_pixel + (s_.long_frame ? 0 : graphics_width)];
         assert(&row[1] < &gfx_buf_[sizeof(gfx_buf_) / sizeof(*gfx_buf_)]);
 
-        if (vert_disp && horiz_disp) {
+        if (vert_disp && display_hpos >= (s_.diwstrt & 0xff) && display_hpos < (0x100 | (s_.diwstop & 0xff))) {
             const uint8_t nbpls = std::min<uint8_t>(6, (s_.bplcon0 & BPLCON0F_BPU) >> BPLCON0B_BPU0);
 
             if (DEBUG_BPL && (s_.dmacon & (DMAF_MASTER | DMAF_RASTER)) == (DMAF_MASTER | DMAF_RASTER) && nbpls && s_.hpos == (s_.diwstrt & 0xff))
@@ -1902,20 +1958,20 @@ public:
             uint8_t active_sprite_group = 8;
 
             // Sprites are only visible after write to BPL1DAT
-            if (any_sprite_active_ && s_.bpl1dat_written_this_line) {
+            if ((s_.spr_active_mask & spr_active_disp_mask) && s_.bpl1dat_written_this_line) {
                 // Sprite 0 has highest priority, 7 lowest
                 for (uint8_t spr = 0; spr < 8; ++spr) {
                     if (!(spr & 1) && (s_.sprctl[spr + 1] & 0x80)) {
                         // Attached sprite
-                        const uint8_t idx = spriteidx[spr] | spriteidx[spr + 1] << 2;
+                        const uint8_t idx = sprite_state_[spr].idx | sprite_state_[spr + 1].idx << 2;
                         if (idx) {
                             active_sprite = 16 + idx;
                             active_sprite_group = spr >> 1;
                             break;
                         }
                         ++spr; // Skip next sprite
-                    } else if (spriteidx[spr]) {
-                        active_sprite = 16 + (spr >> 1) * 4 + spriteidx[spr];
+                    } else if (sprite_state_[spr].idx) {
+                        active_sprite = 16 + (spr >> 1) * 4 + sprite_state_[spr].idx;
                         active_sprite_group = spr >> 1;
                         break;
                     }
@@ -2073,44 +2129,7 @@ public:
 
         current_pc_ = current_pc;
 
-        // Sprite vpos check is 4 CCKs ahead
-        const uint16_t spr_vpos_check = s_.vpos + (s_.hpos + 8 >= hpos_per_line);
-        uint8_t spriteidx[8];
-        any_sprite_active_ = false;
-        for (uint8_t spr = 0; spr < 8; ++spr) {
-            spriteidx[spr] = 0;
-
-            // end check is always active (vAmigaTS spritedma10)
-            if (spr_vpos_check == s_.sprite_vpos_end(spr)) {
-                if (DEBUG_SPRITE && s_.spr_dma_active[spr])
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA off\n";
-                s_.spr_dma_active[spr] = false;
-            } else if (!s_.spr_dma_active[spr] && spr_vpos_check > sprite_dma_start_vpos && s_.sprite_vpos_start(spr) == spr_vpos_check) {
-                if (DEBUG_SPRITE)
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Turning DMA on\n";
-                s_.spr_dma_active[spr] = true;
-            }
-
-            if (s_.spr_hold_cnt[spr]) {
-                if (s_.spr_hold_a[spr] & 0x8000)
-                    spriteidx[spr] |= 1;
-                if (s_.spr_hold_b[spr] & 0x8000)
-                    spriteidx[spr] |= 2;
-                s_.spr_hold_a[spr] <<= 1;
-                s_.spr_hold_b[spr] <<= 1;
-                --s_.spr_hold_cnt[spr];
-                any_sprite_active_ = true;
-            }
-            // Need to check AFTER shifting out pixels to both avoid gaps in clouds in Brian the Lion and support
-            // sprite overlay in Platon-HAM-Eager-Final which contains copper writes to SPR0POS that align exactly with sprite start
-            if (s_.spr_armed[spr] && s_.sprite_hpos_start(spr) == display_hpos) {
-                if (DEBUG_SPRITE)
-                    DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " Armed and HPOS ($" << hexfmt(s_.sprite_hpos_start(spr)) << ") matches!\n";
-                s_.spr_hold_a[spr] = s_.sprdata[spr];
-                s_.spr_hold_b[spr] = s_.sprdatb[spr];
-                s_.spr_hold_cnt[spr] = 16;
-            }
-        }
+        do_sprites(display_hpos);
 
         if (!(s_.hpos & 1) && s_.bpl1dat_written) {
             if (DEBUG_BPL) {
@@ -2295,16 +2314,17 @@ public:
                 // Sprite
                 if (s_.vpos >= sprite_dma_start_vpos && (colclock & 1) && colclock >= 0x15 && colclock < 0x15+8*4) {
                     const uint8_t spr = static_cast<uint8_t>((colclock - 0x15) / 4);
-                    const bool fetch_ctl = s_.vpos == sprite_dma_start_vpos || s_.vpos == s_.sprite_vpos_end(spr);
+                    const bool fetch_ctl = s_.vpos == sprite_dma_start_vpos || s_.vpos == sprite_state_[spr].vend;
 
-                    if ((s_.dmacon & DMAF_SPRITE) && (fetch_ctl || s_.spr_dma_active[spr])) {
+                    if ((s_.dmacon & DMAF_SPRITE) && (fetch_ctl || (s_.spr_dma_active_mask & (1 << spr)))) {
                         const bool first_word = !(colclock & 2);
                         const uint16_t reg = SPR0POS + 8 * spr + 2 * (fetch_ctl ? 1 - first_word : 3 - first_word);
                         const uint16_t val = do_dma(s_.sprpt[spr]);
                         if (DEBUG_SPRITE)
-                            DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)s_.spr_dma_active[spr] << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << custom_regname(reg) << "\n";
+                            DBGOUT << "Sprite " << (int)spr << " DMA state=" << (int)((s_.spr_dma_active_mask >> spr) & 1) << " first_word=" << first_word << " writing $" << hexfmt(val) << " to " << custom_regname(reg) << "\n";
                         write_u16(0xdff000 | reg, reg, val);
                         res.bus = bus_use::sprite;
+                        s_.spr_active_mask |= spr_active_check_mask;
                         break;
                     }
                 }
@@ -2344,7 +2364,7 @@ public:
 
         // Output pixels after copper had a chance to update color registers
         if (display_vpos >= vblank_end_vpos && display_vpos != vpos_per_field-1)
-            do_pixels(vert_disp, display_vpos, display_hpos, pixel_temp, spriteidx);
+            do_pixels(vert_disp, display_vpos, display_hpos, pixel_temp);
 
         if (!(s_.hpos & 1) && (s_.bplmod1_countdown|s_.bplmod2_countdown)) {
             if (s_.bplmod1_countdown && --s_.bplmod1_countdown == 0) {
@@ -2415,7 +2435,8 @@ public:
 
             cia_.increment_tod_counter(1);
             if (++s_.vpos == vpos_per_field) {
-                memset(s_.spr_dma_active, 0, sizeof(s_.spr_dma_active));
+                s_.spr_dma_active_mask = 0;
+                s_.spr_active_mask = 0;
                 //Note: sprite armed flag is not reset here (vAmigaTS manual1)
                 s_.copstate = copper_state::vblank;
                 s_.vpos = 0;
@@ -2636,30 +2657,32 @@ public:
         if (offset >= SPR0POS && offset <= SPR7DATB) {
             const auto spr = static_cast<uint8_t>((offset - SPR0POS) / 8);
             if (DEBUG_SPRITE)
-                DBGOUT << "Write to " << custom_regname(offset) << " value $" << hexfmt(val) << " dma=" << (int)s_.spr_dma_active[spr] << " armed=" << (int)s_.spr_armed[spr] << "\n";
+                DBGOUT << "Write to " << custom_regname(offset) << " value $" << hexfmt(val) << " dma=" << (int)((s_.spr_dma_active_mask >> spr) & 1) << " armed=" << (int)((s_.spr_armed_mask >> spr) & 1) << "\n";
             switch ((offset >> 1) & 3) {
             case 0: // SPRxPOS
                 s_.sprpos[spr] = val;
                 break;
             case 1: // SPRxCTL
-                if (DEBUG_SPRITE && !s_.spr_armed[spr])
+                if (DEBUG_SPRITE && !((s_.spr_armed_mask >> spr) & 1))
                     DBGOUT << "Sprite " << (int)spr << " Disarming\n";
                 s_.sprctl[spr] = val;
-                s_.spr_armed[spr] = false;
+                s_.spr_armed_mask &= ~(1 << spr);
                 break;
             case 2: // SPRxDATA (low word)
-                if (DEBUG_SPRITE && !s_.spr_armed[spr])
+                if (DEBUG_SPRITE && !((s_.spr_armed_mask >> spr) & 1))
                     DBGOUT << "Sprite " << (int)spr << " Arming\n";
                 s_.sprdata[spr] = val;
-                s_.spr_armed[spr] = true;
+                s_.spr_armed_mask |= 1 << spr;
                 return;
             case 3: // SPRxDATB (high word)
                 s_.sprdatb[spr] = val;
                 return;
             }
 
+            auto& ss = sprite_state_[spr];
+            ss.recalc(s_.sprpos[spr], s_.sprctl[spr]);
             if (DEBUG_SPRITE)
-                DBGOUT << "Sprite " << (int)spr << " vstart=$" << hexfmt(s_.sprite_vpos_start(spr)) << " vend=$" << hexfmt(s_.sprite_vpos_end(spr)) << " hstart=$" << hexfmt(s_.sprite_hpos_start(spr)) << " dma=" << (int)s_.spr_dma_active[spr] << " armed=" << (int)s_.spr_armed[spr] << "\n";
+                DBGOUT << "Sprite " << (int)spr << " vstart=$" << hexfmt(ss.vstart) << " vend=$" << hexfmt(ss.vend) << " hstart=$" << hexfmt(ss.hpos) << " dma=" << (int)((s_.spr_dma_active_mask >> spr) & 1) << "\n";
 
             return;
         }
@@ -2956,7 +2979,18 @@ private:
     uint32_t current_pc_; // For debug output
     uint32_t floppy_speed_;
     uint32_t col32_[32];
-    bool any_sprite_active_;
+    struct sprite_state {
+        uint8_t idx;
+        uint16_t hpos;
+        uint16_t vstart;
+        uint16_t vend;
+        void recalc(uint16_t pos, uint16_t ctl)
+        {
+            hpos = ((pos & 0xff) << 1) | (ctl & 1);
+            vstart = (pos >> 8) | (ctl & 4) << 6;
+            vend = (ctl >> 8) | (ctl & 2) << 7;
+        }
+    } sprite_state_[8];
     // bitplane debugging (don't need to be saved)
     int rem_pixels_odd_;
     int rem_pixels_even_;
