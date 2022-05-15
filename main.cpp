@@ -1099,6 +1099,7 @@ amiga::amiga(const command_line_arguments& args)
 
     cpu.set_cycle_handler([this](uint8_t cycles) {
         assert(cpu_active);
+        assert(cycles % 2 == 0);
         cycles_todo += cycles;
     });
     cpu.set_read_ipl([this]() {
@@ -1274,35 +1275,65 @@ void amiga::on_memory_access(uint32_t addr, uint32_t data, uint8_t size, bool wr
         }
     }
 
+    // TMEPTEMP
+    //std::cout << "Memory access to $" << hexfmt(addr) << " cycles = " << cpu_cycles_count << " (todo " << cycles_todo << ") HPOS=$" << hexfmt(custom_step.hpos) << " Eclock=" << hexfmt(custom_step.eclock_cycle) << "\n";
+
     if (!cpu_active)
         return;
+
+    const auto scale = cmdline_args.cpu_scale;
+
     assert(size == 1 || size == 2);
     (void)size;
     if (addr < max_chip_size || (addr >= slow_base && addr < custom_base_addr + custom_mem_size)) {
         // Sync with Agnus
-        cycles_todo += 2;
+        // CPU access to chip/custom memory always takes at least 2 CCKs (https://eab.abime.net/showpost.php?p=1333186&postcount=7)
+        // First cycle transfers address to Agnus (bus doesn't need to be free)
+        // Second cycle does actual transfer (must be free)
+        // Testing on an ACA500plus shows that the CPU first has to "align" with the bus clock: https://github.com/dirkwhoffmann/vAmiga/issues/661
+
+        const uint32_t cck_cycles = 2 * scale;
         do_all_custom_cylces();
+
+        if (scale > 1 && cycles_todo) {
+            cpu_cycles_count += cycles_todo;
+            cycles_todo = 0;
+            cstep(false);
+        }
+
+        // Align with CCK
+        if (custom_step.hpos & 1) {
+            cpu_cycles_count += scale;
+            cstep(false);
+        }
+
+        // Transfer address to agnus (Takes one CCK, cycle does not have to be free)
+        cycles_todo = cck_cycles;
+        do_all_custom_cylces();
+
+        // Wait for free cycle
         while (!custom_step.free_chip_cycle) {
-            ++cpu_cycles_count;
+            cpu_cycles_count += scale;
             cstep(true);
         }
         assert(!(custom_step.hpos & 1));
         auto& du = dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2];
         du = { write ? bus_use::cpu_write : bus_use::cpu_read, addr, write ? static_cast<uint16_t>(data) : mem.hack_peek_u16(addr) };
-        cycles_todo += 2;
+        cycles_todo = cck_cycles; // Transfer always takes 1 CCK
     } else if (addr >= cia_base_addr && addr < cia_base_addr + cia_mem_size) {
         // Get up to date
         do_all_custom_cylces();
+
         // Sync with EClock
         //
         // Eclock is low for 6 system clocks and then high for 4 during which the transfer happens
         // And address needs to be latched 3 cycles before EClk rises or falls
         while (custom_step.eclock_cycle != 3) {
-            ++cpu_cycles_count;
+            cpu_cycles_count += scale;
             cstep(false);
         }
         while (custom_step.eclock_cycle) {
-            ++cpu_cycles_count;
+            cpu_cycles_count += scale;
             cstep(false);
         }
     } else {
@@ -2382,6 +2413,9 @@ void amiga::insert_disk(uint8_t drive, const char* filename, int delay)
 
 void amiga::run()
 {
+    // If not loading from state ensure that custom chips have been "stepped" once
+    if (!cpu.state().instruction_count)
+        cstep(false);
     while (!quit) {
         try {
             step();

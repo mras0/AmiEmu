@@ -274,7 +274,8 @@ public:
         case 3: // Neither!
             break;
         }
-        std::cerr << "[CIA] Warning: Unhandled read from $" << hexfmt(addr) << "\n";
+        if (DEBUG_CIA)
+            std::cerr << "[CIA] Warning: Unhandled read from $" << hexfmt(addr) << "\n";
         return 0xff;
     }
 
