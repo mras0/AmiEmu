@@ -604,6 +604,8 @@ const type bptr_type { unknown_type, 0, base_data_type::bptr_ };
 const type bstr_type { base_data_type::bstr_ };
 const type bcpl_seglist_type { base_data_type::bcpl_seglist_ };
 
+const type hack_str_type { base_data_type::unknown_ };
+
 std::unordered_map<std::string, const type*> typenames {
     { "UNKNOWN", &unknown_type },
     { "CHAR", &char_type },
@@ -613,6 +615,7 @@ std::unordered_map<std::string, const type*> typenames {
     { "CODE", &code_type },
     { "COPPER", &copper_code_type },
     { "BSEGLIST", &bcpl_seglist_type },
+    { "STR", &hack_str_type },
 };
 
 uint32_t sizeof_type(const type& t);
@@ -1473,9 +1476,58 @@ TEMP_STRUCT(bltnode);
 TEMP_STRUCT(TextFont);
 TEMP_STRUCT(SimpleSprite);
 TEMP_STRUCT(MonitorSpec);
-TEMP_STRUCT(ViewPort);
 TEMP_STRUCT(copinit);
 TEMP_STRUCT(cprlist);
+TEMP_STRUCT(ColorMap);
+TEMP_STRUCT(CopList);
+TEMP_STRUCT(UCopList);
+TEMP_STRUCT(VSprite);
+TEMP_STRUCT(Layer);
+TEMP_STRUCT(collTable);
+
+const structure_definition BitMap
+{
+    "BitMap",
+    {
+        { "BytesPerRow", word_type },
+        { "Rows", word_type },
+        { "Flags", byte_type },
+        { "Depth", byte_type },
+        { "pad", word_type },
+        { "Planes", make_array_type(byte_ptr, 8) },
+    }
+};
+
+const structure_definition RasInfo
+{
+    "RasInfo",
+    {
+        { "Next", make_pointer_type(make_struct_type(RasInfo)) },
+        { "BitMap", make_pointer_type(make_struct_type(BitMap)) },
+        { "RxOffset", word_type },
+        { "RyOffset", word_type },
+}
+};
+
+const structure_definition ViewPort {
+    "ViewPort",
+    {
+        { "Next", make_pointer_type(make_struct_type(ViewPort)) },
+        { "ColorMap", make_pointer_type(make_struct_type(ColorMap)) },
+        { "DspIns", make_pointer_type(make_struct_type(CopList)) },
+        { "SprIns", make_pointer_type(make_struct_type(CopList)) },
+        { "ClrIns", make_pointer_type(make_struct_type(CopList)) },
+        { "UCopIns", make_pointer_type(make_struct_type(UCopList)) },
+        { "DWidth", word_type },
+        { "DHeight", word_type },
+        { "DxOffset", word_type },
+        { "DyOffset", word_type },
+        { "Modes", word_type },
+        { "SpritePriorities", byte_type },
+        { "ExtendedModes", byte_type },
+        { "RasInfo", make_pointer_type(make_struct_type(RasInfo)) },
+    }
+};
 
 const structure_definition AnalogSignalInterval {
     "AnalogSignalInterval",
@@ -1496,6 +1548,85 @@ const structure_definition View {
         { "Modes", word_type },
     }
 };
+
+const structure_definition AreaInfo {
+    "AreaInfo",
+    {
+        { "VctrTbl", word_ptr },
+        { "VctrPtr", word_ptr },
+        { "FlagTbl", byte_ptr },
+        { "FlagPtr", byte_ptr },
+        { "Count", word_type },
+        { "MaxCount", word_type },
+        { "FirstX", word_type },
+        { "FirstY", word_type },
+    }
+};
+const structure_definition TmpRas {
+    "TmpRas",
+    {
+        { "RasPtr", byte_ptr },
+        { "Size", long_type },
+    }
+};
+
+const structure_definition GelsInfo {
+    "GelsInfo",
+    {
+        { "sprRsrvd", byte_type },
+        { "Flags", byte_type },
+        { "gelHead", make_pointer_type(make_struct_type(VSprite)) },
+        { "gelTail", make_pointer_type(make_struct_type(VSprite)) },
+        { "nextLine", word_ptr },
+        { "lastColor", make_pointer_type(word_ptr) },
+        { "collHandler", make_pointer_type(make_struct_type(collTable)) },
+        { "leftmost", word_type },
+        { "rightmost", word_type },
+        { "topmost", word_type },
+        { "bottommost", word_type },
+        { "firstBlissObj", unknown_ptr },
+        { "lastBlissObj", unknown_ptr },
+    }
+};
+const structure_definition RastPort {
+    "RastPort",
+    {
+        { "Layer", make_pointer_type(make_struct_type(Layer)) },
+        { "BitMap", make_pointer_type(make_struct_type(BitMap)) },
+        { "AreaPtrn", word_ptr },
+        { "TmpRas", make_pointer_type(make_struct_type(TmpRas)) },
+        { "AreaInfo", make_pointer_type(make_struct_type(AreaInfo)) },
+        { "GelsInfo", make_pointer_type(make_struct_type(GelsInfo)) },
+        { "Mask", byte_type },
+        { "FgPen", byte_type },
+        { "BgPen", byte_type },
+        { "AOlPen", byte_type },
+        { "DrawMode", byte_type },
+        { "AreaPtSz", byte_type },
+        { "linpatcnt", byte_type },
+        { "dummy", byte_type },
+        { "Flags", word_type },
+        { "LinePtrn", word_type },
+        { "cp_x", word_type },
+        { "cp_y", word_type },
+        { "minterms", make_array_type(byte_type, 8) },
+        { "PenWidth", word_type },
+        { "PenHeight", word_type },
+        { "Font", make_pointer_type(make_struct_type(TextFont)) },
+        { "AlgoStyle", byte_type },
+        { "TxFlags", byte_type },
+        { "TxHeight", word_type },
+        { "TxWidth", word_type },
+        { "TxBaseline", word_type },
+        { "TxSpacing", word_type },
+        { "RP_User", make_pointer_type(unknown_ptr) },
+        { "longreserved", make_array_type(long_type, 2) },
+        { "wordreserved", make_array_type(word_type, 7) },
+        { "reserved", make_array_type(byte_type, 8) },
+    }
+};
+
+constexpr int32_t _LVOWaitBlit = -228;
 
 const structure_definition GfxBase {
     "GfxBase",
@@ -1640,7 +1771,7 @@ const structure_definition GfxBase {
         { "_LVOMrgCop", libvec_code, -210 },
         { "_LVOMakeVPort", libvec_code, -216 },
         { "_LVOLoadView", libvec_code, -222 },
-        { "_LVOWaitBlit", libvec_code, -228 },
+        { "_LVOWaitBlit", libvec_code, _LVOWaitBlit },
         { "_LVOSetRast", libvec_code, -234 },
         { "_LVOMove", libvec_code, -240 },
         { "_LVODraw", libvec_code, -246 },
@@ -2444,6 +2575,81 @@ const structure_definition RomBootBase {
     }
 };
 
+
+struct rom_tag {
+    uint32_t matchtag; // RT_MATCHTAG     (pointer RTC_MATCHWORD)
+    uint32_t endskip; // RT_ENDSKIP      (pointer to end of code)
+    uint8_t flags; // RT_FLAGS        (no flags)
+    uint8_t version; // RT_VERSION      (version number)
+    uint8_t type; // RT_TYPE         (NT_LIBRARY)
+    uint8_t priority; // RT_PRI          (priority = 126)
+    uint32_t name_addr; // RT_NAME         (pointer to name)
+    uint32_t id_addr; // RT_IDSTRING     (pointer to ID string)
+    uint32_t init_addr; // RT_INIT         (execution address)*
+
+    std::string name;
+};
+
+std::vector<rom_tag> scan_for_rom_tags(const std::vector<uint8_t>& data, uint32_t base = 0)
+{
+    if (data.size() <= 24)
+        return {};
+    std::vector<rom_tag> rom_tags;
+    for (uint32_t offset = 0; offset < data.size() - 24;) {
+        if (get_u16(&data[offset]) != 0x4afc || get_u32(&data[offset + 2]) != offset + base) {
+            offset += 2;
+            continue;
+        }
+
+        // std::cout << "Found tag at $" << hexfmt(rom_base + offset) << "\n";
+        rom_tag tag {
+            .matchtag = get_u32(&data[offset + 2]),
+            .endskip = get_u32(&data[offset + 6]),
+            .flags = data[offset + 10],
+            .version = data[offset + 11],
+            .type = data[offset + 12],
+            .priority = data[offset + 13],
+            .name_addr = get_u32(&data[offset + 14]),
+            .id_addr = get_u32(&data[offset + 18]),
+            .init_addr = get_u32(&data[offset + 22]),
+            .name = "",
+        };
+
+        uint32_t end_offset = tag.endskip - base;
+        if (end_offset <= offset || end_offset > data.size()) {
+            std::cout << "Invalid end offset\n";
+            end_offset = offset + 26;
+        }
+
+        auto get_string = [&](uint32_t addr) {
+            if (addr <= base || addr - base >= data.size())
+                throw std::runtime_error { "Invalid string in ROM tag: addr=$" + hexstring(addr) };
+            addr -= base;
+            std::string s;
+            for (; addr < data.size() && data[addr]; ++addr) {
+                if (data[addr] >= ' ' && data[addr] < 128)
+                    s.push_back(data[addr]);
+                else
+                    s += "\\x" + hexstring(data[addr]);
+            }
+            return s;
+        };
+
+        tag.name = get_string(tag.name_addr);
+
+        // std::cout << "  End=$" << hexfmt(tag.endskip) << "\n";
+        // std::cout << "  Flags=$" << hexfmt(tag.flags) << " version=$" << hexfmt(tag.version) << " type=$" << hexfmt(tag.type) << " priority=$" << hexfmt(tag.priority) << "\n";
+        // std::cout << "  Name='" << tag.name << "'\n";
+        // std::cout << "  ID='" << get_string(tag.id_addr) << "'\n";
+        // std::cout << "  Init=$" << hexfmt(tag.init_addr) << "\n";
+
+        rom_tags.push_back(tag);
+        offset = end_offset;
+    }
+
+    return rom_tags;
+}
+
 void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simval& aval)
 {
     if (!aval.known())
@@ -2674,7 +2880,7 @@ public:
                 throw std::runtime_error { "Invalid type in " + filename + " line " + std::to_string(linenum) + ": " + line };
             auto lab = parts[2];
             if (lab == "?") {
-                lab = (t == &code_type ? "func_" : "dat_") + hexstring(addr);
+                lab = (t == &code_type ? "func_" : t == &hack_str_type ? "text_" :  "dat_") + hexstring(addr);
             } else if (t == &code_type) {
                 auto pos = lab.find_first_of('(');
                 if (pos != std::string::npos) {
@@ -2701,6 +2907,15 @@ public:
             }
             predef_info_.push_back({ addr, { lab, t } });
         }
+    }
+
+    const label_info* find_predef_into(uint32_t query_addr)
+    {
+        for (const auto& [addr, info] : predef_info_) {
+            if (addr == query_addr)
+                return &info;
+        }
+        return nullptr;
     }
 
     void write_data(uint32_t addr, const uint8_t* data, uint32_t length)
@@ -2759,12 +2974,16 @@ public:
             return;
 
         if (visited_.find(addr) == visited_.end()) {
+            // Don't add if already predefined as non-code
+            if (auto info = find_predef_into(addr); info && info->t != &code_type)
+                return;
 
             auto root_regs = regs;
             auto forced = forced_values_.equal_range(addr);
             for (auto fit = forced.first; fit != forced.second; ++fit) {
                 reg_from_name(root_regs, fit->second.first) = simval { fit->second.second };
             }
+
             roots_.push_back({ addr, root_regs });
             visited_[addr] = root_regs; // Mark visitied now to avoid re-insertion
         }
@@ -2795,7 +3014,9 @@ public:
 
         // Always update unkown type if we know a better one (and prefer code)
         if (li->t == &unknown_type || &t == &code_type) {
-            li->name = name;
+            // Don't override symbol names
+            if (!is_auto_label || li-> name.starts_with("dat"))
+                li->name = name;
             li->t = &t;
             return;
         }
@@ -2913,7 +3134,7 @@ public:
         } else {
             library_bases_.insert({ "exec.library", exec_base_ });
         }
-        add_library("graphics.library", "GfxBase", GfxBase);
+        const auto gfx_base = add_library("graphics.library", "GfxBase", GfxBase);
         const auto dos_base = add_library("dos.library", "DosBase", DosBase);
         add_library("intuition.library", "IntuitionBase", IntuitionBase);
         add_library("expansion.library", "ExpansionBase", ExpansionBase);
@@ -3011,6 +3232,11 @@ public:
                                                  { { regname::A4, "function", &code_ptr } },
                                              } });
 
+        // graphics.library
+        functions_.insert({ gfx_base + _LVOWaitBlit, function_description{{}, { } }}); // registers are preseved
+        const auto fake_view = alloc_fake_mem(View.size());
+        add_label(fake_view, "FakeView", make_struct_type(View));
+        update_mem(opsize::l, gfx_base + GfxBase.field_offset("ActiView"), simval { fake_view });
 
         //std::cerr << "Fake execbase: $" << hexfmt(exec_base_) << "\n";
     }
@@ -3337,6 +3563,8 @@ public:
 #endif
     }
 
+    void add_rom_tag(const rom_tag& tag);
+
 private:
     static constexpr uint32_t max_mem = 1 << 24;
     struct area {
@@ -3601,6 +3829,8 @@ private:
         }
         case base_data_type::struct_: {
             auto end_pos = pos + t.struct_def()->size();
+            if (pos == end_pos)
+                return false;
             if (end_pos > next_pos) {
                 //std::cerr << "WARNING: Structure size goes beyond next_pos!\n";
                 //assert(!"TODO");
@@ -3677,6 +3907,12 @@ private:
         if (auto [lp, offset] = find_label(addr); lp) {
             std::cout << lp->name;
             if (offset) {
+                if (lp->t->base() == base_data_type::struct_) {
+                    if (auto fn = lp->t->struct_def()->field_name(offset, false); fn) {
+                        std::cout << "+" << *fn;
+                        return true;
+                    }
+                }
                 if (offset < 0) {
                     std::cout << "-";
                     offset = -offset;
@@ -4104,10 +4340,13 @@ private:
         if (lib_ptr)
             lib_init_regs.a[6] = simval { lib_ptr };
         auto fptr = lib_ptr;
+        //int i = 0;
         for (const auto v : vectors) {
             if (pointer_ok(v)) {
                 add_root(v, lib_init_regs);
             }
+            //std::cerr << "Vector " << (-6 * (i + 1)) << " $" << hexfmt(v) << "\n";
+            //++i;
             if (fptr) {
                 fptr -= 6;
                 update_mem(opsize::w, fptr, simval { JMP_ABS_L_instruction }); // JMP abs.l (not currently written)
@@ -4529,7 +4768,7 @@ private:
     }
 
     void handle_struct_at(uint32_t addr, const structure_definition& s);
-    void maybe_find_string_at(uint32_t addr);
+    void maybe_find_string_at(uint32_t addr, const std::string& label="");
     void maybe_find_copper_list_at(uint32_t addr);
     void handle_data_at(uint32_t addr, const type& t);
     void handle_pointer_to(uint32_t addr, const type& t);
@@ -4538,6 +4777,55 @@ private:
     uint32_t check_exec_base();
 };
 
+void analyzer::add_rom_tag(const rom_tag& tag)
+{
+    std::string name;
+    for (char c : tag.name) {
+        if (isalpha(c) || (!name.empty() && isdigit(c)))
+            name.push_back(c);
+        else
+            name.push_back('_');
+    }
+
+    auto slen = [&](uint32_t addr) {
+        uint32_t l = 0;
+        while (addr + 1 < data_.size() && data_[addr++])
+            ++l;
+        return l + 1; // Include nul terminator
+    };
+
+    add_label(tag.matchtag, name + "_matchword", word_type);
+    add_label(tag.matchtag + 2, name + "_matchtag", unknown_ptr); // Pointer to struct Resident
+    add_label(tag.matchtag + 6, name + "_endskip", unknown_ptr);
+    add_label(tag.matchtag + 10, name + "_flags", byte_type);
+    add_label(tag.matchtag + 11, name + "_version", byte_type);
+    add_label(tag.matchtag + 12, name + "_type", byte_type);
+    add_label(tag.matchtag + 13, name + "_priority", byte_type);
+    add_label(tag.matchtag + 14, name + "_name_addr", char_ptr);
+    add_label(tag.matchtag + 18, name + "_id_addr", char_ptr);
+    add_label(tag.matchtag + 22, name + "_init_addr", code_ptr);
+
+    add_label(tag.name_addr, name + "_name", make_array_type(char_type, slen(tag.name_addr)));
+    add_label(tag.id_addr, name + "_id", make_array_type(char_type, slen(tag.id_addr)));
+    if (tag.init_addr) {
+        if (!(tag.flags & 0x80)) { // Not RTF_AUTOINIT
+            simregs rom_tag_init_regs = {};
+            // InitResident calls the RT_INIT function with these arguments:
+            rom_tag_init_regs.d[0] = simval { 0 }; // D0 = 0
+            rom_tag_init_regs.a[0] = simval { 0 }; // A0 = segList (NULL for ROM modules)
+            rom_tag_init_regs.a[6] = simval { fake_exec_base() }; // A6 = ExecBase
+
+            add_label(tag.init_addr, name + "_init", code_type);
+            add_root(tag.init_addr, rom_tag_init_regs);
+        } else {
+            add_label(tag.init_addr, name + "_init_dsize", long_type);
+            add_label(tag.init_addr + 4, name + "_init_functable", unknown_ptr);
+            add_label(tag.init_addr + 8, name + "_init_datatable", unknown_ptr);
+            add_label(tag.init_addr + 12, name + "_init_routine", code_ptr);
+            handle_rtf_autoinit(tag.init_addr);
+        }
+    }
+}
 
 void analyzer::handle_struct_at(uint32_t addr, const structure_definition& s)
 {
@@ -4620,7 +4908,7 @@ void analyzer::handle_struct_at(uint32_t addr, const structure_definition& s)
     }
 }
 
-void analyzer::maybe_find_string_at(uint32_t addr)
+void analyzer::maybe_find_string_at(uint32_t addr, const std::string& label)
 {
     if (addr >= max_mem || !written_[addr])
         return;
@@ -4655,7 +4943,7 @@ void analyzer::maybe_find_string_at(uint32_t addr)
         return;
 
     std::fill(data_handled_at_.begin() + start_addr, data_handled_at_.begin() + start_addr + len, true);
-    add_label(start_addr, "text_" + hexstring(start_addr), make_array_type(char_type, len));
+    add_label(start_addr, !label.empty() ? label : "text_" + hexstring(start_addr), make_array_type(char_type, len));
 }
 
 void analyzer::maybe_find_copper_list_at(uint32_t addr)
@@ -4841,6 +5129,11 @@ void analyzer::handle_predef_info()
 {
     for (const auto& i : predef_info_) {
         const auto& t = *i.second.t;
+
+        if (&t == &hack_str_type) {
+            maybe_find_string_at(i.first, i.second.name);
+            continue;
+        }
 
         if (&t == &bcpl_seglist_type) {
             handle_bseglist_at(i.first, i.second.name);
@@ -5321,6 +5614,7 @@ void hunk_file::read_hunk_exe()
         for (const auto& s : symbols)
             a_->add_label(s.addr, s.name, unknown_type);
         bool has_code = false;
+        std::vector<rom_tag> tags;
         for (size_t i = 0, sz = hunks.size(); i < sz; ++i) {
             const auto& h = hunks[i];
             const auto hunk_size = static_cast<uint32_t>(h.data.size());
@@ -5332,11 +5626,15 @@ void hunk_file::read_hunk_exe()
             a_->add_label(h.addr - 4, hunk_name + "_link", long_type);
             a_->write_data(h.addr - 8, header, sizeof(header));
             a_->write_data(h.addr, h.data.data(), hunk_size);
-            if (h.type == HUNK_CODE) {
-                if (!has_code)
-                    a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
-                a_->add_root(h.addr, simregs {});
-                has_code = true;
+            if (h.type == HUNK_CODE && !h.data.empty()) {
+                if (!a_->find_predef_into(h.addr)) {
+                    if (!has_code)
+                        a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
+                    a_->add_root(h.addr, simregs {});
+                    has_code = true;
+                }
+                for (const auto& t : scan_for_rom_tags(h.data, h.addr))
+                    a_->add_rom_tag(t);
             } else {
                 const std::string t = h.flags == 1 ? "chip" : "";
                 a_->add_auto_label(h.addr, unknown_type, t + (h.type == HUNK_CODE ? "code" : h.type == HUNK_BSS ? "bss" : "data"));
@@ -5445,19 +5743,22 @@ void read_hunk(const std::vector<uint8_t>& data, analyzer* a)
     hunk_file hf { data, a };
 }
 
-struct rom_tag {
-    uint32_t matchtag;  // RT_MATCHTAG     (pointer RTC_MATCHWORD)
-    uint32_t endskip;   // RT_ENDSKIP      (pointer to end of code)
-    uint8_t  flags;     // RT_FLAGS        (no flags)
-    uint8_t  version;   // RT_VERSION      (version number)
-    uint8_t  type;      // RT_TYPE         (NT_LIBRARY)
-    uint8_t  priority;  // RT_PRI          (priority = 126)
-    uint32_t name_addr; // RT_NAME         (pointer to name)
-    uint32_t id_addr;   // RT_IDSTRING     (pointer to ID string)
-    uint32_t init_addr; // RT_INIT         (execution address)*
-
-    std::string name;
-};
+bool is_rom(const std::vector<uint8_t>& data)
+{
+    if (data.size() < 8 * 1024)
+        return false;
+    if (get_u16(&data[2]) != 0x4ef9) // jump
+        return false;
+    switch (get_u16(&data[0])) {
+    case 0x1111: // 256K (or boot rom 8K)
+        return data.size() == 8 * 1024 || data.size() == 256 * 1024;
+    case 0x1114: // 512K
+        return data.size() == 512 * 1024;
+    case 0x1116: // rekick
+        return true;
+    }
+    return false;
+}
 
 void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
 {
@@ -5465,66 +5766,14 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
     //std::cout << "ROM detected\n";
     //std::cout << "Entry point: $" << hexfmt(start) << "\n";
     const uint32_t rom_base = data.size() == 1024 * 1024 ? 0xf00000 : start & 0xffff0000;
-    if (rom_base != 0xf00000 && rom_base != 0xf80000 && rom_base != 0xfc0000)
+    if (rom_base != 0xf00000 && rom_base != 0xf80000 && rom_base != 0xfc0000 && rom_base != 0x200000)
         throw std::runtime_error { "Unsupported ROM base: $" + hexstring(rom_base) };
     //std::cout << "Base address: $" << hexfmt(rom_base) << "\n";
     if (start - rom_base >= data.size())
         throw std::runtime_error { "Invalid ROM entry point: $" + hexstring(start) };
 
     // Scan for ROM tags
-    std::vector<rom_tag> rom_tags;
-    for (uint32_t offset = 0; offset < data.size() - 24;) {
-        if (get_u16(&data[offset]) != 0x4afc || get_u32(&data[offset + 2]) != offset + rom_base) {
-            offset += 2;
-            continue;
-        }
-
-        //std::cout << "Found tag at $" << hexfmt(rom_base + offset) << "\n";
-        rom_tag tag
-        {
-            .matchtag = get_u32(&data[offset + 2]),
-            .endskip = get_u32(&data[offset + 6]),
-            .flags = data[offset + 10],
-            .version = data[offset + 11],
-            .type = data[offset + 12],
-            .priority = data[offset + 13],
-            .name_addr = get_u32(&data[offset + 14]),
-            .id_addr = get_u32(&data[offset + 18]),
-            .init_addr = get_u32(&data[offset + 22]),
-            .name = "",
-        };
-
-        uint32_t end_offset = tag.endskip - rom_base;
-        if (end_offset <= offset || end_offset > data.size()) {
-            std::cout << "Invalid end offset\n";
-            end_offset = offset + 26;
-        }
-
-        auto get_string = [&](uint32_t addr) {
-            if (addr <= rom_base || addr - rom_base >= data.size())
-                throw std::runtime_error { "Invalid string in ROM tag: addr=$" + hexstring(addr) };
-            addr -= rom_base;
-            std::string s;
-            for (; addr < data.size() && data[addr]; ++addr) {
-                if (data[addr] >= ' ' && data[addr] < 128)
-                    s.push_back(data[addr]);
-                else
-                    s += "\\x" + hexstring(data[addr]);
-            }
-            return s;
-        };
-
-        tag.name = get_string(tag.name_addr);
-
-        //std::cout << "  End=$" << hexfmt(tag.endskip) << "\n";
-        //std::cout << "  Flags=$" << hexfmt(tag.flags) << " version=$" << hexfmt(tag.version) << " type=$" << hexfmt(tag.type) << " priority=$" << hexfmt(tag.priority) << "\n";
-        //std::cout << "  Name='" << tag.name << "'\n";
-        //std::cout << "  ID='" << get_string(tag.id_addr) << "'\n";
-        //std::cout << "  Init=$" << hexfmt(tag.init_addr) << "\n";
-
-        rom_tags.push_back(tag);
-        offset = end_offset;
-    }
+    auto rom_tags = scan_for_rom_tags(data, rom_base);
 
     if (!a) {
         if (rom_tags.empty()) {
@@ -5540,54 +5789,21 @@ void handle_rom(const std::vector<uint8_t>& data, analyzer* a)
     a->write_data(rom_base, data.data(), static_cast<uint32_t>(data.size()));
     a->add_fakes();
 
+    #if 0
+    if (1) {
+        std::sort(rom_tags.begin(), rom_tags.end(), [](const rom_tag& l, const rom_tag& r) {
+            return l.priority >= r.priority;
+        });
+        for (const auto& tag : rom_tags)
+            //if (tag.flags & 0x01)
+                std::cout << tag.name << " priority=$" << hexfmt(tag.priority) << " flags=$" << hexfmt(tag.flags) << "\n";
+        return;
+    }
+    #endif
+
     bool has_entry_name = false;
-    simregs rom_tag_init_regs = {};
-    // InitResident calls the RT_INIT function with these arguments:      
-    rom_tag_init_regs.d[0] = simval { 0 }; // D0 = 0
-    rom_tag_init_regs.a[0] = simval { 0 }; // A0 = segList (NULL for ROM modules)
-    rom_tag_init_regs.a[6] = simval { a->fake_exec_base() }; // A6 = ExecBase
     for (const auto& tag : rom_tags) {
-        std::string name;
-        for (char c : tag.name) {
-            if (isalpha(c) || (!name.empty() && isdigit(c)))
-                name.push_back(c);
-            else
-                name.push_back('_');
-        }
-
-        auto slen = [&](uint32_t addr) {
-            addr -= rom_base;
-            uint32_t l = 0;
-            while (addr + 1 < data.size() && data[addr++])
-                ++l;
-            return l + 1; // Include nul terminator
-        };
-
-        a->add_label(tag.matchtag, name + "_matchword", word_type);
-        a->add_label(tag.matchtag + 2, name + "_matchtag", unknown_ptr); // Pointer to struct Resident
-        a->add_label(tag.matchtag + 6, name + "_endskip", unknown_ptr);
-        a->add_label(tag.matchtag + 10, name + "_flags", byte_type);
-        a->add_label(tag.matchtag + 11, name + "_version", byte_type);
-        a->add_label(tag.matchtag + 12, name + "_type", byte_type);
-        a->add_label(tag.matchtag + 13, name + "_priority", byte_type);
-        a->add_label(tag.matchtag + 14, name + "_name_addr", char_ptr);
-        a->add_label(tag.matchtag + 18, name + "_id_addr", char_ptr);
-        a->add_label(tag.matchtag + 22, name + "_init_addr", code_ptr);
-
-        a->add_label(tag.name_addr, name + "_name", make_array_type(char_type, slen(tag.name_addr)));
-        a->add_label(tag.id_addr, name + "_id", make_array_type(char_type, slen(tag.id_addr)));
-        if (tag.init_addr) {
-            if (!(tag.flags & 0x80)) { // Not RTF_AUTOINIT
-                a->add_label(tag.init_addr, name + "_init", code_type);
-                a->add_root(tag.init_addr, rom_tag_init_regs);
-            } else {
-                a->add_label(tag.init_addr, name + "_init_dsize", long_type);
-                a->add_label(tag.init_addr + 4, name + "_init_functable", unknown_ptr);
-                a->add_label(tag.init_addr + 8, name + "_init_datatable", unknown_ptr);
-                a->add_label(tag.init_addr + 12, name + "_init_routine", code_ptr);
-                a->handle_rtf_autoinit(tag.init_addr);
-            }
-        }
+        a->add_rom_tag(tag);
         if (tag.init_addr == start)
             has_entry_name = true;
     }
@@ -5620,6 +5836,7 @@ void usage()
     std::cerr << "   file    source file\n";
     std::cerr << "   -a      analyze\n";
     std::cerr << "   -i      infofile (implies -a)\n";
+    std::cerr << "   -rom    force rom mode\n";
     std::cerr << "\n";
     std::cerr << "Options for non-hunk files:";
     std::cerr << "   Normal (non-analysis mode) options: [offset] [end] - Normal dissasembly of starting from offset..end\n";
@@ -5629,11 +5846,16 @@ void usage()
 int main(int argc, char* argv[])
 {
     try {
+        bool force_rom = false;
         std::unique_ptr<analyzer> a;
         while (argc >= 2) {
             if (!strcmp(argv[1], "-a")) {
                 if (!a)
                     a = std::make_unique<analyzer>();
+                ++argv;
+                --argc;
+            } else if (!strcmp(argv[1], "-rom")) {
+                force_rom = true;
                 ++argv;
                 --argc;
             } else if (!strcmp(argv[1], "-i")) {
@@ -5659,15 +5881,14 @@ int main(int argc, char* argv[])
         }
         
         const auto data = read_file(argv[1]);
-        if (data.size() > 4 && (get_u32(&data[0]) == HUNK_HEADER || get_u32(&data[0]) == HUNK_UNIT)) {
-            if (argc > 2)
-                throw std::runtime_error { "Too many arguments" };
-            read_hunk(data, a.get());
-        } else if (data.size() >= 8 * 1024 && data[0] == 0x11 && (data[1] == 0x11 || data[1] == 0x14) && get_u16(&data[2]) == 0x4ef9) {
-            // ROM
+        if (force_rom || is_rom(data)) {
             if (argc > 2)
                 throw std::runtime_error { "Too many arguments" };
             handle_rom(data, a.get());
+        } else if (data.size() > 4 && (get_u32(&data[0]) == HUNK_HEADER || get_u32(&data[0]) == HUNK_UNIT)) {
+            if (argc > 2)
+                throw std::runtime_error { "Too many arguments" };
+            read_hunk(data, a.get());
         } else if (a && data.size() >= 1024 && data[0] == 'D' && data[1] == 'O' && data[2] == 'S' && validate_bootchecksum(data)) {
             // Bootblock (analyzed)
             const auto base = 0x200000;

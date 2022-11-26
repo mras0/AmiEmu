@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <cstring>
 
-// TODO: Prefetch before write for some MOVE operations
+// TODO: Proper prefetch handling (http://pasti.fxatari.com/68kdocs/68kPrefetch.html)
 
 std::string ccr_string(uint16_t sr)
 {
@@ -1672,9 +1672,11 @@ private:
         if (inst_->nea == 1) {
             val = read_ea(0);
             cnt = 1;
+            prefetch();
         } else {
             cnt = read_ea(0) & 63;
             val = read_ea(1);
+            prefetch();
             add_cycles(static_cast<uint8_t>(2 * cnt + (inst_->size == opsize::l ? 4 : 2)));
         }
 
@@ -1689,7 +1691,6 @@ private:
             carry = false;
         }
 
-        prefetch();
         write_ea(inst_->nea - 1, val);
         update_flags_rot(val, cnt, carry);
         poll_ipl(); // TODO: Verify placement (IPL)

@@ -36,7 +36,6 @@ namespace {
 
 volatile bool ctrl_c;
 
-// Hack: global state for debugger values
 cpu_state debugger_cpu_state;
 uint32_t debugger_ans; // Last result
 uint32_t debugger_reg[100];
@@ -993,7 +992,9 @@ private:
     std::vector<memwatch> memwatches;
     std::vector<uint32_t> tasks;
     std::unique_ptr<std::ofstream> trace_file;
-
+    bool profiling_ = false;
+    std::map<uint32_t, uint64_t> profiling_data_;
+    
     void activate_debugger();
     void check_debug_break();
     bool check_wait_process_name(const std::string& process_name) const;
@@ -1177,8 +1178,11 @@ void amiga::cstep(bool cpu_waiting)
     custom_step = custom.step(cpu_waiting, cpu_step.current_pc);
     cpu_active = cpu_was_active;
 
-    if (!(custom_step.hpos & 1))
+    if (!(custom_step.hpos & 1)) {
         dma_usage[custom_step.vpos * (hpos_per_line / 2) + custom_step.hpos / 2] = { custom_step.bus, custom_step.dma_addr, custom_step.dma_val };
+        if (profiling_)
+            ++profiling_data_[cpu_step.current_pc];
+    }
 
     ++chip_cycles_count;
 
@@ -1855,6 +1859,48 @@ void amiga::debugger_loop()
                 cop_addr += copper_disasm(mem, cop_addr, 20);
             } else {
                 goto unknown_command;
+            }
+        } else if (args[0] == "prof") {
+            if (args.size() > 1) {
+                if (args[1] == "1") {
+                    if (!profiling_) {
+                        profiling_ = true;
+                        profiling_data_.clear();
+                    } else {
+                        std::cerr << "Profiling already enabled\n";
+                    }
+                } else if (args[1] == "0") {
+                    profiling_ = false;
+                }
+            } else if (!profiling_) {
+                std::cerr << "Profiling is not enabled\n";
+            } else {
+                // Slow and ugly, but show some data
+                std::map<uint64_t, uint32_t> data;
+                std::map<std::string, uint64_t> insts;
+                std::map<uint64_t, std::string> reverse_insts;
+                uint64_t total = 0;
+                for (const auto [addr, cycles] : profiling_data_) {
+                    data[cycles] = addr;
+                    total += cycles;
+                    insts[instructions[mem.hack_peek_u16(addr)].name] += cycles;
+                }
+                for (const auto& i: insts)
+                    reverse_insts[i.second] = i.first;
+                auto it = data.crbegin();
+                for (unsigned i = 0; i < 200 && it != data.crend(); ++i, ++it) {
+                    std::cout << hexfmt(it->second) << " " << std::setw(10) << static_cast<double>(it->first) * 100 / total << "\t";
+                    uint16_t iwords[max_instruction_words];
+                    iwords[0] = mem.hack_peek_u16(it->second);
+                    for (int j = 1; j < instructions[iwords[0]].ilen; ++j)
+                    iwords[j] = mem.hack_peek_u16(it->second + j * 2);
+                    disasm(std::cout, it->second, iwords, max_instruction_words);
+                    std::cout << "\n";
+                }
+                auto it2 = reverse_insts.crbegin();
+                for (unsigned i = 0; i < 200 && it2 != reverse_insts.crend(); ++i, ++it2) {
+                    std::cout << it2->second << "\t" << std::setw(10) << static_cast<double>(it2->first) * 100 / total << "\n";
+                }
             }
         } else if (args[0] == "q") {
             quit = true;

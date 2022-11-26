@@ -65,7 +65,7 @@ private:
             .size = size,
             .product_number = 0x12,
             .hw_manufacturer = 0x1234,
-            .serial_no = 0x12345678,
+            .serial_no = 1,
             .rom_vector_offset = 0,
         };
     }
