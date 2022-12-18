@@ -3289,10 +3289,11 @@ public:
         process_roots();
         // Now add any predefined roots that were not automatically inferred
         for (const auto& pi : predef_info_) {
-            if (pi.second.t == &code_type && visited_.find(pi.first) == visited_.end())
+            if (pi.second.t == &code_type && visited_.find(pi.first) == visited_.end()) {
                 add_root(pi.first, simregs {}, true);
+                process_roots();
+            }
         }
-        process_roots();
 
         for (const auto& area : areas_) {
             uint32_t pos = area.beg;
