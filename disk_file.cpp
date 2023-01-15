@@ -8,6 +8,7 @@
 
 #include <stdexcept>
 #include <fstream>
+#include <cassert>
 
 namespace {
 
@@ -64,6 +65,31 @@ std::vector<uint8_t> make_exe_disk(const std::string& filename, const std::vecto
     return disk.get();
 }
 
+void format_std_track(uint8_t* dest, uint8_t tracknum, const uint8_t* raw_data)
+{
+    for (uint8_t sec = 0; sec < NUMSECS; ++sec, raw_data += TD_SECTOR) {
+        put_u32(&dest[0], fill); // Preamble
+        put_u16(&dest[4], MFM_SYNC);
+        put_u16(&dest[6], MFM_SYNC);
+        put_split_long(&dest[8], 0xffU << 24 | tracknum << 16 | sec << 8 | (11 - sec));
+        // sector label
+        for (uint32_t i = 16; i < 48; i += 4)
+            put_u32(&dest[i], fill);
+        // header checksum
+        put_split_long_fill(&dest[48], checksum(&dest[8], (48 - 8) / 4));
+        // data
+        for (uint16_t i = 0; i < 512; ++i) {
+            dest[64 + i] = 0xaa | ((raw_data[i] >> 1) & 0x55);
+            dest[64 + 512 + i] = 0xaa | (raw_data[i] & 0x55);
+        }
+        // data checksum
+        put_split_long_fill(&dest[56], checksum(&dest[64], (MFM_SECTOR_SIZE_WORDS * 2 - 64) / 4));
+        dest += MFM_SECTOR_SIZE_WORDS * 2;
+    }
+    // gap
+    std::memset(dest, 0xaa, MFM_GAP_SIZE_WORDS * 2);
+}
+
 class adf_disk_file : public disk_file {
 public:
     adf_disk_file(const std::string& name, std::vector<uint8_t>&& data)
@@ -115,28 +141,7 @@ public:
 
     void read_mfm_track(uint8_t tracknum, uint8_t* dest) const override
     {
-        for (uint8_t sec = 0; sec < NUMSECS; ++sec) {
-            const uint8_t* raw_data = &data_[(tracknum * NUMSECS + sec) * TD_SECTOR];
-            put_u32(&dest[0], fill); // Preamble
-            put_u16(&dest[4], MFM_SYNC);
-            put_u16(&dest[6], MFM_SYNC);
-            put_split_long(&dest[8], 0xffU << 24 | tracknum << 16 | sec << 8 | (11 - sec));
-            // sector label
-            for (uint32_t i = 16; i < 48; i += 4)
-                put_u32(&dest[i], fill);
-            // header checksum
-            put_split_long_fill(&dest[48], checksum(&dest[8], (48 - 8) / 4));
-            // data
-            for (uint16_t i = 0; i < 512; ++i) {
-                dest[64 + i] = 0xaa | ((raw_data[i] >> 1) & 0x55);
-                dest[64 + 512 + i] = 0xaa | (raw_data[i] & 0x55);
-            }
-            // data checksum
-            put_split_long_fill(&dest[56], checksum(&dest[64], (MFM_SECTOR_SIZE_WORDS * 2 - 64) / 4));
-            dest += MFM_SECTOR_SIZE_WORDS * 2;
-        }
-        // gap
-        std::memset(dest, 0xaa, MFM_GAP_SIZE_WORDS * 2);
+        format_std_track(dest, tracknum, &data_[tracknum * NUMSECS * TD_SECTOR]);
     }
 
     void write_mfm_track(uint8_t tracknum, const uint8_t* src) override
@@ -189,6 +194,109 @@ private:
     bool dirty_;
 };
 
+class extended_adf_disk_file : public disk_file {
+public:
+    extended_adf_disk_file(const std::string& name, std::vector<uint8_t>&& data)
+        : name_ { name }
+        , data_ { std::move(data) }
+    {
+        if (!detect(data_))
+            throw std::runtime_error { name_ + " is not a valid extended ADF file" };
+        const auto num_tracks = get_u16(&data_[10]); 
+        info_.resize(num_tracks);
+
+        if (debug_stream)
+            *debug_stream << "Loading extended ADF file " << name_ << " " << info_.size() << " tracks\n";
+        uint32_t pos = 12;
+        const auto end = static_cast<uint32_t>(data_.size());
+        uint32_t ofs = 12 + 12 * num_tracks;
+        for (auto& ti: info_) {
+            if (pos + 12 > end)
+                throw std::runtime_error { name_ + " is not a valid extended ADF file (unexpected EOF)" };
+            const auto type = get_u16(&data_[pos + 2]);
+            const auto nbytes = get_u32(&data_[pos + 4]);
+            const auto nbits = get_u32(&data_[pos + 8]);
+
+            if (type != 0 && (type&0xff) != 1)
+                throw std::runtime_error { name_ + ": Invalid track type $" + hexstring(type) };
+            if (nbytes > MFM_TRACK_SIZE_WORDS * 2 || nbits > nbytes * 8 || ofs + nbytes > end)
+                throw std::runtime_error { name_ + ": Invalid track length" };
+            ti.type = type;
+            ti.num_bits = nbits;
+            ti.offset = ofs;
+            ti.allocated_bytes = nbytes;
+            pos += 12;
+            ofs += nbytes;
+        }
+    }
+
+    ~extended_adf_disk_file() = default;
+
+    static bool detect(const std::vector<uint8_t>& data)
+    {
+        // Limit to 84 cylinders (probably 83 is the right number)
+        if (data.size() < 12 || memcmp(data.data(), magic, sizeof(magic)))
+            return false;
+        const auto num_tracks = get_u16(&data[10]);
+        if (num_tracks % 2 || num_tracks > max_cylinders * 2)
+            return false;
+        return true;
+    }
+
+    const std::string& name() const override
+    {
+        return name_;
+    }
+
+    uint8_t num_cylinders() const override
+    {
+        return static_cast<uint8_t>(info_.size() / 2);
+    }
+
+    bool ofs_bootable() const override
+    {
+        if (debug_stream)
+            *debug_stream << "TODO: extended_adf_disk_file::ofs_toobtable() for " << name_ << "\n";
+        return false;
+    }
+
+    void read_mfm_track(uint8_t tracknum, uint8_t* dest) const override
+    {
+        assert(tracknum < info_.size());
+        const auto& ti = info_[tracknum];
+
+        if (!ti.type) {
+            format_std_track(dest, tracknum, &data_[ti.offset]);
+            return;
+        }
+
+        const auto nbytes = (ti.num_bits + 7) / 8;
+        assert(nbytes <= MFM_TRACK_SIZE_WORDS * 2);
+        memcpy(dest, &data_[ti.offset], nbytes);
+        memset(dest + nbytes, 0xaa, MFM_TRACK_SIZE_WORDS * 2 - nbytes); // Should actually adjust MFM data etc. but don't bother for now
+    }
+
+    void write_mfm_track(uint8_t tracknum, const uint8_t* src) override
+    {
+        (void)tracknum;
+        (void)src;
+        throw std::runtime_error { "Writing to extended ADF file not supported yet" };
+    }
+
+private:
+    struct track_info {
+        uint16_t type; // 0=normal AmigaDOS track, 1 = raw MFM (upper byte = disk revolutions - 1)
+        uint32_t num_bits;
+        uint32_t offset;
+        uint32_t allocated_bytes;
+    };
+    static constexpr uint8_t magic[8] = { 'U', 'A', 'E', '-', '1', 'A', 'D', 'F' };
+    static constexpr uint8_t max_cylinders = 84; // Probably 83 is more correct
+
+    std::string name_;
+    std::vector<uint8_t> data_;
+    std::vector<track_info> info_;
+};
 }
 
 std::unique_ptr<disk_file> load_disk_file(const std::string& filename)
@@ -198,6 +306,8 @@ std::unique_ptr<disk_file> load_disk_file(const std::string& filename)
         throw std::runtime_error { filename + " is not a disk image" };
     if (dms_detect(data))
         return std::make_unique<adf_disk_file>(filename, dms_unpack(data));
+    if (extended_adf_disk_file::detect(data))
+        return std::make_unique<extended_adf_disk_file>(filename, std::move(data));
     if (get_u32(&data[0]) == 1011) // HUNK_HEADER
         return std::make_unique<adf_disk_file>(filename, make_exe_disk(filename, data));
     if (data.size() != DISK_SIZE)

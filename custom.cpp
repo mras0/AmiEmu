@@ -817,7 +817,7 @@ struct custom_state {
     bool dskread;
     uint16_t dskbyt;
     uint16_t dskpos;
-    uint16_t mfm_pos;
+    uint32_t mfm_pos;
     uint8_t mfm_track[MFM_TRACK_SIZE_WORDS * 2];
 
     uint32_t copper_pt;
@@ -984,6 +984,15 @@ struct custom_state {
                 incy();
         } 
     }
+
+    uint16_t get_mfm_word() const
+    {
+        const uint32_t b = mfm_pos / 8;
+        const uint32_t track_size = MFM_TRACK_SIZE_WORDS * 2;
+        const uint32_t dat = mfm_track[b % track_size] << 16 | mfm_track[(b + 1) % track_size] << 8 | mfm_track[(b + 2) % track_size];
+        return static_cast<uint16_t>(dat >> (8 - mfm_pos % 8));
+    }
+
 };
 
 template <uint16_t bplcon0>
@@ -1073,6 +1082,7 @@ constexpr auto make_one_pixel_func_array(std::index_sequence<I...>)
 }
 
 constexpr auto one_pixel_funcs = make_one_pixel_func_array(std::make_index_sequence<32> {});
+
 
 } // unnamed namespace
 
@@ -1806,16 +1816,16 @@ public:
                 if (nwords >= MFM_TRACK_SIZE_WORDS - MFM_GAP_SIZE_WORDS)
                     s_.mfm_pos = 0; // If the loader is able to handle a full track (minus the gap) then give it a clean fit to work around any issues
                 else
-                    s_.mfm_pos %= MFM_TRACK_SIZE_WORDS; // Otherwise let it think that it's processing data as fast as possible (no gaps)
+                    s_.mfm_pos %= MFM_TRACK_SIZE_WORDS * 16; // Otherwise let it think that it's processing data as fast as possible (no gaps)
                 return false;
             }
 
             if (!s_.dsksync_passed && (s_.adkcon & 0x400)) {
-                for (uint16_t i = 0; i < MFM_TRACK_SIZE_WORDS; ++i) {
-                    if (get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]) == s_.dsksync) {
+                for (uint32_t i = 0; i < MFM_TRACK_SIZE_WORDS * 16 + 16; ++i) {
+                    if (s_.get_mfm_word() == s_.dsksync) {
                         if (DEBUG_DISK)
                             DBGOUT << "Disk sync word ($" << hexfmt(s_.dsksync) << ") matches at word pos $" << hexfmt(s_.mfm_pos) << "\n";
-                        ++s_.mfm_pos;
+                        s_.mfm_pos += 16;
                         // XXX: FIXME: Shouldn't be done here
                         s_.intreq |= INTF_DSKSYNC;
                         s_.dsksync_passed = true;
@@ -1833,11 +1843,11 @@ public:
 
             // 400% floppy speed corrupts display at start of "flower"/Anarchy Germany (https://www.pouet.net/prod.php?which=3037)
             for (uint32_t i = 0; i < floppy_speed_ && s_.dskpos < nwords; ++i) {
-                const auto data = get_u16(&s_.mfm_track[(s_.mfm_pos % MFM_TRACK_SIZE_WORDS) * 2]);
+                const auto data = s_.get_mfm_word();
                 chip_write(s_.dskpt, data);
                 s_.dskbyt = 1 << 15 | (data == s_.dsksync ? 1 << 12 : 0) | (data & 0xff); // XXX
                 s_.dskpt += 2;
-                ++s_.mfm_pos;
+                s_.mfm_pos += 16;
                 ++s_.dskpos;
             }
         }
