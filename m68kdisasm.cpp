@@ -93,6 +93,17 @@ constexpr const char* const ciabprb_bitnames[8] = {
     "/MTR",
 };
 
+constexpr const char* const ciaicr_bitnames[8] = {
+    "TA",
+    "TB",
+    "ALRM",
+    "SP",
+    "FLG",
+    "BIT5",
+    "BIT6",
+    "IR/SETCLR",
+};
+
 constexpr const char* const custom_regname[0x100] = {
     "BLTDDAT",
     "DMACONR",
@@ -708,7 +719,7 @@ public:
 
     const char* name() const
     {
-        return name_;
+        return name_.c_str();
     }
 
     int32_t offset() const
@@ -729,7 +740,7 @@ public:
     }
 
 private:
-    const char* name_;
+    std::string name_;
     int32_t offset_;
     const type* type_;
     static constexpr int32_t auto_offset = INT32_MAX;
@@ -766,7 +777,7 @@ public:
 
     const char* name() const
     {
-        return name_;
+        return name_.c_str();
     }
 
     const std::vector<struct_field>& fields() const
@@ -831,7 +842,7 @@ public:
     }
 
 private:
-    const char* const name_;
+    std::string name_;
     std::vector<struct_field> fields_;
 };
 
@@ -2682,6 +2693,12 @@ void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simv
             }
             break;
         }
+        if (reg == 0xd) {
+            // ICR
+            extra << " bit " << static_cast<int>(bitnum) << " = " << ciaicr_bitnames[bitnum];
+            return;
+        }
+
         std::cerr << "TODO: Add bitnum info for " << name << " register " << cia_regname[reg] << "\n";
         return;
     } else if (addr >= 0xDE0000 && addr < 0xE00000) {
@@ -2785,6 +2802,10 @@ public:
         if (!in || !in.is_open())
             throw std::runtime_error { "Could not open " + filename };
 
+        std::vector<struct_field> struct_fields;
+        bool in_struct = false;
+        std::string struct_name;
+
         uint32_t linenum = 1;
         for (std::string line; std::getline(in, line); ++linenum) {
             size_t start = 0, end = line.length();
@@ -2820,6 +2841,21 @@ public:
             };
 
             std::vector<std::string> parts = split(line.substr(start, end - start), ' ');
+
+            if (parts.size() == 1 && parts[0] == "ESTRUCT") {
+                if (!in_struct)
+                    throw std::runtime_error { "ESTRUCT outside structure in " + filename + " line " + std::to_string(linenum) + ": " + line };
+                in_struct = false;
+                struct_defs_.push_back(std::make_unique<structure_definition>(struct_name.c_str(), struct_fields));
+                struct_fields.clear();
+                continue;
+            } else if (parts.size() == 2 && parts[0] == "STRUCT") {
+                if (in_struct)
+                    throw std::runtime_error { "Already in structure in " + filename + " line " + std::to_string(linenum) + ": " + line };
+                struct_name = parts[1];
+                in_struct = true;
+                continue;
+            }
 
             if (parts.size() == 1) {
                 parts = split(parts[0], '=');
@@ -2905,8 +2941,15 @@ public:
                     lab.erase(pos);
                 }
             }
-            predef_info_.push_back({ addr, { lab, t } });
+
+            if (in_struct)
+                struct_fields.push_back({lab.c_str(), *t, static_cast<int32_t>(addr)});
+            else
+                predef_info_.push_back({ addr, { lab, t } });
         }
+
+        if (in_struct)
+            throw std::runtime_error { "Unterminated structure " + struct_name };
     }
 
     const label_info* find_predef_into(uint32_t query_addr)
@@ -3593,6 +3636,7 @@ private:
     std::map<std::string, uint32_t> library_bases_;
     std::vector<delayed_forced_value> delayed_forced_values_;
     std::vector<std::pair<uint32_t, std::string>> function_aliases_;
+    std::vector<std::unique_ptr<structure_definition>> struct_defs_;
 
     uint32_t fake_process_ = 0;
 
