@@ -2,6 +2,7 @@
 #define AUTOCONF_H_INCLUDED
 
 #include "memory.h"
+#include <string>
 
 class autoconf_device {
 public:

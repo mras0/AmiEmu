@@ -8,52 +8,14 @@
 #include "memory.h"
 #include "debug.h"
 #include "state_file.h"
+#include "disk_file.h"
 
 namespace {
-
-constexpr uint16_t NUMSECS        = 11;                  // sectors per track
-constexpr uint16_t TD_SECTOR      = 512;                 // bytes per sector
-constexpr uint16_t TRACK_SIZE     = NUMSECS*TD_SECTOR;   // bytes per track
-constexpr uint16_t MFM_SYNC       = 0x4489;              // MFM sync value
-constexpr uint16_t NUM_CYLINDERS  = 80;                  // There are 80 cylinders on a Amiga floppy disk
-constexpr uint32_t DISK_SIZE      = NUM_CYLINDERS * 2 * TRACK_SIZE; // Each cylinder has 2 MFM tracks, 1 on each side
 
 // EClock is color clock frequency/5 = 708.240KHz
 constexpr uint32_t ECLOCK_FREQ    = 708240;
 constexpr uint32_t DISK_INDEX_CNT = ECLOCK_FREQ / 5;  // 300RPM (=5Hz)
 constexpr uint32_t MOTOR_ON_CNT   = ECLOCK_FREQ / 20; // 50ms
-
-static_assert(DISK_SIZE == 901120); // 880K
-
-constexpr uint32_t fill = 0xaaaaaaaa; // MFM encoded 0
-constexpr uint32_t mfm_mask = 0x55555555;
-
-void put_split_long(uint8_t* dest, uint32_t l)
-{
-    put_u32(dest, (l >> 1) & mfm_mask); // odd
-    put_u32(dest + 4, l & mfm_mask); // even
-}
-
-void put_split_long_fill(uint8_t* dest, uint32_t l)
-{
-    put_u32(dest, ((l >> 1) & mfm_mask) | fill); // odd
-    put_u32(dest + 4, (l & mfm_mask) | fill); // even
-}
-
-uint32_t checksum(const uint8_t* data, uint32_t nlongs)
-{
-    uint32_t csum = 0;
-    while (nlongs--) {
-        csum ^= get_u32(data);
-        data += 4;
-    }
-    return csum;
-}
-
-uint32_t decode_long(const uint8_t* src)
-{
-    return (get_u32(src) & mfm_mask) << 1 | (get_u32(src + 4) & mfm_mask);
-}
 
 }
 
@@ -67,7 +29,6 @@ public:
 
     ~impl()
     {
-        flush();
     }
 
     const std::string& name() const
@@ -75,20 +36,11 @@ public:
         return name_;
     }
 
-    void insert_disk(std::vector<uint8_t>&& data)
+    void insert_disk(std::unique_ptr<disk_file>&& disk)
     {
-        flush();
-
+        data_ = std::move(disk);
         if (DEBUG_DISK)
-            *debug_stream << name_ << " Inserting disk of size $" << hexfmt(data.size(), 8) << "\n";
-        data_ = std::move(data);
-
-        if (data_.empty())
-            return;
-
-        if (data_.size() != DISK_SIZE) {
-            throw std::runtime_error { name_ + " Invalid disk size $" + hexstring(data.size()) };
-        }
+            *debug_stream << name_ << " Inserting disk " << (data_ ? data_->name() : "<empty file>") << "\n";
     }
 
     bool step()
@@ -114,7 +66,7 @@ public:
     uint8_t cia_state() const
     {
         uint8_t flags = DSKF_ALL;
-        if (data_.empty()) {
+        if (!data_) {
             flags &= ~DSKF_CHANGE;
         } else {
             //flags &= ~DSKF_PROT;
@@ -170,7 +122,7 @@ public:
     {
         if (DEBUG_DISK)
             *debug_stream << name_ << " Stepping cyl = " << (int)s_.cyl << " side = " << (s_.side ? "lower" : "upper") << " direction = " << (s_.seek_dir ? "out (towards 0)" : "in (towards 79)") << "\n";
-        if (!s_.seek_dir && s_.cyl < NUM_CYLINDERS - 1)
+        if (!s_.seek_dir && data_ && s_.cyl < data_->num_cylinders() - 1)
             ++s_.cyl;
         else if (s_.seek_dir && s_.cyl)
             --s_.cyl;
@@ -183,7 +135,7 @@ public:
         if (!s_.motor)
             throw std::runtime_error { name_ + " Reading while motor is not on" };
 
-        if (data_.empty()) {
+        if (!data_) {
             *debug_stream << name_ << " Trying to read from non-present disk?!\n";
             return;
         }
@@ -197,28 +149,7 @@ public:
         if (disk_activity_handler_)
             disk_activity_handler_(tracknum, false);
 
-        for (uint8_t sec = 0; sec < NUMSECS; ++sec) {
-            const uint8_t* raw_data = &data_[(tracknum * NUMSECS + sec) * TD_SECTOR];
-            put_u32(&dest[0], fill); // Preamble
-            put_u16(&dest[4], MFM_SYNC);
-            put_u16(&dest[6], MFM_SYNC);
-            put_split_long(&dest[8], 0xffU<<24 | tracknum << 16 | sec << 8 | (11 - sec));
-            // sector label
-            for (uint32_t i = 16; i < 48; i += 4)
-                put_u32(&dest[i], fill);
-            // header checksum
-            put_split_long_fill(&dest[48], checksum(&dest[8], (48 - 8)/4));
-            // data
-            for (uint16_t i = 0; i < 512; ++i) {
-                dest[64 + i] = 0xaa | ((raw_data[i] >> 1) & 0x55);
-                dest[64 + 512 + i] = 0xaa | (raw_data[i] & 0x55);
-            }
-            // data checksum
-            put_split_long_fill(&dest[56], checksum(&dest[64], (MFM_SECTOR_SIZE_WORDS*2 - 64) / 4));
-            dest += MFM_SECTOR_SIZE_WORDS*2;
-        }
-        // gap
-        std::memset(dest, 0xaa, MFM_GAP_SIZE_WORDS * 2);
+        data_->read_mfm_track(tracknum, dest);
     }
 
     void write_mfm_track(const uint8_t* src)
@@ -226,30 +157,8 @@ public:
         if (!s_.motor)
             throw std::runtime_error { name_ + " Reading while motor is not on" };
 
-        if (data_.empty())
+        if (!data_)
             throw std::runtime_error { name_ + " Writing with no disk in drive" };
-
-        #if 0
-        uint32_t wpos = 0;
-        while (wpos < MFM_TRACK_SIZE_WORDS && get_u16(&src[2 * wpos]) != MFM_SYNC)
-            ++wpos;
-        if (wpos + NUMSECS * MFM_SECTOR_SIZE_WORDS > MFM_TRACK_SIZE_WORDS)
-            throw std::runtime_error { name_ + " Trying to write invalid MFM data" };
-        #endif
-
-        // For ease, shuffle the data so it starts with a sync word (if present)
-        std::vector<uint8_t> data(2 * MFM_TRACK_SIZE_WORDS);
-        for (uint32_t wpos = 0;; ++wpos) {
-            if (wpos >= MFM_TRACK_SIZE_WORDS)
-                throw std::runtime_error { name_ + " no sync word found in written MFM data" };
-            if (get_u16(&src[2 * wpos]) != MFM_SYNC)
-                continue;
-            const auto byte_ofs = wpos * 2; 
-            const auto first_part = 2 * MFM_TRACK_SIZE_WORDS - byte_ofs;
-            memcpy(&data[0], &src[byte_ofs], first_part);
-            memcpy(&data[first_part], &src[0], byte_ofs);
-            break;
-        }
 
         const uint8_t tracknum = !s_.side + s_.cyl * 2;
 
@@ -259,32 +168,7 @@ public:
         if (DEBUG_DISK)
             *debug_stream << name_ << " writing track $" << hexfmt(tracknum) << "\n";
 
-        uint16_t sector_mask = 0;
-        for (int seccnt = 0; seccnt < NUMSECS; ++seccnt) {
-            const auto ofs = seccnt * MFM_SECTOR_SIZE_WORDS * 2;
-            if (get_u16(&data[ofs]) != MFM_SYNC || get_u16(&data[ofs + 2]) != MFM_SYNC)
-                throw std::runtime_error { name_ + " invalid MFM data" };
-
-            const auto info = decode_long(&data[ofs + 4]);
-            const auto sec = (info >> 8) & 0xff;
-            if (info >> 24 != 0xff || ((info >> 16) & 0xff) != tracknum || sec > NUMSECS || (sec + (info & 0xff)) != NUMSECS)
-                throw std::runtime_error { name_ + " invalid MFM data (info long=$" + hexstring(info) + ")" };
-
-            if (sector_mask & (1 << sec))
-                throw std::runtime_error { name_ + " sector " + std::to_string(sec) + " found twice in MFM data" };
-
-            sector_mask |= 1 << sec;
-
-            // TODO: Verify checksums..
-            uint8_t* raw_data = &data_[(tracknum * NUMSECS + sec) * TD_SECTOR];
-            for (int i = 0; i < 512; ++i) {
-                const uint8_t odd  = data[ofs + 60 + i] & 0x55;
-                const uint8_t even = data[ofs + 60 + 512 + i] & 0x55;
-                raw_data[i] = odd << 1 | even;
-            }
-        }
-
-        dirty_ = true;
+        data_->write_mfm_track(tracknum, src);
     }
 
     void set_disk_activity_handler(const disk_activity_handler& handler)
@@ -306,22 +190,12 @@ public:
 
     bool ofs_bootable_disk_inserted() const
     {
-        if (data_.size() < 1024 || data_[0] != 'D' || data_[1] != 'O' || data_[2] != 'S' || data_[3] != 0)
-            return false;
-        uint32_t csum = 0;
-        for (uint32_t i = 0; i < 1024; i += 4) {
-            const auto before = csum;
-            csum += get_u32(&data_[i]);
-            if (csum < before) // carry?
-                ++csum;
-        }
-        return csum == 0xffffffff;
+        return data_->ofs_bootable();
     }
 
 private:
     std::string name_;
-    std::vector<uint8_t> data_;
-    bool dirty_ = false;
+    std::unique_ptr<disk_file> data_;
     struct state {
         bool motor         = false;
         bool side          = false;          // false = upper head, true = lower head
@@ -331,25 +205,6 @@ private:
         uint32_t index_cnt = DISK_INDEX_CNT; // Countdown to next DSKINDEX event (once per revolution)
     } s_;
     disk_activity_handler disk_activity_handler_;
-
-    void flush()
-    {
-        if (data_.empty() || !dirty_)
-            return;
-        dirty_ = false;
-
-        auto filename = name_;
-        assert(filename.size() == 4 && filename.back() == ':');
-        filename.erase(3);
-        filename += "_modified.adf";
-        if (debug_stream)
-            *debug_stream << name_ << " has been written. Saving as " << filename << "\n";
-        std::ofstream out { filename, std::ofstream::binary };
-        if (out && out.is_open() && out.write(reinterpret_cast<const char*>(&data_[0]), data_.size()))
-            return;
-        if (debug_stream)
-            *debug_stream << name_ << " error writing " << filename << "\n";
-    }
 };
 
 disk_drive::disk_drive(const std::string& name)
@@ -364,9 +219,9 @@ const std::string& disk_drive::name() const
     return impl_->name();
 }
 
-void disk_drive::insert_disk(std::vector<uint8_t>&& data)
+void disk_drive::insert_disk(std::unique_ptr<disk_file>&& disk)
 {
-    impl_->insert_disk(std::move(data));
+    impl_->insert_disk(std::move(disk));
 }
 
 uint8_t disk_drive::cia_state() const

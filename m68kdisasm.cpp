@@ -758,7 +758,7 @@ public:
         int32_t offset = 0;
         for (auto& f : fields_) {
             assert(sizeof_type(f.t()) != 0); // Must not use undefined structures etc. (pointers to structs are fine)
-            assert(!std::strchr(f.name_, ',') && !std::strchr(f.name_, '*')); // Check for some errors
+            assert(!std::strchr(f.name_.c_str(), ',') && !std::strchr(f.name_.c_str(), '*')); // Check for some errors
             if (f.offset_ == struct_field::auto_offset)
                 f.offset_ = offset;
             offset = f.end_offset();

@@ -28,8 +28,7 @@
 #include "harddisk.h"
 #include "rtc.h"
 #include "state_file.h"
-#include "adf.h"
-#include "dms.h"
+#include "disk_file.h"
 #include "debug_board.h"
 
 namespace {
@@ -613,33 +612,6 @@ void write_bmp(const std::string& filename, const uint32_t* data, uint32_t w, ui
         throw std::runtime_error { "Error writing to " + filename };
 }
 
-std::vector<uint8_t> make_exe_disk(const std::string& filename, const std::vector<uint8_t>& data)
-{
-    std::string fname = filename;
-    if (auto pos = fname.find_last_of("/\\"); pos != std::string::npos)
-        fname = fname.substr(pos + 1);
-    auto disk = adf::new_disk(fname);
-    auto ss = "\":" + fname + "\"";
-    disk.make_dir("S");
-    disk.write_file("s/startup-sequence", std::vector<uint8_t>(ss.begin(), ss.end()));
-    disk.write_file(fname, data);
-    return disk.get();
-}
-
-std::vector<uint8_t> load_disk_file(const std::string& filename)
-{
-    const auto data = read_file(filename);
-    if (data.size() < 32)
-        throw std::runtime_error { filename + " is not a disk image" };
-    if (dms_detect(data))
-        return dms_unpack(data);
-    if (get_u32(&data[0]) == 1011) // HUNK_HEADER
-        return make_exe_disk(filename, data);
-    if (data.size() != 80 * 2 * 11 * 512)
-        throw std::runtime_error { filename + " is not a valid disk image (wrong size)" };
-    return data;
-}
-
 void mem_search(const std::vector<uint8_t>& ram, uint32_t base_address, const std::vector<uint8_t>& needle, uint32_t start_address, uint32_t end_address, unsigned& match_count)
 {
     constexpr unsigned max_matches = 20;
@@ -950,7 +922,7 @@ private:
     unsigned steps_to_update = 0;
     std::unique_ptr<gui> g;
     std::vector<gui::event> events;
-    std::vector<uint8_t> pending_disk;
+    std::unique_ptr<disk_file> pending_disk;
     uint8_t pending_disk_drive = 0xff;
     uint32_t disk_chosen_countdown = 0;
     bool new_frame = false;
@@ -2425,7 +2397,7 @@ void amiga::insert_disk(uint8_t drive, const char* filename, int delay)
 {
     assert(drive < max_drives && drives[drive]);
 
-    std::vector<uint8_t> disk;
+    std::unique_ptr<disk_file> disk;
     if (*filename) {
         std::cout << "Reading " << filename << "\n";
         try {
@@ -2443,11 +2415,11 @@ void amiga::insert_disk(uint8_t drive, const char* filename, int delay)
         cmdline_args.df1 = filename;
     }
     std::cout << drives[drive]->name() << " Ejecting\n";
-    drives[drive]->insert_disk(std::vector<uint8_t>()); // Eject any existing disk
+    drives[drive]->insert_disk(nullptr); // Eject any existing disk
     if (!*filename)
         return;
     if (delay && !disk_chosen_countdown) {
-        assert(pending_disk.empty());
+        assert(!pending_disk);
         disk_chosen_countdown = delay; // Give SW (e.g. Defender of the Crown) time to recognize that the disk has changed
         pending_disk = std::move(disk);
         pending_disk_drive = drive;

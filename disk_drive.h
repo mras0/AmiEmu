@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <vector>
+#include <string>
 #include <functional>
 #include <stdint.h>
 
@@ -18,6 +19,7 @@ constexpr uint16_t MFM_TRACK_SIZE_WORDS  = 0x1900; // Number of words in a MFM t
 constexpr uint16_t MFM_GAP_SIZE_WORDS    = 0x1900 - 11 * MFM_SECTOR_SIZE_WORDS;
 
 class state_file;
+class disk_file;
 
 class disk_drive {
 public:
@@ -28,7 +30,7 @@ public:
 
     using disk_activity_handler = std::function<void (uint8_t track, bool write)>;
 
-    void insert_disk(std::vector<uint8_t>&& data);
+    void insert_disk(std::unique_ptr<disk_file>&& disk);
     uint8_t cia_state() const;
 
     void set_motor(bool enabled);

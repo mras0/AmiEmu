@@ -108,6 +108,7 @@ add_executable(amiemu
     cia.cpp cia.h
     custom.cpp custom.h
     disk_drive.cpp disk_drive.h
+    disk_file.cpp disk_file.h
     gui.h wavedev.h
     ${DRIVER_FILES}
     debug.cpp debug.h
