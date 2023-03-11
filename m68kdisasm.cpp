@@ -401,6 +401,25 @@ constexpr const char* const int_bitnames[16] = {
     "SETCLR",
 };
 
+constexpr const char* const adkcon_bitnames[16] = {
+    "USE0V1",
+    "USE1V2",
+    "USE2V3",
+    "USE3VN",
+    "USE0P1",
+    "USE1P2",
+    "USE2P3",
+    "USE3PN",
+    "FAST",
+    "MSBSYNC",
+    "WORDSYNC",
+    "UARTBRK",
+    "MFMPREC",
+    "PRECOMP0",
+    "PRECOMP1",
+    "SETCLR",
+};
+
 std::string interrupt_name(uint8_t vec)
 {
     switch (vec) {
@@ -1925,7 +1944,23 @@ const structure_definition GfxBase {
 // Dos
 TEMP_STRUCT(RootNode);
 TEMP_STRUCT(ErrorString);
-TEMP_STRUCT(timerequest);
+
+
+const structure_definition timeval {
+    "timeval",
+    {
+        { "tv_secs", long_type },
+        { "tv_micro", long_type },
+    }
+};
+const structure_definition timerequest {
+    "timerequest",
+    { 
+        { "tr_node", make_struct_type(IORequest) },
+        { "tr_time", make_struct_type(timeval) },
+    }
+};
+
 constexpr int32_t _LVOOpen = -30;
 constexpr int32_t _LVOWrite = -48;
 
@@ -2586,6 +2621,19 @@ const structure_definition RomBootBase {
     }
 };
 
+const structure_definition DiskResource {
+    "DiskResource",
+    {
+        { "LibNode", make_struct_type(Library) },
+        { "_LVOAllocUnit", libvec_code, -6 },
+        { "_LVOFreeUnit", libvec_code, -12 },
+        { "_LVOGetUnit", libvec_code, -18 },
+        { "_LVOGiveUnit", libvec_code, -24 },
+        { "_LVOGetUnitID", libvec_code, -30 },
+        { "_LVOReadUnitID", libvec_code, -36 }, // Functions in V37 or higher (2.0)
+    }
+};
+
 
 struct rom_tag {
     uint32_t matchtag; // RT_MATCHTAG     (pointer RTC_MATCHWORD)
@@ -2713,6 +2761,10 @@ void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simv
             // Interrupt bits
             extra << " bit " << static_cast<int>(bitnum) << " = " << int_bitnames[bitnum];
             return;
+        } else if (reg == 0x10 || reg == 0x9e) {
+            // ADKCON(R)
+            extra << " bit " << static_cast<int>(bitnum) << " = " << adkcon_bitnames[bitnum];
+            return;
         } else if (reg == 0x16 && bitnum == 10) {
             // POTGOR (special case for RMB)
             extra << " /RMB";
@@ -2727,18 +2779,19 @@ void maybe_add_custom_bit_info(std::ostringstream& extra, uint32_t addr, uint16_
     if (addr & 1)
         return;
     addr &= 0x1fe;
-    if (addr == 0x96) {
-        // DMACON
+    if (addr == 0x96 || addr == 0x9e) {
+        // DMACON / ADKCON
         if (val == 0x7fff) {
             extra << " disable all";
             return;
         } else if (val == 0) {
             return;
         }
+        const auto names = addr == 0x96 ? dmacon_bitnames : adkcon_bitnames;
         bool first = true;
         for (int bit = 15; bit >= 0; --bit) {
             if (val & (1 << bit)) {
-                extra << (first ? " ":"+") << dmacon_bitnames[bit];
+                extra << (first ? " ":"+") << names[bit];
                 first = false;
             }
         }
@@ -2862,11 +2915,11 @@ public:
                 if (parts.size() == 2) {
                     const auto [ok, addr] = from_hex(parts[0]);
                     if (ok) {
-                        function_aliases_.push_back(std::make_pair(addr, parts[1]));
+                        alias_or_forced_mem_.push_back(std::make_pair(addr, parts[1]));
                         continue;
                     }
                 }
-                throw std::runtime_error { "Invalid function alias in " + filename + " line " + std::to_string(linenum) + ": " + line };
+                throw std::runtime_error { "Invalid function alias/forced memory in " + filename + " line " + std::to_string(linenum) + ": " + line };
             }
 
             if (parts.size() == 2) {
@@ -3189,6 +3242,8 @@ public:
         add_label(fake_ioreq, "FakeIoRequest", make_struct_type(IOStdReq), false);
         update_mem(opsize::l, fake_ioreq + IOStdReq.field_offset("io_Device"), simval { fake_dev });
 
+        add_library("disk.resource", "DiskResourceBase", DiskResource);
+
         // exec.library
         auto add_int = [this]() { do_add_int(); };
         auto open_library = [this]() { do_open_library(); };
@@ -3251,7 +3306,7 @@ public:
         functions_.insert({ exec_base_ + _LVOOpenResource, function_description { {}, {
                                                                                           { regname::A1, "resName", &char_ptr },
                                                                                       },
-                                                               /*open_resource*/ } });
+                                                               /*open_resource*/ open_library } });
         functions_.insert({ exec_base_ + _LVOOpenLibrary, function_description { {}, {
                                                                                          { regname::A1, "libName", &char_ptr },
                                                                                          { regname::D0, "version", &long_type },
@@ -3305,27 +3360,34 @@ public:
                 throw std::runtime_error { "Invalid label \"" + lab + "\" used for forced value at address $" + hexstring(addr) };
             forced_values_.insert({ addr, { reg, *la } });
         }
-        for (const auto& [addr, expr] : function_aliases_) {
+        for (const auto& [addr, expr] : alias_or_forced_mem_) {
+            if (addr + 3 >= max_mem)
+                throw std::runtime_error { "Invalid function alias/forced address $" + hexstring(addr) + " \"" + expr + "\"" };
             auto base = expr;
             int32_t ofs = 0;
             auto pos = base.find_first_of("-");
             if (pos != std::string::npos) {
                 auto [ok, val] = from_hex(base.substr(pos + 1));
                 if (!ok)
-                    throw std::runtime_error { "Invalid function alias for expression address $" + hexstring(addr) + " \"" + expr + "\"" };
+                    throw std::runtime_error { "Invalid function alias/forced mem for expression address $" + hexstring(addr) + " \"" + expr + "\"" };
                 base = base.substr(0, pos);
                 ofs = -static_cast<int32_t>(val);
             }
             auto la = label_adddress(base);
             if (!la)
-                throw std::runtime_error { "Invalid function alias for expression address (label not found) $" + hexstring(addr) + " \"" + expr + "\"" };
+                throw std::runtime_error { "Invalid function alias/forced mem for expression address (label not found) $" + hexstring(addr) + " \"" + expr + "\"" };
+            const auto actual_address = *la + ofs;
 
-            auto fit = functions_.find(*la + ofs);
-            if (fit == functions_.end())
-                throw std::runtime_error { "Invalid function alias for expression address (function not found) $" + hexstring(addr) + " \"" + expr + "\"" };
+            auto fit = functions_.find(actual_address);
+            if (fit == functions_.end()) {
+                // Must be a forced memory value
+                put_u32(&data_[addr], actual_address);
+                std::fill(written_.begin() + actual_address, written_.begin() + actual_address + 4, true);
+                continue;
+            }
 
             if (!functions_.insert({ addr, fit->second }).second)
-                throw std::runtime_error { "Invalid function alias for expression address (function already defined there) $" + hexstring(addr) + " \"" + expr + "\"" };
+                throw std::runtime_error { "Invalid function alias/forced mem for expression address (function already defined there) $" + hexstring(addr) + " \"" + expr + "\"" };
             add_root(addr, simregs{});
         }
 
@@ -3532,8 +3594,16 @@ public:
                         switch (ea & ea_xn_mask) {
                         case ea_other_abs_w:
                         case ea_other_abs_l:
-                            if (inst.type != inst_type::PEA || ea_addr_[i].raw() > 0x2000) // arbitrary limit
-                                print_addr(ea_addr_[i].raw());
+                            if (inst.type != inst_type::PEA || ea_addr_[i].raw() > 0x2000) { // arbitrary limit
+                                const auto addr = ea_addr_[i].raw();
+                                print_addr(addr);
+                                if (addr >= 0xDE0000 && addr < 0xE00000) { // Custom reg
+                                    if (i == 1 && inst.size == opsize::w && /*inst.type == inst_type::MOVE && */ea_val_[0].known()) {
+                                        maybe_add_custom_bit_info(extra, addr, static_cast<uint16_t>(ea_val_[0].raw()));
+                                    }
+                                    break;
+                                }
+                            }
                             else
                                 std::cout << "$" << hexfmt(ea_addr_[i].raw());
                             break;
@@ -3635,7 +3705,7 @@ private:
     uint32_t exec_base_ = 0;
     std::map<std::string, uint32_t> library_bases_;
     std::vector<delayed_forced_value> delayed_forced_values_;
-    std::vector<std::pair<uint32_t, std::string>> function_aliases_;
+    std::vector<std::pair<uint32_t, std::string>> alias_or_forced_mem_;
     std::vector<std::unique_ptr<structure_definition>> struct_defs_;
 
     uint32_t fake_process_ = 0;
@@ -5187,8 +5257,16 @@ void analyzer::handle_predef_info()
 
         add_label(i.first, i.second.name, t, false);
         // Don't add root here in case better register values can be inferred
-        if (&t != &code_type)
+        if (&t != &code_type) {
+            const auto sz = &t == &unknown_type ? 1 : sizeof_type(t);
+            if (i.first >= max_mem || i.first + sz > max_mem) {
+                throw std::runtime_error { "Definition of " + i.second.name + " is outside valid memory" };
+            }
+            // Allow making fake types outside written area
+            std::fill(written_.begin() + i.first, written_.begin() + i.first + sz, true);
+
             handle_data_at(i.first, t);
+        }
     }
 }
 
@@ -5656,6 +5734,7 @@ void hunk_file::read_hunk_exe()
             disasm_stmts(hunks[i].data, 0, hunks[i].loaded_size, hunks[i].addr);
         }
     } else {
+        a_->add_fakes();
         for (const auto& s : symbols)
             a_->add_label(s.addr, s.name, unknown_type);
         bool has_code = false;
