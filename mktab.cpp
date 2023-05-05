@@ -18,9 +18,11 @@ using std::strncmp;
     X(ABCD)	        \
     X(ADD)	        \
     X(ADDA)	        \
+    X(ADDI)	        \
     X(ADDQ)	        \
     X(ADDX)	        \
     X(AND)	        \
+    X(ANDI)	        \
     X(ASd)	        \
     X(BCHG)	        \
     X(BCLR)	        \
@@ -32,12 +34,14 @@ using std::strncmp;
     X(CHK)	        \
     X(CLR)	        \
     X(CMP)	        \
+    X(CMPI)	        \
     X(CMPA)	        \
     X(CMPM)	        \
     X(DBcc)	        \
     X(DIVS)	        \
     X(DIVU)	        \
     X(EOR)	        \
+    X(EORI)	        \
     X(EXG)	        \
     X(EXT)	        \
     X(JMP)	        \
@@ -70,6 +74,7 @@ using std::strncmp;
     X(STOP)	        \
     X(SUB)	        \
     X(SUBA)	        \
+    X(SUBI)	        \
     X(SUBQ)	        \
     X(SUBX)	        \
     X(SWAP)	        \
@@ -156,18 +161,18 @@ constexpr const inst_desc insts[] = {
 //                                  1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0
 //   Name                  Sizes    5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0   Immeditate
 //
-    { inst_type::OR      , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" , cycle_rmw  , ~priv_inst, ea_ccr << 8 }, // ORI to CCR
-    { inst_type::OR      , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , cycle_rmw  , ~0U, ea_sr << 8 }, // ORI to SR
-    { inst_type::OR      , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
-    { inst_type::AND     , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" , cycle_rmw  , ~priv_inst, ea_ccr << 8 }, // ANDI to CCR
-    { inst_type::AND     , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" , cycle_rmw  , ~0U, ea_sr << 8 }, // ANDI to SR
-    { inst_type::AND     , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
-    { inst_type::SUB     , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
-    { inst_type::ADD     , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
-    { inst_type::EOR     , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" , cycle_rmw  , ~priv_inst, ea_ccr << 8 }, // EORI to CCR
-    { inst_type::EOR     , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" , cycle_rmw  , ~0U, ea_sr << 8 }, // EORI to SR
-    { inst_type::EOR     , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
-    { inst_type::CMP     , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , cycle_norm , block_An|block_Imm|block_PC },
+    { inst_type::ORI     , "   " , "0 0 0 0 0 0 0 0 0 0 1 1 1 1 0 0" , "B I" , cycle_rmw  , ~priv_inst, ea_ccr << 8 }, // ORI to CCR
+    { inst_type::ORI     , "   " , "0 0 0 0 0 0 0 0 0 1 1 1 1 1 0 0" , "W I" , cycle_rmw  , ~0U, ea_sr << 8 }, // ORI to SR
+    { inst_type::ORI     , "BWL" , "0 0 0 0 0 0 0 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
+    { inst_type::ANDI    , "   " , "0 0 0 0 0 0 1 0 0 0 1 1 1 1 0 0" , "B I" , cycle_rmw  , ~priv_inst, ea_ccr << 8 }, // ANDI to CCR
+    { inst_type::ANDI    , "   " , "0 0 0 0 0 0 1 0 0 1 1 1 1 1 0 0" , "W I" , cycle_rmw  , ~0U, ea_sr << 8 }, // ANDI to SR
+    { inst_type::ANDI    , "BWL" , "0 0 0 0 0 0 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
+    { inst_type::SUBI    , "BWL" , "0 0 0 0 0 1 0 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
+    { inst_type::ADDI    , "BWL" , "0 0 0 0 0 1 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
+    { inst_type::EORI    , "   " , "0 0 0 0 1 0 1 0 0 0 1 1 1 1 0 0" , "B I" , cycle_rmw  , ~priv_inst, ea_ccr << 8 }, // EORI to CCR
+    { inst_type::EORI    , "   " , "0 0 0 0 1 0 1 0 0 1 1 1 1 1 0 0" , "W I" , cycle_rmw  , ~0U, ea_sr << 8 }, // EORI to SR
+    { inst_type::EORI    , "BWL" , "0 0 0 0 1 0 1 0 Sx  M     Xn   " , "/ I" , cycle_rmw  , block_An|block_Imm|block_PC },
+    { inst_type::CMPI    , "BWL" , "0 0 0 0 1 1 0 0 Sx  M     Xn   " , "/ I" , cycle_norm , block_An|block_Imm|block_PC },
     { inst_type::BTST    , "B L" , "0 0 0 0 1 0 0 0 0 0 M     Xn   " , "B N" , cycle_norm , block_An|block_Imm },
     { inst_type::BCHG    , "B L" , "0 0 0 0 1 0 0 0 0 1 M     Xn   " , "B N" , cycle_rmw  , block_An|block_Imm|block_PC },
     { inst_type::BCLR    , "B L" , "0 0 0 0 1 0 0 0 1 0 M     Xn   " , "B N" , cycle_rmw  , block_An|block_Imm|block_PC },

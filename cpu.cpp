@@ -187,6 +187,10 @@ public:
         try {
 
             switch (inst_->type) {
+#define HANDLE_INST2(t,t2) \
+    case inst_type::t:     \
+        handle_##t2();     \
+        break;
 #define HANDLE_INST(t) \
     case inst_type::t: \
         handle_##t();  \
@@ -194,9 +198,11 @@ public:
                 HANDLE_INST(ABCD);
                 HANDLE_INST(ADD);
                 HANDLE_INST(ADDA);
+                HANDLE_INST2(ADDI,ADD);
                 HANDLE_INST(ADDQ);
                 HANDLE_INST(ADDX);
                 HANDLE_INST(AND);
+                HANDLE_INST2(ANDI,AND);
                 HANDLE_INST(ASL);
                 HANDLE_INST(ASR);
                 HANDLE_INST(Bcc);
@@ -210,11 +216,13 @@ public:
                 HANDLE_INST(CLR);
                 HANDLE_INST(CMP);
                 HANDLE_INST(CMPA);
+                HANDLE_INST2(CMPI,CMP);
                 HANDLE_INST(CMPM);
                 HANDLE_INST(DBcc);
                 HANDLE_INST(DIVU);
                 HANDLE_INST(DIVS);
                 HANDLE_INST(EOR);
+                HANDLE_INST2(EORI,EOR);
                 HANDLE_INST(EXG);
                 HANDLE_INST(EXT);
                 HANDLE_INST(JMP);
@@ -236,6 +244,7 @@ public:
                 HANDLE_INST(NOT);
                 HANDLE_INST(NOP);
                 HANDLE_INST(OR);
+                HANDLE_INST2(ORI,OR);
                 HANDLE_INST(PEA);
                 HANDLE_INST(ROL);
                 HANDLE_INST(ROR);
@@ -250,6 +259,7 @@ public:
                 HANDLE_INST(STOP);
                 HANDLE_INST(SUB);
                 HANDLE_INST(SUBA);
+                HANDLE_INST2(SUBI,SUB);
                 HANDLE_INST(SUBQ);
                 HANDLE_INST(SUBX);
                 HANDLE_INST(SWAP);

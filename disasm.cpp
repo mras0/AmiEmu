@@ -149,7 +149,7 @@ uint16_t disasm(std::ostream& os, uint32_t pc, const uint16_t* iwords, size_t nu
     uint32_t pc_addr = invalid_pc_addr;
 
     for (unsigned i = 0; i < inst.nea; ++i) {
-        os << (i == 0 ? "\t" : ", ");
+        os << (i == 0 ? "\t" : ",");
         const auto ea = inst.ea[i];
         switch (ea >> ea_m_shift) {
         case ea_m_Dn:

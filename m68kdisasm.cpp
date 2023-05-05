@@ -41,23 +41,25 @@ uint32_t hex_or_die(const char* s)
     return val;
 }
 
+constexpr uint32_t interrupts_end = 0xC0; // Up to and including all trap vectors
+
 constexpr const char* const cia_regname[16] = {
-    "pra",
-    "prb",
-    "ddra",
-    "ddrb",
-    "talo",
-    "tahi",
-    "tblo",
-    "tbhi",
-    "todlo",
-    "todmid",
-    "todhi",
-    "unused",
-    "sdr",
-    "icr",
-    "cra",
-    "crb"
+    "ciapra",
+    "ciaprb",
+    "ciaddra",
+    "ciaddrb",
+    "ciatalo",
+    "ciatahi",
+    "ciatblo",
+    "ciatbhi",
+    "ciatodlow",
+    "ciatodmid",
+    "ciatodhi",
+    "$B00", // Unused
+    "ciasdr",
+    "ciaicr",
+    "ciacra",
+    "ciacrb",
 };
 
 constexpr const char* const ciaapra_bitnames[8] = {
@@ -105,262 +107,262 @@ constexpr const char* const ciaicr_bitnames[8] = {
 };
 
 constexpr const char* const custom_regname[0x100] = {
-    "BLTDDAT",
-    "DMACONR",
-    "VPOSR",
-    "VHPOSR",
-    "DSKDATR",
-    "JOY0DAT",
-    "JOY1DAT",
-    "CLXDAT",
-    "ADKCONR",
-    "POT0DAT",
-    "POT1DAT",
-    "POTGOR",
-    "SERDATR",
-    "DSKBYTR",
-    "INTENAR",
-    "INTREQR",
-    "DSKPTH",
-    "DSKPTL",
-    "DSKLEN",
-    "DSKDAT",
-    "REFPTR",
-    "VPOSW",
-    "VHPOSW",
-    "COPCON",
-    "SERDAT",
-    "SERPER",
-    "POTGO",
-    "JOYTEST",
-    "STREQU",
-    "STRVBL",
-    "STRHOR",
-    "STRLONG",
-    "BLTCON0",
-    "BLTCON1",
-    "BLTAFWM",
-    "BLTALWM",
-    "BLTCPTH",
-    "BLTCPTL",
-    "BLTBPTH",
-    "BLTBPTL",
-    "BLTAPTH",
-    "BLTAPTL",
-    "BLTDPTH",
-    "BLTDPTL",
-    "BLTSIZE",
-    "BLTCON0L",
-    "BLTSIZV",
-    "BLTSIZH",
-    "BLTCMOD",
-    "BLTBMOD",
-    "BLTAMOD",
-    "BLTDMOD",
-    "RESERVED_068",
-    "RESERVED_06a",
-    "RESERVED_06c",
-    "RESERVED_06e",
-    "BLTCDAT",
-    "BLTBDAT",
-    "BLTADAT",
-    "RESERVED_076",
-    "SPRHDAT",
-    "BPLHDAT",
-    "LISAID",
-    "DSKSYNC",
-    "COP1LCH",
-    "COP1LCL",
-    "COP2LCH",
-    "COP2LCL",
-    "COPJMP1",
-    "COPJMP2",
-    "COPINS",
-    "DIWSTRT",
-    "DIWSTOP",
-    "DDFSTRT",
-    "DDFSTOP",
-    "DMACON",
-    "CLXCON",
-    "INTENA",
-    "INTREQ",
-    "ADKCON",
-    "AUD0LCH",
-    "AUD0LCL",
-    "AUD0LEN",
-    "AUD0PER",
-    "AUD0VOL",
-    "AUD0DAT",
-    "RESERVED_0ac",
-    "RESERVED_0ae",
-    "AUD1LCH",
-    "AUD1LCL",
-    "AUD1LEN",
-    "AUD1PER",
-    "AUD1VOL",
-    "AUD1DAT",
-    "RESERVED_0bc",
-    "RESERVED_0be",
-    "AUD2LCH",
-    "AUD2LCL",
-    "AUD2LEN",
-    "AUD2PER",
-    "AUD2VOL",
-    "AUD2DAT",
-    "RESERVED_0cc",
-    "RESERVED_0ce",
-    "AUD3LCH",
-    "AUD3LCL",
-    "AUD3LEN",
-    "AUD3PER",
-    "AUD3VOL",
-    "AUD3DAT",
-    "RESERVED_0dc",
-    "RESERVED_0de",
-    "BPL1PTH",
-    "BPL1PTL",
-    "BPL2PTH",
-    "BPL2PTL",
-    "BPL3PTH",
-    "BPL3PTL",
-    "BPL4PTH",
-    "BPL4PTL",
-    "BPL5PTH",
-    "BPL5PTL",
-    "BPL6PTH",
-    "BPL6PTL",
-    "BPL7PTH",
-    "BPL7PTL",
-    "BPL8PTH",
-    "BPL8PTL",
-    "BPLCON0",
-    "BPLCON1",
-    "BPLCON2",
-    "BPLCON3",
-    "BPL1MOD",
-    "BPL2MOD",
-    "BPLCON4",
-    "CLXCON2",
-    "BPL1DAT",
-    "BPL2DAT",
-    "BPL3DAT",
-    "BPL4DAT",
-    "BPL5DAT",
-    "BPL6DAT",
-    "BPL7DAT",
-    "BPL8DAT",
-    "SPR0PTH",
-    "SPR0PTL",
-    "SPR1PTH",
-    "SPR1PTL",
-    "SPR2PTH",
-    "SPR2PTL",
-    "SPR3PTH",
-    "SPR3PTL",
-    "SPR4PTH",
-    "SPR4PTL",
-    "SPR5PTH",
-    "SPR5PTL",
-    "SPR6PTH",
-    "SPR6PTL",
-    "SPR7PTH",
-    "SPR7PTL",
-    "SPR0POS",
-    "SPR0CTL",
-    "SPR0DATA",
-    "SPR0DATB",
-    "SPR1POS",
-    "SPR1CTL",
-    "SPR1DATA",
-    "SPR1DATB",
-    "SPR2POS",
-    "SPR2CTL",
-    "SPR2DATA",
-    "SPR2DATB",
-    "SPR3POS",
-    "SPR3CTL",
-    "SPR3DATA",
-    "SPR3DATB",
-    "SPR4POS",
-    "SPR4CTL",
-    "SPR4DATA",
-    "SPR4DATB",
-    "SPR5POS",
-    "SPR5CTL",
-    "SPR5DATA",
-    "SPR5DATB",
-    "SPR6POS",
-    "SPR6CTL",
-    "SPR6DATA",
-    "SPR6DATB",
-    "SPR7POS",
-    "SPR7CTL",
-    "SPR7DATA",
-    "SPR7DATB",
-    "COLOR00",
-    "COLOR01",
-    "COLOR02",
-    "COLOR03",
-    "COLOR04",
-    "COLOR05",
-    "COLOR06",
-    "COLOR07",
-    "COLOR08",
-    "COLOR09",
-    "COLOR10",
-    "COLOR11",
-    "COLOR12",
-    "COLOR13",
-    "COLOR14",
-    "COLOR15",
-    "COLOR16",
-    "COLOR17",
-    "COLOR18",
-    "COLOR19",
-    "COLOR20",
-    "COLOR21",
-    "COLOR22",
-    "COLOR23",
-    "COLOR24",
-    "COLOR25",
-    "COLOR26",
-    "COLOR27",
-    "COLOR28",
-    "COLOR29",
-    "COLOR30",
-    "COLOR31",
-    "HTOTAL",
-    "HSSTOP",
-    "HBSTRT",
-    "HBSTOP",
-    "VTOTAL",
-    "VSSTOP",
-    "VBSTRT",
-    "VBSTOP",
-    "SPRHSTRT",
-    "SPRHSTOP",
-    "BPLHSTRT",
-    "BPLHSTOP",
-    "HHPOSW",
-    "HHPOSR",
-    "BEAMCON0",
-    "HSSTRT",
-    "VSSTRT",
-    "HCENTER",
-    "DIWHIGH",
-    "BPLHMOD",
-    "SPRHPTH",
-    "SPRHPTL",
-    "BPLHPTH",
-    "BPLHPTL",
-    "RESERVED_1f0",
-    "RESERVED_1f2",
-    "RESERVED_1f4",
-    "RESERVED_1f6",
-    "RESERVED_1f8",
-    "RESERVED_1fa",
-    "FMODE",
-    "CUSTOM_NOOP",
+    "bltddat",
+    "dmaconr",
+    "vposr",
+    "vhposr",
+    "dskdatr",
+    "joy0dat",
+    "joy1dat",
+    "clxdat",
+    "adkconr",
+    "pot0dat",
+    "pot1dat",
+    "potgor",
+    "serdatr",
+    "dskbytr",
+    "intenar",
+    "intreqr",
+    "dskpt",
+    "dskpt+2",
+    "dsklen",
+    "dskdat",
+    "refptr",
+    "vposw",
+    "vhposw",
+    "copcon",
+    "serdat",
+    "serper",
+    "potgo",
+    "joytest",
+    "strequ",
+    "strvbl",
+    "strhor",
+    "strlong",
+    "bltcon0",
+    "bltcon1",
+    "bltafwm",
+    "bltalwm",
+    "bltcpt",
+    "bltcptl",
+    "bltbpt",
+    "bltbptl",
+    "bltapt",
+    "bltaptl",
+    "bltdpt",
+    "bltdptl",
+    "bltsize",
+    "bltcon0l",
+    "bltsizv",
+    "bltsizh",
+    "bltcmod",
+    "bltbmod",
+    "bltamod",
+    "bltdmod",
+    "reserved_068",
+    "reserved_06a",
+    "reserved_06c",
+    "reserved_06e",
+    "bltcdat",
+    "bltbdat",
+    "bltadat",
+    "reserved_076",
+    "sprhdat",
+    "bplhdat",
+    "lisaid",
+    "dsksync",
+    "cop1lc",
+    "cop1lc+2",
+    "cop2lc",
+    "cop2lc+2",
+    "copjmp1",
+    "copjmp2",
+    "copins",
+    "diwstrt",
+    "diwstop",
+    "ddfstrt",
+    "ddfstop",
+    "dmacon",
+    "clxcon",
+    "intena",
+    "intreq",
+    "adkcon",
+    "aud0+ac_ptr",
+    "aud0+ac_ptr+2",
+    "aud0+ac_len",
+    "aud0+ac_per",
+    "aud0+ac_vol",
+    "aud0+ac_dat",
+    "reserved_0ac",
+    "reserved_0ae",
+    "aud1+ac_ptr",
+    "aud1+ac_ptr+2",
+    "aud1+ac_len",
+    "aud1+ac_per",
+    "aud1+ac_vol",
+    "aud1+ac_dat",
+    "reserved_0bc",
+    "reserved_0be",
+    "aud2+ac_ptr",
+    "aud2+ac_ptr+2",
+    "aud2+ac_len",
+    "aud2+ac_per",
+    "aud2+ac_vol",
+    "aud2+ac_dat",
+    "reserved_0cc",
+    "reserved_0ce",
+    "aud3+ac_ptr",
+    "aud3+ac_ptr+2",
+    "aud3+ac_len",
+    "aud3+ac_per",
+    "aud3+ac_vol",
+    "aud3+ac_dat",
+    "reserved_0dc",
+    "reserved_0de",
+    "bpl1pth",
+    "bpl1ptl",
+    "bpl2pth",
+    "bpl2ptl",
+    "bpl3pth",
+    "bpl3ptl",
+    "bpl4pth",
+    "bpl4ptl",
+    "bpl5pth",
+    "bpl5ptl",
+    "bpl6pth",
+    "bpl6ptl",
+    "bpl7pth",
+    "bpl7ptl",
+    "bpl8pth",
+    "bpl8ptl",
+    "bplcon0",
+    "bplcon1",
+    "bplcon2",
+    "bplcon3",
+    "bpl1mod",
+    "bpl2mod",
+    "bplcon4",
+    "clxcon2",
+    "bpl1dat",
+    "bpl2dat",
+    "bpl3dat",
+    "bpl4dat",
+    "bpl5dat",
+    "bpl6dat",
+    "bpl7dat",
+    "bpl8dat",
+    "sprpt+4*0",
+    "sprpt+4*0+2",
+    "sprpt+4*1",
+    "sprpt+4*1+2",
+    "sprpt+4*2",
+    "sprpt+4*2+2",
+    "sprpt+4*3",
+    "sprpt+4*3+2",
+    "sprpt+4*4",
+    "sprpt+4*4+2",
+    "sprpt+4*5",
+    "sprpt+4*5+2",
+    "sprpt+4*6",
+    "sprpt+4*6+2",
+    "sprpt+4*7",
+    "sprpt+4*7+2",
+    "spr+0*sd_SIZEOF+sd_pos",
+    "spr+0*sd_SIZEOF+sd_ctl",
+    "spr+0*sd_SIZEOF+sd_data",
+    "spr+0*sd_SIZEOF+sd_datb",
+    "spr+1*sd_SIZEOF+sd_pos",
+    "spr+1*sd_SIZEOF+sd_ctl",
+    "spr+1*sd_SIZEOF+sd_data",
+    "spr+1*sd_SIZEOF+sd_datb",
+    "spr+2*sd_SIZEOF+sd_pos",
+    "spr+2*sd_SIZEOF+sd_ctl",
+    "spr+2*sd_SIZEOF+sd_data",
+    "spr+2*sd_SIZEOF+sd_datb",
+    "spr+3*sd_SIZEOF+sd_pos",
+    "spr+3*sd_SIZEOF+sd_ctl",
+    "spr+3*sd_SIZEOF+sd_data",
+    "spr+3*sd_SIZEOF+sd_datb",
+    "spr+4*sd_SIZEOF+sd_pos",
+    "spr+4*sd_SIZEOF+sd_ctl",
+    "spr+4*sd_SIZEOF+sd_data",
+    "spr+4*sd_SIZEOF+sd_datb",
+    "spr+5*sd_SIZEOF+sd_pos",
+    "spr+5*sd_SIZEOF+sd_ctl",
+    "spr+5*sd_SIZEOF+sd_data",
+    "spr+5*sd_SIZEOF+sd_datb",
+    "spr+6*sd_SIZEOF+sd_pos",
+    "spr+6*sd_SIZEOF+sd_ctl",
+    "spr+6*sd_SIZEOF+sd_data",
+    "spr+6*sd_SIZEOF+sd_datb",
+    "spr+7*sd_SIZEOF+sd_pos",
+    "spr+7*sd_SIZEOF+sd_ctl",
+    "spr+7*sd_SIZEOF+sd_data",
+    "spr+7*sd_SIZEOF+sd_datb",
+    "color",
+    "color+2*1",
+    "color+2*2",
+    "color+2*3",
+    "color+2*4",
+    "color+2*5",
+    "color+2*6",
+    "color+2*7",
+    "color+2*8",
+    "color+2*9",
+    "color+2*10",
+    "color+2*11",
+    "color+2*12",
+    "color+2*13",
+    "color+2*14",
+    "color+2*15",
+    "color+2*16",
+    "color+2*17",
+    "color+2*18",
+    "color+2*19",
+    "color+2*20",
+    "color+2*21",
+    "color+2*22",
+    "color+2*23",
+    "color+2*24",
+    "color+2*25",
+    "color+2*26",
+    "color+2*27",
+    "color+2*28",
+    "color+2*29",
+    "color+2*30",
+    "color+2*31",
+    "htotal",
+    "hsstop",
+    "hbstrt",
+    "hbstop",
+    "vtotal",
+    "vsstop",
+    "vbstrt",
+    "vbstop",
+    "sprhstrt",
+    "sprhstop",
+    "bplhstrt",
+    "bplhstop",
+    "hhposw",
+    "hhposr",
+    "beamcon0",
+    "hsstrt",
+    "vsstrt",
+    "hcenter",
+    "diwhigh",
+    "bplhmod",
+    "sprhpth",
+    "sprhptl",
+    "bplhpth",
+    "bplhptl",
+    "reserved_1f0",
+    "reserved_1f2",
+    "reserved_1f4",
+    "reserved_1f6",
+    "reserved_1f8",
+    "reserved_1fa",
+    "fmode",
+    "custom_noop",
 };
 
 constexpr const char* const dmacon_bitnames[16] = {
@@ -426,7 +428,7 @@ std::string interrupt_name(uint8_t vec)
     case 2:
         return "BusError";
     case 3:
-        return "BusError";
+        return "AddressError";
     case 4:
         return "IllegalInstruction";
     case 5:
@@ -1297,6 +1299,7 @@ constexpr int32_t _LVOAddLibrary = -396;
 constexpr int32_t _LVOOldOpenLibrary = -408;
 constexpr int32_t _LVOOpenDevice = -444;
 constexpr int32_t _LVOOpenResource = -498;
+constexpr int32_t _LVORawDoFmt = -522;
 constexpr int32_t _LVOOpenLibrary = -552;
 
 const structure_definition ExecBase {
@@ -1451,7 +1454,7 @@ const structure_definition ExecBase {
         { "_LVORawIOInit", libvec_code, -504 },
         { "_LVORawMayGetChar", libvec_code, -510 },
         { "_LVORawPutChar", libvec_code, -516 },
-        { "_LVORawDoFmt", libvec_code, -522 },
+        { "_LVORawDoFmt", libvec_code, _LVORawDoFmt },
         { "_LVOGetCC", libvec_code, -528 },
         { "_LVOTypeOfMem", libvec_code, -534 },
         { "_LVOProcure", libvec_code, -540 },
@@ -3118,7 +3121,7 @@ public:
         }
 
         // Update for larger size, e.g. WORD->LONG
-        if (li->t != & code_type && sizeof_type(t) > sizeof_type(*li->t)) {
+        if (li->t != &code_type && sizeof_type(t) > sizeof_type(*li->t)) {
             li->t = &t;
         }
     }
@@ -3231,6 +3234,10 @@ public:
             library_bases_.insert({ "exec.library", exec_base_ });
         }
         const auto gfx_base = add_library("graphics.library", "GfxBase", GfxBase);
+        if (const auto a = exec_base_ + ExecBase.field_offset("IntVects") + 0x48; get_u32(&data_[a]) == 0) {
+            // Stuff gfxbase into IntVects[6].iv_Data ...
+            saved_pointers_.insert({ a, gfx_base });
+        }
         const auto dos_base = add_library("dos.library", "DosBase", DosBase);
         add_library("intuition.library", "IntuitionBase", IntuitionBase);
         add_library("expansion.library", "ExpansionBase", ExpansionBase);
@@ -3312,6 +3319,15 @@ public:
                                                                                          { regname::D0, "version", &long_type },
                                                                                      },
                                                               open_library } });
+
+        functions_.insert({ exec_base_ + _LVORawDoFmt, function_description { {}, {
+                                                                                         { regname::A0, "FormatString", &char_ptr },
+                                                                                         { regname::A1, "DataStream", &unknown_ptr },
+                                                                                         { regname::A2, "PutChProc", &code_ptr },
+                                                                                         { regname::A3, "PutChData", &unknown_ptr },
+                                                                                     },
+                                                              open_library } });
+
         // dos.library
         functions_.insert({ dos_base + _LVOOpen, function_description {
                                                         {},
@@ -3400,6 +3416,20 @@ public:
             }
         }
 
+        // Prune overlapping labels
+        for (auto it = labels_.begin(); it != labels_.end();) {
+            if (it->second.t == &unknown_type || it->second.t == &code_type) {
+                ++it;
+                continue;
+            }
+            const auto next = it->first + sizeof_type(*it->second.t);
+            ++it;
+            while (it != labels_.end() && it->first < next) {
+                //std::cerr << "Erasing " << it->second.name << " " << *it->second.t << "\n";
+                it = labels_.erase(it);
+            }
+        }
+
         for (const auto& area : areas_) {
             uint32_t pos = area.beg;
 
@@ -3423,6 +3453,12 @@ public:
                 uint16_t iwords[max_instruction_words];
                 read_instruction(iwords, pos);
                 const auto& inst = instructions[iwords[0]];
+
+                // Check for SMC variables
+                for (auto lit = labels_.lower_bound(pos + 1); lit != labels_.end() && lit->first < pos + 2 * inst.ilen; ++lit) {
+                    //std::cerr << "Possible SMC: " << lit->second.name << " pos=$" << hexfmt(pos) << " addr=$" << hexfmt(lit->first) << "\n";
+                    std::cout << lit->second.name << "=*+" << lit->first - pos << "\t; SMC!\n";
+                }
 
                 if (inst.type == inst_type::ILLEGAL && iwords[0] != illegal_instruction_num) {
                     if (iwords[0] == movec_instruction_dr0_num || iwords[0] == movec_instruction_dr1_num) {
@@ -3457,7 +3493,7 @@ public:
                 std::cout << "\t" << inst.name;
                 for (int i = 0; i < inst.nea; ++i) {
                     const auto ea = inst.ea[i];
-                    std::cout << (i ? ", " : "\t");
+                    std::cout << (i ? "," : "\t");
 
                     bool is_dest = false;
                     // Supress printing known register value?
@@ -3511,11 +3547,11 @@ public:
                         auto n = static_cast<int16_t>(ea_data_[i]);
                         const auto& aval = regs_.a[ea & 7];
                         std::ostringstream desc;
-                        desc << "$";
                         if (n < 0) {
                             desc << "-";
                             n = -n;
                         }
+                        desc << "$";
                         desc << hexfmt(static_cast<uint16_t>(n));
                         desc << "(A" << (ea & 7) << ")";
                         if (aval.known()) {
@@ -3577,11 +3613,11 @@ public:
                         // Note: 68000 ignores scale in bits 9/10 and full extension word bit (8)
                         auto disp = static_cast<int8_t>(extw & 255);
                         std::ostringstream desc;
-                        desc << "$";
                         if (disp < 0) {
                             desc << "-";
                             disp = -disp;
                         }
+                        desc << "$";
                         desc << hexfmt(static_cast<uint8_t>(disp)) << "(A" << (ea & 7) << ",";
                         desc << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
                         desc << ")";
@@ -3593,20 +3629,22 @@ public:
                     case ea_m_Other:
                         switch (ea & ea_xn_mask) {
                         case ea_other_abs_w:
-                        case ea_other_abs_l:
+                        case ea_other_abs_l: {
+                            const auto suffix = (ea & ea_xn_mask) == ea_other_abs_w ? ".W" : "";
                             if (inst.type != inst_type::PEA || ea_addr_[i].raw() > 0x2000) { // arbitrary limit
                                 const auto addr = ea_addr_[i].raw();
                                 print_addr(addr);
+                                std::cout << suffix;
                                 if (addr >= 0xDE0000 && addr < 0xE00000) { // Custom reg
-                                    if (i == 1 && inst.size == opsize::w && /*inst.type == inst_type::MOVE && */ea_val_[0].known()) {
+                                    if (i == 1 && inst.size == opsize::w && /*inst.type == inst_type::MOVE && */ ea_val_[0].known()) {
                                         maybe_add_custom_bit_info(extra, addr, static_cast<uint16_t>(ea_val_[0].raw()));
                                     }
                                     break;
                                 }
-                            }
-                            else
-                                std::cout << "$" << hexfmt(ea_addr_[i].raw());
+                            } else
+                                std::cout << "$" << hexfmt(ea_addr_[i].raw()) << suffix;
                             break;
+                        }
                         case ea_other_pc_disp16:
                             print_addr(ea_addr_[i].raw());
                             std::cout << "(PC)";
@@ -3657,7 +3695,7 @@ public:
                         } else if (ea == ea_disp) {
                             print_addr(ea_addr_[i].raw());
                         } else {
-                            std::cout << "#$" << hexfmt(inst.data);
+                            std::cout << "#" << static_cast<int>(static_cast<int8_t>(inst.data));
                         }
                         break;
                     }
@@ -3762,7 +3800,7 @@ private:
         const uint32_t startpos = pos;
         assert(elemsize == 1 || elemsize == 2 || elemsize == 4);
         assert((end - startpos) % elemsize == 0);
-        const char suffix = elemsize == 1 ? 'b' : elemsize == 2 ? 'w' : 'l';
+        const char suffix = elemsize == 1 ? 'B' : elemsize == 2 ? 'W' : 'L';
         const uint32_t elem_per_line = elemsize == 1 ? 16 : elemsize == 2 ? 8 : 4;
         while (pos < end) {
             const auto here = std::min(elem_per_line, (end - pos) / elemsize);
@@ -3778,7 +3816,7 @@ private:
 
             if (runlen > elem_per_line || (runlen > 1 && pos == startpos && runend == end)) {
                 const uint32_t val = elemsize == 1 ? data_[pos] : elemsize == 2 ? get_u16(&data_[pos]) : get_u32(&data_[pos]);
-                std::cout << "\tds." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8) << ", ";
+                std::cout << "\tDCB." << suffix << "\t$" << hexfmt(runlen, runlen < 256 ? 2 : runlen < 65536 ? 4 : 8) << ",";
                 if (is_ptr)
                     print_addr(val);
                 else
@@ -3788,10 +3826,10 @@ private:
                 continue;
             }
 
-            std::cout << "\tdc." << suffix << "\t";
+            std::cout << "\tDC." << suffix << "\t";
             for (uint32_t i = 0; i < here && pos < end; ++i) {
                 if (i)
-                    std::cout << ", ";
+                    std::cout << ",";
                 if (elemsize == 1)
                     std::cout << "$" << hexfmt(data_[pos]);
                 else if (elemsize == 2)
@@ -3826,7 +3864,7 @@ private:
         };
         for (uint32_t i = 0; i < len && pos < next_pos; ++i, ++pos) {
             if (linepos == 0) {
-                std::cout << "\tdc.b\t";
+                std::cout << "\tDC.B\t";
                 linepos = 16;
                 in = false;
             }
@@ -3868,7 +3906,7 @@ private:
             len -= 2;
             if (ir1 & 1) {
                 // Wait/skip
-                std::cout << "\tdc.w\t$" << hexfmt(ir1) << ", $" << hexfmt(ir2) << "\t; ";
+                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ", $" << hexfmt(ir2) << "\t; ";
                 if (ir1 == 0xffff && ir2 == 0xfffe) {
                     std::cout << "End of copperlist\n";
                 } else {
@@ -3879,7 +3917,7 @@ private:
                     std::cout << (ir2 & 1 ? "Skip if" : "Wait for") << " vpos >= $" << hexfmt(vp & ve, 2) << " and hpos >= $" << hexfmt(hp & he, 2) << " BFD " << !!(ir2 & 0x8000) << "\n";
                 }
             } else {
-                std::cout << "\tdc.w\t" << custom_regname[(ir1 >> 1) & 0xff] << ", $" << hexfmt(ir2) << "\n"; 
+                std::cout << "\tDC.W\t" << custom_regname[(ir1 >> 1) & 0xff] << ", $" << hexfmt(ir2) << "\n"; 
             }
         }
     }
@@ -3892,15 +3930,15 @@ private:
             return false;
         case base_data_type::char_:
         case base_data_type::byte_:
-            std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
+            std::cout << "\tDC.B\t$" << hexfmt(data_[pos]) << "\n";
             ++pos;
             return true;
         case base_data_type::word_:
-            std::cout << "\tdc.w\t$" << hexfmt(get_u16(&data_[pos])) << "\n";
+            std::cout << "\tDC.W\t$" << hexfmt(get_u16(&data_[pos])) << "\n";
             pos += 2;
             return true;
         case base_data_type::long_:
-            std::cout << "\tdc.l\t$" << hexfmt(get_u32(&data_[pos])) << "\n";
+            std::cout << "\tDC.L\t$" << hexfmt(get_u32(&data_[pos])) << "\n";
             pos += 4;
             return true;
         case base_data_type::ptr_:
@@ -3922,7 +3960,7 @@ private:
                     }
                 }
             } else {
-                std::cout << "\tdc.l\t";
+                std::cout << "\tDC.L\t";
                 if (!print_addr_maybe(get_u32(&data_[pos])))
                     std::cout << "$" << hexfmt(get_u32(&data_[pos]));
                 std::cout << "\n";
@@ -3934,7 +3972,7 @@ private:
             assert(!t.len());
             const auto addr = get_u32(&data_[pos]) * 4;
             pos += 4;
-            std::cout << "\tdc.l\t$" << hexfmt(addr/4);
+            std::cout << "\tDC.L\t$" << hexfmt(addr/4);
             if (addr) {
                 std::cout << " ; points to ";
                 print_addr(addr);
@@ -4008,7 +4046,7 @@ private:
 
             // ALIGN
             if ((pos & 1) || next_pos == pos + 1) {
-                std::cout << "\tdc.b\t$" << hexfmt(data_[pos]) << "\n";
+                std::cout << "\tDC.B\t$" << hexfmt(data_[pos]) << "\n";
                 if (++pos == next_pos)
                     continue;
             }                
@@ -4065,22 +4103,17 @@ private:
             case 3: // Niether!
                 return false;
             }
-            std::cout << cia_regname[(addr >> 8) & 0xf];
+            std::cout << "+" << cia_regname[(addr >> 8) & 0xf];
             return true;
         }
 
         if (addr == 0xdff000) {
-            std::cout << "CustomBase";
+            std::cout << "custom";
             return true;
         }
         if (addr >= 0xDE0000 && addr < 0xE00000) {
             std::string regname = custom_regname[(addr >> 1) & 0xff];
-            for (auto& r : regname) {
-                // tolower
-                if (r >= 'A' && r <= 'Z')
-                    r += 32;
-            }
-            std::cout << regname;
+            std::cout << "custom+"<<regname;
             if (addr & 1)
                 std::cout << "+1";
             return true;
@@ -4729,7 +4762,7 @@ private:
         const auto rv = val.raw();
         
         //std::cerr << "Update $" << hexfmt(addr) << "." << (size == opsize::l ? "L" : size == opsize::w ? "W" : "B") << " to $" << hexfmt(val.raw(), 2*opsize_bytes(size)) << "\n";
-        if (size == opsize::l && !(addr & 3) && addr < 0x400) {
+        if (size == opsize::l && !(addr & 3) && addr < /*0x400*/interrupts_end) {
             add_auto_label(addr, code_ptr, "interrupthandler");
             add_root(rv, simregs {});
             return;
@@ -4859,7 +4892,11 @@ private:
         case inst_type::SUBA:
             if (inst.size == opsize::l) {
                 if (auto reg = reg_from_ea(inst.ea[1])) {
-                    *reg -= ea_val_[0];
+                    // SUB r, r => r = 0 idiom
+                    if (auto reg2 = reg_from_ea(inst.ea[0]); reg2 == reg)
+                        *reg = simval{0};
+                    else
+                        *reg -= ea_val_[0];
                     break;
                 }
             }
@@ -5956,15 +5993,16 @@ bool validate_bootchecksum(const std::vector<uint8_t>& data)
 
 void usage()
 {
-    std::cerr << "Usage: m68kdisasm [-a] [-i info] file [options...]\n";
+    std::cerr << "Usage: m68kdisasm [-a] [-i info] [-cut start len] file [options...]\n";
     std::cerr << "   file    source file\n";
     std::cerr << "   -a      analyze\n";
     std::cerr << "   -i      infofile (implies -a)\n";
+    std::cerr << "   -cut    cut out part of file\n";
     std::cerr << "   -rom    force rom mode\n";
     std::cerr << "\n";
     std::cerr << "Options for non-hunk files:";
-    std::cerr << "   Normal (non-analysis mode) options: [offset] [end] - Normal dissasembly of starting from offset..end\n";
-    std::cerr << "   Analayze options: PC starting program counter of memory dump\n";
+    std::cerr << "   Normal (non-analysis mode) options: [base]\n";
+    std::cerr << "   Analayze options: [start pc] [base]\n";
 }
 
 int main(int argc, char* argv[])
@@ -5972,6 +6010,7 @@ int main(int argc, char* argv[])
     try {
         bool force_rom = false;
         std::unique_ptr<analyzer> a;
+        int cut_offset = -1, cut_length = -1;
         while (argc >= 2) {
             if (!strcmp(argv[1], "-a")) {
                 if (!a)
@@ -5994,6 +6033,17 @@ int main(int argc, char* argv[])
                 a->read_info_file(argv[1]);
                 ++argv;
                 --argc;
+            } else if (!strcmp(argv[1], "-cut")) {
+                ++argv;
+                --argc;
+                if (argc < 3) {
+                    usage();
+                    return 1;
+                }
+                cut_offset = hex_or_die(argv[1]);
+                cut_length = hex_or_die(argv[2]);
+                argv += 2;
+                argc -= 2;
             } else {
                 break;
             }
@@ -6004,12 +6054,22 @@ int main(int argc, char* argv[])
             return 1;
         }
         
-        const auto data = read_file(argv[1]);
+        auto data = read_file(argv[1]);
+        if (cut_offset >= 0) {
+            if ((size_t)cut_offset >= data.size() || (size_t)cut_offset + (size_t)cut_length > data.size()) {
+                std::cerr << "Invalid cut\n";
+                usage();
+                return 1;
+            }
+            data.erase(data.begin(), data.begin() + cut_offset);
+            data.erase(data.begin() + cut_length, data.end());
+        }
+
         if (force_rom || is_rom(data)) {
             if (argc > 2)
                 throw std::runtime_error { "Too many arguments" };
             handle_rom(data, a.get());
-        } else if (data.size() > 4 && (get_u32(&data[0]) == HUNK_HEADER || get_u32(&data[0]) == HUNK_UNIT)) {
+        } else if (cut_offset < 0 && data.size() > 4 && (get_u32(&data[0]) == HUNK_HEADER || get_u32(&data[0]) == HUNK_UNIT)) {
             if (argc > 2)
                 throw std::runtime_error { "Too many arguments" };
             read_hunk(data, a.get());
@@ -6091,19 +6151,20 @@ int main(int argc, char* argv[])
                     load_base = hex_or_die(argv[3]);
                 a->write_data(load_base, data.data(), static_cast<uint32_t>(data.size()));
                 if (start)
-                    a->add_start_root(hex_or_die(argv[2]));
+                    a->add_start_root(start);
                 else
                     a->do_system_scan();
-                if (!load_base)
+                if (load_base)
+                    std::cout << "\tORG $" << hexfmt(load_base) << "\n";
+                else
                     a->add_int_vectors();
                 a->add_fakes();
                 a->run();
             } else {
-                if (argc > 4)
+                if (argc > 3)
                     throw std::runtime_error { "Too many arguments" };
-                const auto offset = argc > 2 ? hex_or_die(argv[2]) : 0;
-                const auto end = argc > 3 ? hex_or_die(argv[3]) : static_cast<uint32_t>(data.size());
-                disasm_stmts(data, offset, end);
+                const auto base = argc > 2 ? hex_or_die(argv[2]) : 0;
+                disasm_stmts(data, 0, static_cast<uint32_t>(data.size()), base);
             }
         }
     } catch (const std::exception& e) {
