@@ -637,7 +637,9 @@ void gen_insts(const inst_desc& desc, const std::vector<field_pair>& fields, uns
                 break;
             case opsize::l:
                 assert(strchr(desc.sizes, 'L'));
-                name += ".L";
+                // Hack to avoid suffix on unsized instructions
+                if (desc.type != inst_type::UNLK)
+                    name += ".L";
                 memwords = 2;
                 break;
             }

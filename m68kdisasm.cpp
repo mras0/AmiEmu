@@ -13,6 +13,8 @@
 #include "instruction.h"
 #include "memory.h"
 
+static bool verbose_disasm = false;
+
 void disasm_stmts(const std::vector<uint8_t>& data, uint32_t offset, uint32_t end, uint32_t pcoffset = 0)
 {
     auto get_word = [&]() -> uint16_t {
@@ -118,7 +120,7 @@ constexpr const char* const custom_regname[0x100] = {
     "adkconr",
     "pot0dat",
     "pot1dat",
-    "potgor",
+    "potinp",
     "serdatr",
     "dskbytr",
     "intenar",
@@ -219,22 +221,22 @@ constexpr const char* const custom_regname[0x100] = {
     "aud3+ac_dat",
     "reserved_0dc",
     "reserved_0de",
-    "bpl1pth",
-    "bpl1ptl",
-    "bpl2pth",
-    "bpl2ptl",
-    "bpl3pth",
-    "bpl3ptl",
-    "bpl4pth",
-    "bpl4ptl",
-    "bpl5pth",
-    "bpl5ptl",
-    "bpl6pth",
-    "bpl6ptl",
-    "bpl7pth",
-    "bpl7ptl",
-    "bpl8pth",
-    "bpl8ptl",
+    "bplpt+0*2+0",
+    "bplpt+0*2+2",
+    "bplpt+1*2+0",
+    "bplpt+1*2+2",
+    "bplpt+2*2+0",
+    "bplpt+2*2+2",
+    "bplpt+3*2+0",
+    "bplpt+3*2+2",
+    "bplpt+4*2+0",
+    "bplpt+4*2+2",
+    "bplpt+5*2+0",
+    "bplpt+5*2+2",
+    "bplpt+6*2+0",
+    "bplpt+6*2+2",
+    "bplpt+7*2+0",
+    "bplpt+7*2+1",
     "bplcon0",
     "bplcon1",
     "bplcon2",
@@ -269,68 +271,68 @@ constexpr const char* const custom_regname[0x100] = {
     "sprpt+4*7+2",
     "spr+0*sd_SIZEOF+sd_pos",
     "spr+0*sd_SIZEOF+sd_ctl",
-    "spr+0*sd_SIZEOF+sd_data",
-    "spr+0*sd_SIZEOF+sd_datb",
+    "spr+0*sd_SIZEOF+sd_dataa",
+    "spr+0*sd_SIZEOF+sd_dataB",
     "spr+1*sd_SIZEOF+sd_pos",
     "spr+1*sd_SIZEOF+sd_ctl",
-    "spr+1*sd_SIZEOF+sd_data",
-    "spr+1*sd_SIZEOF+sd_datb",
+    "spr+1*sd_SIZEOF+sd_dataa",
+    "spr+1*sd_SIZEOF+sd_dataB",
     "spr+2*sd_SIZEOF+sd_pos",
     "spr+2*sd_SIZEOF+sd_ctl",
-    "spr+2*sd_SIZEOF+sd_data",
-    "spr+2*sd_SIZEOF+sd_datb",
+    "spr+2*sd_SIZEOF+sd_dataa",
+    "spr+2*sd_SIZEOF+sd_dataB",
     "spr+3*sd_SIZEOF+sd_pos",
     "spr+3*sd_SIZEOF+sd_ctl",
-    "spr+3*sd_SIZEOF+sd_data",
-    "spr+3*sd_SIZEOF+sd_datb",
+    "spr+3*sd_SIZEOF+sd_dataa",
+    "spr+3*sd_SIZEOF+sd_dataB",
     "spr+4*sd_SIZEOF+sd_pos",
     "spr+4*sd_SIZEOF+sd_ctl",
-    "spr+4*sd_SIZEOF+sd_data",
-    "spr+4*sd_SIZEOF+sd_datb",
+    "spr+4*sd_SIZEOF+sd_dataa",
+    "spr+4*sd_SIZEOF+sd_dataB",
     "spr+5*sd_SIZEOF+sd_pos",
     "spr+5*sd_SIZEOF+sd_ctl",
-    "spr+5*sd_SIZEOF+sd_data",
-    "spr+5*sd_SIZEOF+sd_datb",
+    "spr+5*sd_SIZEOF+sd_dataa",
+    "spr+5*sd_SIZEOF+sd_dataB",
     "spr+6*sd_SIZEOF+sd_pos",
     "spr+6*sd_SIZEOF+sd_ctl",
-    "spr+6*sd_SIZEOF+sd_data",
-    "spr+6*sd_SIZEOF+sd_datb",
+    "spr+6*sd_SIZEOF+sd_dataa",
+    "spr+6*sd_SIZEOF+sd_dataB",
     "spr+7*sd_SIZEOF+sd_pos",
     "spr+7*sd_SIZEOF+sd_ctl",
-    "spr+7*sd_SIZEOF+sd_data",
-    "spr+7*sd_SIZEOF+sd_datb",
+    "spr+7*sd_SIZEOF+sd_dataa",
+    "spr+7*sd_SIZEOF+sd_dataB",
     "color",
-    "color+2*1",
+    "color+1*2",
     "color+2*2",
-    "color+2*3",
-    "color+2*4",
-    "color+2*5",
-    "color+2*6",
-    "color+2*7",
-    "color+2*8",
-    "color+2*9",
-    "color+2*10",
-    "color+2*11",
-    "color+2*12",
-    "color+2*13",
-    "color+2*14",
-    "color+2*15",
-    "color+2*16",
-    "color+2*17",
-    "color+2*18",
-    "color+2*19",
-    "color+2*20",
-    "color+2*21",
-    "color+2*22",
-    "color+2*23",
-    "color+2*24",
-    "color+2*25",
-    "color+2*26",
-    "color+2*27",
-    "color+2*28",
-    "color+2*29",
-    "color+2*30",
-    "color+2*31",
+    "color+3*2",
+    "color+4*2",
+    "color+5*2",
+    "color+6*2",
+    "color+7*2",
+    "color+8*2",
+    "color+9*2",
+    "color+10*2",
+    "color+11*2",
+    "color+12*2",
+    "color+13*2",
+    "color+14*2",
+    "color+15*2",
+    "color+16*2",
+    "color+17*2",
+    "color+18*2",
+    "color+19*2",
+    "color+20*2",
+    "color+21*2",
+    "color+22*2",
+    "color+23*2",
+    "color+24*2",
+    "color+25*2",
+    "color+26*2",
+    "color+27*2",
+    "color+28*2",
+    "color+29*2",
+    "color+30*2",
+    "color+31*2",
     "htotal",
     "hsstop",
     "hbstrt",
@@ -3154,7 +3156,7 @@ public:
 
     void add_auto_label(uint32_t addr, const type& t, const std::string& prefix = "dat")
     {
-        if (addr < 0x400 && (addr & 3) == 0 && &t != &code_type) {
+        if (addr < interrupts_end && (addr & 3) == 0 && &t != &code_type) {
             // Interrupt vector
             const auto vec = static_cast<uint8_t>(addr >> 2);
             switch (vec) {
@@ -3501,14 +3503,14 @@ public:
                         is_dest = true;
 
                     auto do_known = [&](const simval& val) {
-                        if (is_dest)
+                        if (is_dest || !verbose_disasm)
                             return;
                         if (val.known()) {
                             extra << " " << ea_string(ea) << " = $" << hexfmt(val.raw());
                         }
                     };
                     auto check_aind = [&]() {
-                        if (is_dest)
+                        if (is_dest || !verbose_disasm)
                             return;
                         const auto& areg = regs_.a[ea & ea_xn_mask];
                         if (!areg.known())
@@ -3558,9 +3560,11 @@ public:
                             const int32_t offset = static_cast<int16_t>(ea_data_[i]);
                             const auto addr = aval.raw() + offset;
                             if (addr >= 0xA00000 && addr < 0xC00000 && (addr & 0xBFC0FE) == 0xBFC000 && offset % 0x100 == 0) { // CIA (simple offset)
-                                std::string name = cia_regname[(addr >> 8) & 0xf];
-                                std::cout << "cia" << cia_regname[(addr >> 8) & 0xf] << "(A" << (ea & 7) << ")";
-                                extra << " " << desc.str() << " = $" << hexfmt(addr);
+                                std::cout << cia_regname[(addr >> 8) & 0xf];
+                                if (int ofs = (addr & 1) - (aval.raw() & 0x1ff); ofs != 0)
+                                    std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
+                                std::cout << "(A" << (ea & 7) << ")";
+                                if (verbose_disasm) extra << " " << desc.str() << " = $" << hexfmt(addr);
                                 break;
                                 // XXX
                             } else if (addr >= 0xDE0000 && addr < 0xE00000) { // Custom reg
@@ -3575,17 +3579,20 @@ public:
                             } else if (auto [li, lofs] = find_label(addr); li) {
                                 if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
                                     const auto& t = *lit->second.t;
-                                    extra << " A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
+                                    if (verbose_disasm)
+                                        extra << " A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
                                     if (t.struct_def()) {
                                         if (auto name = t.struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
                                             std::cout << *name << "(A" << (ea & 7) << ")";
                                             break;
                                         }
                                     }
-                                    extra << " " << desc.str() << " -> " << li->name;
-                                    if (lofs)
-                                        extra << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
-                                    extra << " (" << t << ")";
+                                    if (verbose_disasm) {
+                                        extra << " " << desc.str() << " -> " << li->name;
+                                        if (lofs)
+                                            extra << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
+                                        extra << " (" << t << ")";
+                                    }
                                     //std::cout << li->name;
                                     //if (lofs)
                                     //    std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
@@ -3597,11 +3604,13 @@ public:
                                     //if (lofs)
                                     //    std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs);
                                     //std::cout << "(A" << (ea & 7) << ")";
-                                    extra << " A" << (ea & 7) << " = $" << hexfmt(aval.raw());
+                                    if (verbose_disasm)
+                                        extra << " A" << (ea & 7) << " = $" << hexfmt(aval.raw());
                                     //break;
                                 }
                             } else {
-                                extra << " " << desc.str() << " = $" << hexfmt(addr);
+                                if (verbose_disasm)
+                                    extra << " " << desc.str() << " = $" << hexfmt(addr);
                             }
                         }
 
@@ -3671,7 +3680,7 @@ public:
                         }
                         case ea_other_imm:
                             std::cout << "#";
-                            if (inst.size != opsize::l || ea_data_[i] < 0x400 || !print_addr_maybe(ea_data_[i]))
+                            if (inst.size != opsize::l || ea_data_[i] < interrupts_end || !print_addr_maybe(ea_data_[i]))
                                 std::cout << "$" << hexfmt(ea_data_[i], opsize_bytes(inst.size) * 2);
                             break;
                         default:
@@ -3789,7 +3798,15 @@ private:
     {
         auto it = labels_.find(pos);
         if (it != labels_.end()) {
-            std::cout << std::setw(32) << std::left << it->second.name << "\t; $" << hexfmt(it->first) << " " << *it->second.t << "\n";
+            const bool extra = verbose_disasm || !it->second.name.ends_with(hexstring(pos));
+            if (extra)
+                std::cout << std::setw(32) << std::left; 
+            std::cout << it->second.name;
+            if (extra)
+                std::cout << "\t; $" << hexfmt(it->first);
+            if (verbose_disasm)
+                std::cout << " " << *it->second.t;
+            std::cout << "\n";
         }
         return it;
     }
@@ -3906,7 +3923,7 @@ private:
             len -= 2;
             if (ir1 & 1) {
                 // Wait/skip
-                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ", $" << hexfmt(ir2) << "\t; ";
+                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ",$" << hexfmt(ir2) << "\t; ";
                 if (ir1 == 0xffff && ir2 == 0xfffe) {
                     std::cout << "End of copperlist\n";
                 } else {
@@ -3916,8 +3933,11 @@ private:
                     const auto he = ir2 & 0xfe;
                     std::cout << (ir2 & 1 ? "Skip if" : "Wait for") << " vpos >= $" << hexfmt(vp & ve, 2) << " and hpos >= $" << hexfmt(hp & he, 2) << " BFD " << !!(ir2 & 0x8000) << "\n";
                 }
+            } else if (ir1 >= 0x200) {
+                // Not a valid register
+                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ",$" << hexfmt(ir2) << "\n";
             } else {
-                std::cout << "\tDC.W\t" << custom_regname[(ir1 >> 1) & 0xff] << ", $" << hexfmt(ir2) << "\n"; 
+                std::cout << "\tDC.W\t" << custom_regname[(ir1 >> 1) & 0xff] << ",$" << hexfmt(ir2) << "\n"; 
             }
         }
     }
@@ -4770,7 +4790,8 @@ private:
 
         // COP1LCH/COP2LCH (only handle normal addresses for now, not mirrored ones)
         if (size == opsize::l && (addr == 0xDFF080 || addr == 0xDFF084)) {
-            maybe_find_copper_list_at(rv);
+            if (rv && !find_label(rv).first) // Don't override other labels
+                maybe_find_copper_list_at(rv);
             return;
         }
 
@@ -4778,7 +4799,8 @@ private:
             //std::cerr << "Saving at $" << hexfmt(addr) << ": $" << hexfmt(rv) << "\n";
             saved_pointers_.insert({ addr, rv });
             if (auto lit = labels_.find(addr); lit != labels_.end() && lit->second.t == &code_ptr) {
-                throw std::runtime_error { "TODO: CodePtr at " + hexstring(addr) + " updated to " + hexstring(val.raw()) };
+                //throw std::runtime_error { "TODO: CodePtr at " + hexstring(addr) + " updated to " + hexstring(val.raw()) };
+                add_root(rv, simregs {});
             }
         }
 
@@ -5126,6 +5148,9 @@ void analyzer::maybe_find_copper_list_at(uint32_t addr)
             break;
         // Copper jump?
         if (ir1 == 0x88 || ir1 == 0x8a)
+            break;
+        // Write to invalid register
+        if (!(ir1 & 1) && ir1 >= 0x200)
             break;
     }
     std::fill(data_handled_at_.begin() + start_addr, data_handled_at_.begin() + start_addr + len * 4, true);
