@@ -553,6 +553,7 @@ enum class base_data_type {
     long_,
     code_,
     copper_code_,
+    jumptab_word_,
     ptr_,
     bptr_,
     bstr_,
@@ -627,6 +628,7 @@ const type word_type { base_data_type::word_ };
 const type long_type { base_data_type::long_ };
 const type code_type { base_data_type::code_ };
 const type copper_code_type { base_data_type::copper_code_ };
+const type jumptab_word_type { base_data_type::jumptab_word_ };
 const type unknown_ptr { unknown_type, 0, base_data_type::ptr_ };
 const type char_ptr { char_type, 0, base_data_type::ptr_ };
 const type byte_ptr { byte_type, 0, base_data_type::ptr_ };
@@ -648,6 +650,7 @@ std::unordered_map<std::string, const type*> typenames {
     { "LONG", &long_type },
     { "CODE", &code_type },
     { "COPPER", &copper_code_type },
+    { "JTABW", &jumptab_word_type },
     { "BSEGLIST", &bcpl_seglist_type },
     { "STR", &hack_str_type },
 };
@@ -946,6 +949,8 @@ std::ostream& operator<<(std::ostream& os, const type& t)
         return os << "CODE";
     case base_data_type::copper_code_:
         return os << "COPPER";
+    case base_data_type::jumptab_word_:
+        return os << "JTABW";
     case base_data_type::bstr_:
         return os << "BSTR";
     case base_data_type::struct_:
@@ -968,6 +973,7 @@ uint32_t sizeof_type(const type& t)
         return 1;
     case base_data_type::word_:
     case base_data_type::copper_code_:
+    case base_data_type::jumptab_word_:
         return 2;
     case base_data_type::long_:
         return 4;
@@ -1082,9 +1088,9 @@ const structure_definition List {
 const structure_definition MinList {
     "MinList",
     {
-        { "mlh_Head", make_pointer_type(make_struct_type(MinNode)) },
-        { "mlh_Tail", make_pointer_type(make_struct_type(MinNode)) },
-        { "mlh_TailPred", make_pointer_type(make_struct_type(MinNode)) },
+        { "MLH_HEAD", make_pointer_type(make_struct_type(MinNode)) },
+        { "MLH_TAIL", make_pointer_type(make_struct_type(MinNode)) },
+        { "MLH_TAILPRED", make_pointer_type(make_struct_type(MinNode)) },
     }
 };
 
@@ -3399,7 +3405,8 @@ public:
             auto fit = functions_.find(actual_address);
             if (fit == functions_.end()) {
                 // Must be a forced memory value
-                put_u32(&data_[addr], actual_address);
+                //put_u32(&data_[addr], actual_address);
+                saved_pointers_.insert({ addr, actual_address});
                 std::fill(written_.begin() + actual_address, written_.begin() + actual_address + 4, true);
                 continue;
             }
@@ -3414,6 +3421,14 @@ public:
         for (const auto& pi : predef_info_) {
             if (pi.second.t == &code_type && visited_.find(pi.first) == visited_.end()) {
                 add_root(pi.first, simregs {}, true);
+                process_roots();
+            } else if (pi.second.t->base() == base_data_type::ptr_ && pi.second.t->ptr()->base() == base_data_type::jumptab_word_ && pi.second.t->len()) {
+                for (uint32_t i = 0; i < pi.second.t->len(); ++i) {
+                    int16_t offset = get_u16(&data_[pi.first + 2 * i]);
+                    if (!offset)
+                        continue;
+                    add_root(pi.first + offset, simregs {}, true);
+                }
                 process_roots();
             }
         }
@@ -3912,6 +3927,23 @@ private:
             std::cout << "\n";
     }
 
+    void handle_jumptab_word(uint32_t& pos, uint32_t next_pos, uint32_t len)
+    {
+        const auto base = pos;
+        for (; pos < next_pos && len; --len, pos += 2) {
+            int16_t offset = get_u16(&data_[pos]);
+            std::cout << "\tDC.W\t";
+            if (offset == 0) {
+                std::cout << "0";
+            } else {
+                print_addr(base + offset);
+                std::cout << "-";
+                print_addr(base);
+            }
+            std::cout << "\n";
+        }
+    }
+
     void handle_copper_code(uint32_t& pos, uint32_t next_pos, uint32_t len)
     {
         assert(len % 2 == 0);
@@ -3967,6 +3999,8 @@ private:
                     handle_char_array(pos, next_pos, t.len());
                 } else if (t.ptr()->base() == base_data_type::copper_code_) {
                     handle_copper_code(pos, next_pos, t.len());
+                } else if (t.ptr()->base() == base_data_type::jumptab_word_) {
+                    handle_jumptab_word(pos, next_pos, t.len());
                 } else {
                     const auto elem_size = sizeof_type(*t.ptr());
                     if (elem_size <= 4) {
@@ -4016,7 +4050,8 @@ private:
                 if (p >= end_pos)
                     break;
                 const auto n = name + "." + f.name();
-                std::cout << "; " << std::left << std::setw(32) << n << " $" << hexfmt(p) << " " << f.t() << "\n";
+                if (verbose_disasm)
+                    std::cout << "; " << std::left << std::setw(32) << n << " $" << hexfmt(p) << " " << f.t() << "\n";
                 handle_typed_data(p, next_pos, f.t(), n);
             }
             pos = end_pos;
@@ -4628,6 +4663,69 @@ private:
         }
     }
 
+    void do_jump_table(uint32_t addr, uint32_t len)
+    {
+        for (uint32_t i = 0; i < len; ++i) {
+            const uint32_t word_addr = addr + 2 * i;
+            if (word_addr + 1 < max_mem && written_[addr]) {
+                int16_t offset = get_u16(&data_[word_addr]);
+                if (!offset)
+                    continue;
+                do_branch(addr + offset, true);
+            }
+        }
+    }
+
+    void check_jump_table(uint32_t addr)
+    {
+        if (addr + 2 >= max_mem || !written_[addr])
+            return;
+
+        auto it = labels_.find(addr);
+        if (it == labels_.end()) {
+            return;
+        }
+        auto& t = *it->second.t;
+        if (t.base() == base_data_type::ptr_ && t.ptr()->base() == base_data_type::jumptab_word_ && t.len()) {
+            do_jump_table(addr, t.len());
+            return;
+        }
+        if (!it->second.name.starts_with("dat"))
+            return;
+
+        // TODO: Consider that it doesn't have to be an indirect table
+        static std::map<uint32_t, bool> informed;
+        if (!informed[addr]) {
+            uint32_t next_addr = max_mem;
+            if (auto next = it; ++next != labels_.end())
+                next_addr = next->first;            
+
+            uint32_t a = addr;
+            for (; a < next_addr && written_[a]; a += 2) {
+                int16_t ofs = get_u16(&data_[a]);
+                if (ofs & 1)
+                    break;
+                if (ofs == 0)
+                    continue; // Allow null entries
+                uint32_t dest = addr + ofs;
+                if (dest >= max_mem || !written_[dest])
+                    break;
+                if (instructions[get_u16(&data_[dest])].type == inst_type::ILLEGAL)
+                    break;
+                // Heuristic end
+                if (abs(ofs) > 1040)
+                    break;
+            }
+            const uint32_t size = (a - addr) / 2;
+            if (size) {
+                add_auto_label(addr, make_array_type(jumptab_word_type, size), "jumptab");
+                do_jump_table(addr, size);
+                std::cerr << "Added jump table at $" << hexfmt(addr) << " (JTABW[" << size << "])\n";
+            }
+            informed[addr] = true;
+        }
+    }
+
     void trace(uint32_t addr)
     {
         for (;;) {
@@ -4681,6 +4779,10 @@ private:
                 assert(inst.nea == 1);
                 if (ea_addr_[0].known())
                     do_branch(ea_addr_[0].raw(), true);
+                else if((inst.ea[0] >> ea_m_shift) == ea_m_A_ind_index && regs_.a[inst.ea[0] & 7].known())
+                    check_jump_table(regs_.a[inst.ea[0] & 7].raw());
+                else if (inst.ea[0] == ea_pc_index)
+                    check_jump_table(start + 2 + static_cast<int8_t>(ea_data_[0] & 255));
                 if (inst.type == inst_type::JMP)
                     return;
                 break;
