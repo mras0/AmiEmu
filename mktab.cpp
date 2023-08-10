@@ -217,7 +217,7 @@ constexpr const inst_desc insts[] = {
     { inst_type::CHK     , " W " , "0 1 0 0 Dn    1 1 0 M     Xn   " , "   " , cycle_none , },
     { inst_type::ADDQ    , "BWL" , "0 1 0 1 Data3 0 Sx  M     Xn   " , "   " , cycle_rmw  , block_Imm | block_PC },
     { inst_type::SUBQ    , "BWL" , "0 1 0 1 Data3 1 Sx  M     Xn   " , "   " , cycle_rmw  , block_Imm | block_PC },
-    { inst_type::Scc     , "B  " , "0 1 0 1 Cond    1 1 M     Xn   " , "   " , cycle_rmw  , },
+    { inst_type::Scc     , "B  " , "0 1 0 1 Cond    1 1 M     Xn   " , "   " , cycle_rmw  , block_An | block_Imm | block_PC },
     { inst_type::DBcc    , " W " , "0 1 0 1 Cond    1 1 0 0 1 Dn   " , "W D" , cycle_none , },
     { inst_type::BRA     , "BW " , "0 1 1 0 0 0 0 0 Displacement   " , "W d" , cycle_none , },
     { inst_type::BSR     , "BW " , "0 1 1 0 0 0 0 1 Displacement   " , "W d" , cycle_none , },
