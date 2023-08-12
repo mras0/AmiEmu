@@ -1696,9 +1696,12 @@ private:
         } else if (cnt < 32) {
             carry = !!((val >> (cnt - 1)) & 1);
             val >>= cnt;
-        } else {
+        } else if (cnt == 32 && inst_->size == opsize::l) {
+            carry = val >> 31;
             val = 0;
+        } else {
             carry = false;
+            val = 0;
         }
 
         write_ea(inst_->nea - 1, val);
