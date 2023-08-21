@@ -14,6 +14,56 @@
 #include "memory.h"
 
 static bool verbose_disasm = false;
+static bool show_bytes = false;
+
+static constexpr int line_width = 40;
+
+class fixed_width_line {
+public:
+    fixed_width_line(std::ostream& os)
+        : os_ { os }
+        , old_streambuf_ { os_.rdbuf() }
+    {
+        assert(old_streambuf_);
+        os_.rdbuf(oss_.rdbuf());
+    }
+
+    ~fixed_width_line()
+    {
+        if (old_streambuf_)
+            flush(false);
+    }
+
+    void flush(bool enforce_width)
+    {
+        assert(old_streambuf_);
+        os_.rdbuf(old_streambuf_);
+        old_streambuf_ = nullptr;
+        auto s = oss_.str();
+        os_.write(s.c_str(), s.length());
+        if (enforce_width) {
+            int col = 0;
+            const int tw = 8;
+            for (const auto ch : s) {
+                if (ch == '\t')
+                    col += tw - col % tw;
+                else
+                    ++col;
+            }
+            while (col < line_width) {
+                col += tw - col % tw;
+                os_.put('\t');
+            }
+        }
+    }
+
+    fixed_width_line(const fixed_width_line&) = delete;
+    fixed_width_line& operator=(const fixed_width_line&) = delete;
+private:
+    std::ostream& os_;
+    std::streambuf* old_streambuf_;
+    std::ostringstream oss_;
+};
 
 void disasm_stmts(const std::vector<uint8_t>& data, uint32_t offset, uint32_t end, uint32_t pcoffset = 0)
 {
@@ -106,6 +156,28 @@ constexpr const char* const ciaicr_bitnames[8] = {
     "BIT5",
     "BIT6",
     "IR/SETCLR",
+};
+
+constexpr const char* const ciacra_bitnames[8] = {
+    "START",
+    "PBON",
+    "OUTMODE",
+    "RUNMODE",
+    "LOAD",
+    "INMODE",
+    "SPMODE",
+    "TODIN",
+};
+
+constexpr const char* const ciacrb_bitnames[8] = {
+    "START",
+    "PBON",
+    "OUTMODE",
+    "RUNMODE",
+    "LOAD",
+    "INMODE0",
+    "INMODE1",
+    "ALARM",
 };
 
 constexpr const char* const custom_regname[0x100] = {
@@ -2720,45 +2792,53 @@ std::vector<rom_tag> scan_for_rom_tags(const std::vector<uint8_t>& data, uint32_
     return rom_tags;
 }
 
+const char* const* cia_bit_names(uint32_t addr)
+{
+    const auto reg = (addr >> 8) & 0xf;
+    const auto cia = (addr >> 12) & 3;
+    if (cia == 0 || cia == 3) // Both or neither
+        return nullptr;
+
+    switch (reg) {
+    case 0x0: // Port A
+    case 0x2: // Direction for port A (0=input, 1=output)
+        return cia == 1 ? ciabpra_bitnames : ciaapra_bitnames;
+
+    case 0x1: // Port B
+    case 0x3: // Direction for port B (input -> read as 0xff if not driven due to pull-ups)
+        if (cia == 2)
+            return nullptr; // Parallel port
+        return ciabprb_bitnames;
+    case 0x4: // Timer A low byte (.715909 Mhz NTSC; .709379 Mhz PAL)
+    case 0x5: // Timer A high byte
+    case 0x6: // Timer B low byte
+    case 0x7: // Timer B high byte
+    case 0x8: // Event counter bits 7-0 (CIAA: vsync, CIAB: hsync)
+    case 0x9: // Event counter bits 15-8
+    case 0xA: // Event counter bits 23-16
+    case 0xB: // not connected
+    case 0xC: // Serial data register (CIAA: connected to keyboard, CIAB: not used)
+        return nullptr;
+    case 0xD: // Interrupt control register
+        return ciaicr_bitnames;
+    case 0xE: // Control register A
+        return ciacra_bitnames;
+    case 0xF: // Control register B
+        return ciacrb_bitnames;
+    }
+    return nullptr;
+}
+
 void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simval& aval)
 {
     if (!aval.known())
         return;
     const auto addr = aval.raw();
     if (addr >= 0xA00000 && addr < 0xC00000) {
-        const char* name = "";
-        const auto reg = (addr >> 8) & 0xf;
         assert(bitnum < 8);
-        switch ((addr >> 12) & 3) {
-        case 0: // Both!
-        case 3: // Niether!
-            return;
-        case 1: // CIAB
-            name = "ciab";
-            if (reg == 0 || reg == 2) {
-                extra << " bit " << static_cast<int>(bitnum) << " = " << ciabpra_bitnames[bitnum];
-                return;
-            }
-            if (reg == 1 || reg == 3) {
-                extra << " bit " << static_cast<int>(bitnum) << " = " << ciabprb_bitnames[bitnum];
-                return;
-            }
-            break;
-        case 2: // CIAA
-            name = "ciaa";
-            if (reg == 0 || reg == 2) {
-                extra << " bit " << static_cast<int>(bitnum) << " = " << ciaapra_bitnames[bitnum];
-                return;
-            }
-            break;
-        }
-        if (reg == 0xd) {
-            // ICR
-            extra << " bit " << static_cast<int>(bitnum) << " = " << ciaicr_bitnames[bitnum];
-            return;
-        }
-
-        std::cerr << "TODO: Add bitnum info for " << name << " register " << cia_regname[reg] << "\n";
+        auto names = cia_bit_names(addr);
+        if (names)
+            extra << " bit " << static_cast<int>(bitnum) << " = " << names[bitnum];
         return;
     } else if (addr >= 0xDE0000 && addr < 0xE00000) {
         const auto reg = (addr & 0x1fe);
@@ -2783,6 +2863,32 @@ void maybe_add_bitnum_info(std::ostringstream& extra, uint8_t bitnum, const simv
         }
         std::cerr << "TODO: Add bitnum info for custom register " << custom_regname[reg >> 1] << " ($" << hexfmt(reg, 3) << ") bit " << static_cast<int>(bitnum) << " \n";
     }    
+}
+
+void maybe_add_cia_bit_info(std::ostringstream& extra, uint32_t addr, uint8_t val, bool mask)
+{
+    auto names = cia_bit_names(addr);
+    if (!names)
+        return;
+
+    if (mask) {
+        if (val == 0xff)
+            return;
+        val = ~val;
+        extra << " clear";
+    } else {
+        if (val == 0)
+            return;
+        extra << " set";
+    }
+
+    bool first = true;
+    for (int bit = 7; bit >= 0; --bit) {
+        if (val & (1 << bit)) {
+            extra << (first ? " " : "+") << names[bit];
+            first = false;
+        }
+    }
 }
 
 void maybe_add_custom_bit_info(std::ostringstream& extra, uint32_t addr, uint16_t val)
@@ -3506,6 +3612,15 @@ public:
                 }
 
                 std::ostringstream extra;
+                fixed_width_line fwl { std::cout };
+
+                if (show_bytes) {
+                    // TODO: Support logical address
+                    // TODO: Also output for DC.W stuff
+                    extra << hexfmt(pos, 6) << ": ";
+                    for (int i = 0; i < inst.ilen; ++i)
+                        extra << hexfmt(iwords[i], 4);
+                }
 
                 std::cout << "\t" << inst.name;
                 for (int i = 0; i < inst.nea; ++i) {
@@ -3524,20 +3639,33 @@ public:
                             extra << " " << ea_string(ea) << " = $" << hexfmt(val.raw());
                         }
                     };
-                    auto check_aind = [&]() {
-                        if (is_dest || !verbose_disasm)
+                    auto maybe_add_reg_info = [&](uint32_t addr) {
+                        if (i != 1 || !ea_val_[0].known())
                             return;
+                        if (addr >= 0xDE0000 && addr < 0xE00000) { // Custom register
+                            if (inst.size == opsize::w && inst.type == inst_type::MOVE) {
+                                maybe_add_custom_bit_info(extra, addr, static_cast<uint16_t>(ea_val_[0].raw()));
+                            }
+                        } else if (addr >= 0xA00000 && addr < 0xC00000 && (addr & 0xBFC0FE) == 0xBFC000) { // CIA
+                            if (inst.size != opsize::b)
+                                return;
+                            maybe_add_cia_bit_info(extra, addr, static_cast<uint8_t>(ea_val_[0].raw()), inst.type == inst_type::AND || inst.type == inst_type::ANDI);
+                        }
+                    };
+                    auto check_aind = [&]() {
                         const auto& areg = regs_.a[ea & ea_xn_mask];
                         if (!areg.known())
                             return;
                         const auto a = areg.raw();
+                        maybe_add_reg_info(a);
+                        if (is_dest || !verbose_disasm)
+                            return;
                         if (auto lit = labels_.find(a); lit != labels_.end()) {
                             extra << " A" << (ea & ea_xn_mask) << " = " << lit->second.name << " (" << *lit->second.t << ")";
                         } else {
                             extra << " A" << (ea & ea_xn_mask) << " = $" << hexfmt(a);
                         }
                     };
-
 
                     switch (ea >> ea_m_shift) {
                     case ea_m_Dn:
@@ -3574,11 +3702,12 @@ public:
                         if (aval.known()) {
                             const int32_t offset = static_cast<int16_t>(ea_data_[i]);
                             const auto addr = aval.raw() + offset;
-                            if (addr >= 0xA00000 && addr < 0xC00000 && (addr & 0xBFC0FE) == 0xBFC000 && offset % 0x100 == 0) { // CIA (simple offset)
+                            if (addr >= 0xA00000 && addr < 0xC00000 && (addr & 0xBFC0FE) == 0xBFC000) { // CIA
                                 std::cout << cia_regname[(addr >> 8) & 0xf];
                                 if (int ofs = (addr & 1) - (aval.raw() & 0x1ff); ofs != 0)
                                     std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
                                 std::cout << "(A" << (ea & 7) << ")";
+                                maybe_add_reg_info(addr);
                                 if (verbose_disasm) extra << " " << desc.str() << " = $" << hexfmt(addr);
                                 break;
                                 // XXX
@@ -3587,9 +3716,8 @@ public:
                                 if (int ofs = (addr & 1) - (aval.raw() & 0x1ff); ofs != 0)
                                     std::cout << (ofs > 0 ? "+" : "-") << (ofs > 0 ? ofs : -ofs);
                                 std::cout << "(A" << (ea & 7) << ")";
-                                if (i == 1 && inst.size == opsize::w && inst.type == inst_type::MOVE && ea_val_[0].known()) {
-                                    maybe_add_custom_bit_info(extra, addr, static_cast<uint16_t>(ea_val_[0].raw()));
-                                }
+                                maybe_add_reg_info(addr);
+                                if (verbose_disasm) extra << " " << desc.str() << " = $" << hexfmt(addr);
                                 break;
                             } else if (auto [li, lofs] = find_label(addr); li) {
                                 if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
@@ -3659,12 +3787,7 @@ public:
                                 const auto addr = ea_addr_[i].raw();
                                 print_addr(addr);
                                 std::cout << suffix;
-                                if (addr >= 0xDE0000 && addr < 0xE00000) { // Custom reg
-                                    if (i == 1 && inst.size == opsize::w && /*inst.type == inst_type::MOVE && */ ea_val_[0].known()) {
-                                        maybe_add_custom_bit_info(extra, addr, static_cast<uint16_t>(ea_val_[0].raw()));
-                                    }
-                                    break;
-                                }
+                                maybe_add_reg_info(addr);
                             } else
                                 std::cout << "$" << hexfmt(ea_addr_[i].raw()) << suffix;
                             break;
@@ -3725,7 +3848,8 @@ public:
                     }
                 }
                 if (!extra.str().empty()) {
-                    std::cout << "\t;" << extra.str();
+                    fwl.flush(true);
+                    std::cout << ";" << extra.str();
                 }
                 std::cout << "\n";
                 pos += inst.ilen * 2;
@@ -3815,10 +3939,10 @@ private:
         if (it != labels_.end()) {
             const bool extra = verbose_disasm || !it->second.name.ends_with(hexstring(pos));
             if (extra)
-                std::cout << std::setw(32) << std::left; 
+                std::cout << std::setw(line_width) << std::left; 
             std::cout << it->second.name;
             if (extra)
-                std::cout << "\t; $" << hexfmt(it->first);
+                std::cout << ";" << hexfmt(it->first, 6);
             if (verbose_disasm)
                 std::cout << " " << *it->second.t;
             std::cout << "\n";
@@ -4051,7 +4175,7 @@ private:
                     break;
                 const auto n = name + "." + f.name();
                 if (verbose_disasm)
-                    std::cout << "; " << std::left << std::setw(32) << n << " $" << hexfmt(p) << " " << f.t() << "\n";
+                    std::cout << "; " << std::left << std::setw(line_width) << n << " $" << hexfmt(p) << " " << f.t() << "\n";
                 handle_typed_data(p, next_pos, f.t(), n);
             }
             pos = end_pos;
@@ -6120,12 +6244,13 @@ bool validate_bootchecksum(const std::vector<uint8_t>& data)
 
 void usage()
 {
-    std::cerr << "Usage: m68kdisasm [-a] [-i info] [-cut start len] file [options...]\n";
+    std::cerr << "Usage: m68kdisasm [options] [-a] [-i info] [-cut start len] file [options...]\n";
     std::cerr << "   file    source file\n";
     std::cerr << "   -a      analyze\n";
     std::cerr << "   -i      infofile (implies -a)\n";
     std::cerr << "   -cut    cut out part of file\n";
     std::cerr << "   -rom    force rom mode\n";
+    std::cerr << "   -bytes  show bytes and address for all instructions\n";
     std::cerr << "\n";
     std::cerr << "Options for non-hunk files:";
     std::cerr << "   Normal (non-analysis mode) options: [base]\n";
@@ -6146,6 +6271,10 @@ int main(int argc, char* argv[])
                 --argc;
             } else if (!strcmp(argv[1], "-rom")) {
                 force_rom = true;
+                ++argv;
+                --argc;
+            } else if (!strcmp(argv[1], "-bytes")) {
+                show_bytes = true;
                 ++argv;
                 --argc;
             } else if (!strcmp(argv[1], "-i")) {
