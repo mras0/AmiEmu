@@ -631,6 +631,8 @@ enum class base_data_type {
     bstr_,
     struct_,
     bcpl_seglist_,
+    rptrw_,
+    patchitem_, // whdload patch item
 };
 
 class structure_definition;
@@ -656,6 +658,13 @@ public:
         , len_ { 0 }
     {
     }
+    explicit type(base_data_type t, uint32_t base)
+        : t_ { t }
+        , base_ { base }
+        , len_ { 0 }
+    {
+        assert(t == base_data_type::rptrw_);
+    }
     type(const type&) = delete;
     type& operator=(const type&) = delete;
 
@@ -679,6 +688,12 @@ public:
         return t_ == base_data_type::struct_ ? struct_ : nullptr;
     }
 
+    uint32_t rptr_base() const
+    {
+        assert(t_ == base_data_type::rptrw_);
+        return base_;
+    }
+
     uint32_t len() const
     {
         return len_;
@@ -689,6 +704,7 @@ private:
     union {
         const type* ptr_;
         const structure_definition* struct_;
+        uint32_t base_;
     };
     uint32_t len_ = 0;
 };
@@ -711,6 +727,7 @@ const type copper_code_ptr { copper_code_type, 0, base_data_type::ptr_ };
 const type bptr_type { unknown_type, 0, base_data_type::bptr_ };
 const type bstr_type { base_data_type::bstr_ };
 const type bcpl_seglist_type { base_data_type::bcpl_seglist_ };
+const type patchitem_type { base_data_type::patchitem_ };
 
 const type hack_str_type { base_data_type::unknown_ };
 
@@ -788,6 +805,18 @@ const type& make_struct_type(const structure_definition& s)
         }
     }
     types.push_back(std::make_unique<type>(s));
+    return *types.back().get();
+}
+
+const type& make_rptrw(uint32_t base)
+{
+    static std::vector<std::unique_ptr<type>> types;
+    for (const auto& t : types) {
+        if (t->rptr_base() == base) {
+            return *t.get();
+        }
+    }
+    types.push_back(std::make_unique<type>(base_data_type::rptrw_, base));
     return *types.back().get();
 }
 
@@ -1029,6 +1058,10 @@ std::ostream& operator<<(std::ostream& os, const type& t)
         return os << "struct " << t.struct_def()->name();
     case base_data_type::bcpl_seglist_:
         return os << "BSEGLIST";
+    case base_data_type::rptrw_:
+        return os << "RPTRW";
+    case base_data_type::patchitem_:
+        return os << "PATCHITEM";
     default:
         assert(false);
         break;
@@ -1046,6 +1079,8 @@ uint32_t sizeof_type(const type& t)
     case base_data_type::word_:
     case base_data_type::copper_code_:
     case base_data_type::jumptab_word_:
+    case base_data_type::rptrw_:
+    case base_data_type::patchitem_:
         return 2;
     case base_data_type::long_:
         return 4;
@@ -1366,6 +1401,7 @@ const structure_definition Semaphore {
 
 constexpr int32_t _LVOSupervisor = -30;
 constexpr int32_t _LVOMakeLibrary = -84;
+constexpr int32_t _LVOMakeFunctions = -90;
 constexpr int32_t _LVOFindResident = -96;
 constexpr int32_t _LVOSetIntVector = -162;
 constexpr int32_t _LVOAddIntServer = -168;
@@ -1462,7 +1498,7 @@ const structure_definition ExecBase {
         { "_LVOInitCode", libvec_code, -72 },
         { "_LVOInitStruct", libvec_code, -78 },
         { "_LVOMakeLibrary", libvec_code, _LVOMakeLibrary },
-        { "_LVOMakeFunctions", libvec_code, -90 },
+        { "_LVOMakeFunctions", libvec_code, _LVOMakeFunctions },
         { "_LVOFindResident", libvec_code, _LVOFindResident },
         { "_LVOInitResident", libvec_code, -102 },
         { "_LVOAlert", libvec_code, -108 },
@@ -3382,7 +3418,13 @@ public:
                                                               [this]() {
                                                                   do_make_library();
                                                               } } });
-
+        functions_.insert({ exec_base_ + _LVOMakeFunctions, function_description { { { regname::D0, "tableSize", &long_type },
+                                                                                   },
+                                                                {
+                                                                    { regname::A0, "target", &unknown_ptr },
+                                                                    { regname::A1, "functionArray", &unknown_ptr },
+                                                                    { regname::A2, "funcDispBase", &unknown_ptr },
+            }, [this]() { do_make_functions(); } } });
         functions_.insert({ exec_base_ + _LVOFindResident, function_description { {}, { { regname::A1, "name", &char_ptr } }, [this]() { do_find_resident();  } } });
 
         functions_.insert({ exec_base_ + _LVOSetIntVector, function_description {
@@ -3864,6 +3906,8 @@ public:
     }
 
     void add_rom_tag(const rom_tag& tag);
+    void handle_whdload(uint32_t header_address);
+    uint32_t handle_whd_patchlist(const uint32_t pl_start, bool analyze);
 
 private:
     static constexpr uint32_t max_mem = 1 << 24;
@@ -4125,6 +4169,13 @@ private:
                     handle_copper_code(pos, next_pos, t.len());
                 } else if (t.ptr()->base() == base_data_type::jumptab_word_) {
                     handle_jumptab_word(pos, next_pos, t.len());
+                } else if (t.ptr()->base() == base_data_type::patchitem_) {
+                    const uint32_t end = handle_whd_patchlist(pos, false);
+                    if (end > next_pos) {
+                        std::cerr << "\tPATCHLIST OVERFLOWED end = $"  << hexfmt(end) << " next_pos = $" << hexfmt(next_pos) << "\n"; 
+                    }
+                    pos = end;
+                    return true;
                 } else {
                     const auto elem_size = sizeof_type(*t.ptr());
                     if (elem_size <= 4) {
@@ -4179,6 +4230,21 @@ private:
                 handle_typed_data(p, next_pos, f.t(), n);
             }
             pos = end_pos;
+            return true;
+        }
+        case base_data_type::rptrw_: {
+            int16_t offset = get_u16(&data_[pos]);
+            std::cout << "\tDC.W\t";
+            if (offset == 0) {
+                std::cout << "0";
+            } else {
+                const auto base = t.rptr_base();
+                print_addr(base + offset);
+                std::cout << "-";
+                print_addr(base);
+            }
+            std::cout << "\n";
+            pos += 2;
             return true;
         }
         default:
@@ -4702,6 +4768,41 @@ private:
             init_regs.a[0] = regs_.d[1];
             init_regs.a[6] = simval { exec_base_ };
             add_root(regs_.a[2].raw(), init_regs);
+        }
+    }
+
+    void do_make_functions()
+    {
+        // A0 = target, A1 = functionArray, A2 = funcDispBase
+
+        if (!regs_.a[0].known() || !regs_.a[1].known() || !regs_.a[2].known())
+            return;
+
+        const auto target = regs_.a[0].raw();
+        const auto functionArray = regs_.a[1].raw();
+        const auto funcDispBase = regs_.a[2].raw();
+
+        uint32_t dest = target - 6;
+        uint32_t array = functionArray;
+
+        // Assume target is library base
+        simregs regs{};
+        regs.a[6] = simval { target };
+
+        if (funcDispBase == 0) {
+            throw std::runtime_error {"TODO: MakeFunctions with funcDispBase == 0"};
+        } else {
+            // Word displacement
+            for (;pointer_ok(array); array += 2, dest -= 6) { 
+                const int16_t disp = get_u16(&data_[array]);
+                if (disp == -1)
+                    break;
+                const uint32_t addr = funcDispBase + disp;
+                add_root(addr, regs);
+                update_mem(opsize::w, target, simval { JMP_ABS_L_instruction }); // JMP abs.l (not currently written)
+                update_mem(opsize::l, target + 2, simval { addr });
+            }
+            add_auto_label(functionArray, make_array_type(word_type, 1 + (array - functionArray) / 2), "funcarray");
         }
     }
 
@@ -5349,7 +5450,7 @@ void analyzer::maybe_find_string_at(uint32_t addr, const std::string& label)
 void analyzer::maybe_find_copper_list_at(uint32_t addr)
 {
     addr &= ~1;
-    if (addr + 3 >= max_mem || !written_[addr])
+    if (addr >= max_mem || addr + 3 >= max_mem || !written_[addr])
         return;
 
     const auto start_addr = addr;
@@ -5621,6 +5722,301 @@ finish:
     handle_data_at(exec_base_, make_struct_type(ExecBase));
 }
 
+const structure_definition ResidentLoader {
+    "ResidentLoader",
+    {
+        { "resload_Install", long_type },
+        { "resload_Abort", long_type },
+        { "resload_LoadFile", long_type },
+        { "resload_SaveFile", long_type },
+        { "resload_SetCACR", long_type },
+        { "resload_ListFiles", long_type },
+        { "resload_Decrunch", long_type },
+        { "resload_LoadFileDecrunch", long_type },
+        { "resload_FlushCache", long_type },
+        { "resload_GetFileSize", long_type },
+        { "resload_DiskLoad", long_type },
+        { "resload_DiskLoadDev", long_type },
+        { "resload_CRC16", long_type },
+        { "resload_Control", long_type },
+        { "resload_SaveFileOffset", long_type },
+        { "resload_ProtectRead", long_type },
+        { "resload_ProtectReadWrite", long_type },
+        { "resload_ProtectWrite", long_type },
+        { "resload_ProtectRemove", long_type },
+        { "resload_LoadFileOffset", long_type },
+        { "resload_Relocate", long_type },
+        { "resload_Delay", long_type },
+        { "resload_DeleteFile", long_type },
+        { "resload_ProtectSMC", long_type },
+        { "resload_SetCPU", long_type },
+        { "resload_Patch", long_type },
+        { "resload_LoadKick", long_type },
+        { "resload_Delta", long_type },
+        { "resload_GetFileSizeDec", long_type },
+        { "resload_PatchSeg", long_type },
+        { "resload_Examine", long_type },
+        { "resload_ExNext", long_type },
+        { "resload_GetCustom", long_type },
+        { "resload_VSNPrintF", long_type },
+        { "resload_Log", long_type },
+    }
+};
+
+struct patch_list_item {
+    const char* name;
+    std::vector<base_data_type> args;
+} patch_list[] = {
+    { "END", {} },
+    { "R", { base_data_type::code_ } },
+    { "P", { base_data_type::code_, base_data_type::code_ } },
+    { "PS", { base_data_type::code_, base_data_type::code_ } },
+    { "S", { base_data_type::code_, (base_data_type)-(int)base_data_type::word_ } },
+    { "I", { base_data_type::code_ } },
+    { "B", { base_data_type::code_, base_data_type::byte_ } },
+    { "W", { base_data_type::code_, base_data_type::word_ } },
+    { "L", { base_data_type::code_, base_data_type::long_ } },
+    { "A", { base_data_type::code_, base_data_type::long_ } },
+    { "PA", { base_data_type::code_, base_data_type::rptrw_ } },
+    { "NOP", { base_data_type::code_, base_data_type::word_ } },
+    { "C", {} },
+    { "CB", {} },
+    { "CW", {} },
+    { "CL", {} },
+    { "PSS", {} },
+    { "NEXT", {} }, // 17 Handled specially
+    { "AB", {} },
+    { "AW", {} },
+    { "AL", {} },
+    { "DATA", {} },
+    { "ORB", {} },
+    { "ORW", {} },
+    { "ORL", {} },
+    { "GA", {} },
+    { "BKPT", {} },
+    { "BELL", {} },
+    { "IFBW", {} }, // 28
+    { "IFC1", {} }, // 29
+    { "IFC2", {} }, // 30
+    { "IFC3", {} }, // 31
+    { "IFC4", {} }, // 32
+    { "IFC5", {} }, // 33
+    { "IFC1X", {} }, // 34
+    { "IFC2X", {} }, // 35
+    { "IFC3X", {} }, // 36
+    { "IFC4X", {} }, // 37
+    { "IFC5X", {} }, // 38
+    { "ELSE", {} }, // 39
+    { "ENDIF", {} }, //40
+};
+
+uint32_t analyzer::handle_whd_patchlist(const uint32_t pl_start, bool analyze)
+{
+    if (analyze) {
+        if (data_handled_at_[pl_start])
+            return 0;
+        data_handled_at_[pl_start] = true;
+    } else {
+        std::cout << "\tPL_START\n";
+    }
+    int nest = 0;
+    uint32_t addr = pl_start;
+    for (;;) {
+        uint16_t type = get_u16(&data_[addr]);
+        addr += 2;
+        if (type == 0) {
+            if (!analyze)
+                std::cout << "\tPL_END\n";
+            break;
+        }
+
+        uint32_t cmd_addr = 0;
+        bool has_cmd_arg = !(type & (1 << 14));
+        // Bit14: No args, Bit15: word arg
+        if (has_cmd_arg) {
+            if (!(type & (1 << 15))) {
+                cmd_addr = get_u32(&data_[addr]);
+                addr += 4;
+            } else {
+                cmd_addr = get_u16(&data_[addr]);
+                addr += 2;
+            }
+        }
+        type &= 0x3fff;
+        if (type >= sizeof(patch_list) / sizeof(*patch_list))
+            throw std::runtime_error { "Unknown patch list item " + std::to_string(type) + " cmd_addr = $" + hexstring(cmd_addr) };
+
+        if (type == 17) {
+            // PL_NEXT
+            const auto taddr = pl_start + static_cast<int16_t>(get_u16(&data_[addr]));
+            addr += 2;
+            if (!analyze) {
+                std::cout << "\tPL_NEXT\t";
+                print_addr(taddr);
+                std::cout << "\n";
+            } else {
+                handle_whd_patchlist(taddr, true);
+            }
+            if (nest)
+                continue;
+            else
+                break;
+        } else if (type >= 28 && type <= 38) {
+            ++nest;
+        } else if (type == 40) {
+            --nest;
+        }
+
+        const auto& d = patch_list[type];
+
+        if (d.args.empty() && has_cmd_arg)
+            throw std::runtime_error { "TODO: Handle PL_" + std::string { d.name } };
+
+        if (!analyze)
+            std::cout << "\tPL_" << d.name;
+        for (size_t argcnt = 0; argcnt < d.args.size(); ++argcnt) {
+            if (!analyze)
+                std::cout << (argcnt == 0 ? "\t" : ",");
+            if (argcnt == 0 && has_cmd_arg) {
+                if (!analyze)
+                    std::cout << "$" << hexstring(cmd_addr);
+                continue;
+            }
+            auto t = d.args[argcnt];
+            bool is_signed = false;
+            if ((int)t < 0) {
+                t = (base_data_type) - (int)t;
+                is_signed = true;
+            }
+            switch (t) {
+            case base_data_type::byte_:
+                if (!analyze)
+                    std::cout << "$" << hexstring((uint8_t)get_u16(&data_[addr]));
+                addr += 2;
+                break;
+            case base_data_type::word_:
+                if (!analyze) {
+                    uint16_t v = get_u16(&data_[addr]);
+                    if (is_signed)
+                        std::cout << static_cast<int>(static_cast<int16_t>(v));
+                    else
+                        std::cout << "$" << hexstring(v);
+                }
+                addr += 2;
+                break;
+            case base_data_type::long_:
+                if (!analyze)
+                    std::cout << "$" << hexstring(get_u32(&data_[addr]));
+                addr += 4;
+                break;
+            case base_data_type::code_: {
+                const auto code_addr = pl_start + static_cast<int16_t>(get_u16(&data_[addr]));
+                if (!analyze)
+                    print_addr(code_addr);
+                else
+                    add_root(code_addr, simregs {});
+                addr += 2;
+            } break;
+            case base_data_type::rptrw_:
+                if (analyze) {
+                    const auto taddr = pl_start + static_cast<int16_t>(get_u16(&data_[addr]));
+                    print_addr(taddr);
+                }
+                addr += 2;
+                break;
+            default:
+                std::cerr << "TODO: Handle patch list arg type " << int(d.args[argcnt]) << "\n";
+                exit(1);
+            }
+        }
+        if (!analyze)
+            std::cout << "\n";
+    }
+    if (analyze)
+        add_auto_label(pl_start, make_array_type(patchitem_type, (addr - pl_start) / 2), "pl");
+    return addr;
+}
+
+void analyzer::handle_whdload(uint32_t header_address)
+{
+    const auto& hdr_rptr = make_rptrw(header_address);
+    auto resolve_rptr = [&](int16_t offset) -> uint32_t {
+        int16_t offset2 = get_u16(&data_[header_address + offset]);
+        if (offset2 == 0)
+            return 0;
+        else
+            return header_address + offset2;
+    };
+    auto add_string_rptr = [&](int16_t offset, const std::string& name) {
+        add_label(header_address + offset, name, hdr_rptr);
+        uint32_t addr = resolve_rptr(offset);
+        if (!addr)
+            return;
+        maybe_find_string_at(addr, "text" + name);
+    };
+
+    const auto resload = alloc_fake_mem(ResidentLoader.size());
+    add_label(resload, "_resload", make_struct_type(ResidentLoader));
+
+    // resload_Patch
+    
+    functions_.insert({ resload + 0x64, function_description {
+                                                         {}, { { regname::A0, "patchlist", &word_ptr }, { regname::A1, "destination", &code_ptr } }, [this]() {
+                                                                  if (!regs_.a[0].known())
+                                                                      return;
+                                                                  handle_whd_patchlist(regs_.a[0].raw(), true);
+                                                              } } });
+
+
+    /*
+    STRUCTURE	WHDLoadSlave,0
+	STRUCT	ws_Security,4	;moveq #-1,d0 rts
+	STRUCT	ws_ID,8		;"WHDLOADS"
+	UWORD	ws_Version	;required WHDLoad version
+	UWORD	ws_Flags	;see below
+	ULONG	ws_BaseMemSize	;size of required memory (multiple of $1000)
+	ULONG	ws_ExecInstall	;must be 0
+	RPTR	ws_GameLoader	;Slave code, called by WHDLoad
+	RPTR	ws_CurrentDir	;
+	RPTR	ws_DontCache	;
+    */
+    add_label(header_address + 0, "_base", long_type);
+    add_label(header_address + 4, "_ID", make_array_type(char_type, 8));
+    add_label(header_address + 12, "_Version", word_type);
+    add_label(header_address + 14, "_Flags", word_type);
+    add_label(header_address + 16, "_BaseMemSize", long_type);
+    add_label(header_address + 20, "_ExecInstall", long_type);
+    add_label(header_address + 24, "_GameLoader", hdr_rptr);
+    const auto start_address = resolve_rptr(24);
+    add_label(start_address, "_start", code_type);
+    simregs initregs{};
+    initregs.a[0] = simval { resload };
+    add_root(start_address, initregs); 
+    add_string_rptr(26, "_CurrentDir");
+    add_string_rptr(28, "_DontCache");
+
+    const uint16_t version = get_u16(&data_[header_address + 12]);
+    if (version >= 4) {
+        add_label(header_address + 30, "_keydebug", byte_type);
+        add_label(header_address + 31, "_keyexit", byte_type);
+    }
+    if (version >= 8) {
+        add_label(header_address + 32, "_ExpMem", long_type);
+    }
+    if (version >= 10) {
+        add_string_rptr(36, "_name");
+        add_string_rptr(38, "_copy");
+        add_string_rptr(40, "_info");
+    }
+    if (version >= 16) {
+        add_string_rptr(42, "_kickname");
+        add_label(header_address + 44, "_kicksize", long_type);
+        add_label(header_address + 48, "_kickcrc", word_type);
+    }
+    if (version >= 17) {
+        add_string_rptr(50, "_config");
+    }
+}
 
 constexpr uint32_t HUNK_UNIT         = 999;
 constexpr uint32_t HUNK_NAME         = 1000;
@@ -6026,6 +6422,7 @@ void hunk_file::read_hunk_exe()
         for (const auto& s : symbols)
             a_->add_label(s.addr, s.name, unknown_type);
         bool has_code = false;
+        uint32_t whdload_start = 0;
         std::vector<rom_tag> tags;
         for (size_t i = 0, sz = hunks.size(); i < sz; ++i) {
             const auto& h = hunks[i];
@@ -6040,9 +6437,14 @@ void hunk_file::read_hunk_exe()
             a_->write_data(h.addr, h.data.data(), hunk_size);
             if (h.type == HUNK_CODE && !h.data.empty()) {
                 if (!a_->find_predef_into(h.addr)) {
-                    if (!has_code)
-                        a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
-                    a_->add_root(h.addr, simregs {});
+                    // MOVEQ #-1,D0 / RTS + DC.B "WHDLAODS" => Whdload
+                    if (h.data.size() > 32 && memcmp(h.data.data(), "\x70\xFF\x4E\x75WHDLOADS", 12) == 0) {
+                        whdload_start = h.addr;
+                    } else {
+                        if (!has_code)
+                            a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
+                        a_->add_root(h.addr, simregs {});
+                    }
                     has_code = true;
                 }
                 for (const auto& t : scan_for_rom_tags(h.data, h.addr))
@@ -6053,6 +6455,9 @@ void hunk_file::read_hunk_exe()
             }
         }
         assert(has_code);
+
+        if (whdload_start)
+            a_->handle_whdload(whdload_start);
 
         a_->run();
     }
