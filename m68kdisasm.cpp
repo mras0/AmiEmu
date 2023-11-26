@@ -2927,7 +2927,20 @@ void maybe_add_cia_bit_info(std::ostringstream& extra, uint32_t addr, uint8_t va
     }
 }
 
-void maybe_add_custom_bit_info(std::ostringstream& extra, uint32_t addr, uint16_t val)
+void add_bit_names(std::ostream& extra, const char* const *names, uint16_t val)
+{
+    bool first = true;
+    for (int bit = 15; bit >= 0; --bit) {
+        if (val & (1 << bit)) {
+            if (!*names[bit])
+                continue;
+            extra << (first ? " " : "+") << names[bit];
+            first = false;
+        }
+    }
+}
+
+void maybe_add_custom_bit_info(std::ostream& extra, uint32_t addr, uint16_t val)
 {
     if (addr & 1)
         return;
@@ -2940,14 +2953,7 @@ void maybe_add_custom_bit_info(std::ostringstream& extra, uint32_t addr, uint16_
         } else if (val == 0) {
             return;
         }
-        const auto names = addr == 0x96 ? dmacon_bitnames : adkcon_bitnames;
-        bool first = true;
-        for (int bit = 15; bit >= 0; --bit) {
-            if (val & (1 << bit)) {
-                extra << (first ? " ":"+") << names[bit];
-                first = false;
-            }
-        }
+        add_bit_names(extra, addr == 0x96 ? dmacon_bitnames : adkcon_bitnames, val);
     } else if (addr == 0x9a || addr == 0x9c) {
         // INTENA/INTREQ
         if (val == 0x7fff) {
@@ -2956,13 +2962,19 @@ void maybe_add_custom_bit_info(std::ostringstream& extra, uint32_t addr, uint16_
         } else if (val == 0) {
             return;
         }
-        bool first = true;
-        for (int bit = 15; bit >= 0; --bit) {
-            if (val & (1 << bit)) {
-                extra << (first ? " " : "+") << int_bitnames[bit];
-                first = false;
-            }
-        }
+        add_bit_names(extra, int_bitnames, val);
+    } else if (addr == 0x100) {
+        int bpu = (val & 0x10) >> 1 | (val & 0x7000) >> 12;
+        val &= ~0x7010;
+        extra << " BPU=" << bpu;
+        if (!val)
+            return;
+        const char* bplcon0_bitnames[] = {
+            "ECSENA", "ERSY", "LACE", "LPEN", "",
+            "BYPOSS", "SHRES", "UHRES", "GUAD", "COLOR", "DPF",
+            "HAM","","","","HIRES"
+        };
+        add_bit_names(extra, bplcon0_bitnames, val);
     }
 }
 
@@ -3224,8 +3236,11 @@ public:
 
         if (visited_.find(addr) == visited_.end()) {
             // Don't add if already predefined as non-code
-            if (auto info = find_predef_into(addr); info && info->t != &code_type)
-                return;
+            if (auto info = find_predef_into(addr); info && info->t != &code_type) {
+                // Special case for CODE at offset 0 in struct..
+                if (!(info->t->struct_def() && &info->t->struct_def()->field_at(0).first->t() == &code_type))
+                    return;
+            }
 
             auto root_regs = regs;
             auto forced = forced_values_.equal_range(addr);
@@ -3246,6 +3261,10 @@ public:
             labels_.insert({ addr, { name, &t } });
             return;
         }
+
+        // Don't override predefined info
+        if (find_predef_into(addr))
+            return;
 
         // Exact match and type is same or we already know a better one
         if (li->t == &t || &t == &unknown_type) {
@@ -4137,7 +4156,12 @@ private:
                 // Not a valid register
                 std::cout << "\tDC.W\t$" << hexfmt(ir1) << ",$" << hexfmt(ir2) << "\n";
             } else {
-                std::cout << "\tDC.W\t" << custom_regname[(ir1 >> 1) & 0xff] << ",$" << hexfmt(ir2) << "\n"; 
+                std::ostringstream extra;
+                maybe_add_custom_bit_info(extra, ir1, ir2);
+                std::cout << "\tDC.W\t" << custom_regname[(ir1 >> 1) & 0xff] << ",$" << hexfmt(ir2);
+                if (!extra.str().empty())
+                    std::cout << "\t;" << extra.str();
+                std::cout << "\n"; 
             }
         }
     }
@@ -5385,7 +5409,8 @@ void analyzer::handle_struct_at(uint32_t addr, const structure_definition& s)
     for (const auto& f : s.fields()) {
         const auto faddr = addr + f.offset();
         if (f.offset() < 0) {
-            assert(&f.t() == &libvec_code);
+            if (&f.t() != &libvec_code)
+                continue;
             if (faddr < 256 * 4 || faddr + 6 > max_mem)
                 continue;
             simregs r{};
@@ -5532,12 +5557,16 @@ void analyzer::handle_data_at(uint32_t addr, const type& t)
     case base_data_type::long_:
         break;
     case base_data_type::code_:
-        assert(false);
+        //assert(false);
         add_root(addr, simregs {}, true);
         break;
     case base_data_type::ptr_:
         if (const auto len = t.len(); len != 0) {
-            assert(t.ptr() != &code_type);
+            //assert(t.ptr() != &code_type); // Convinient enough to allow e.g. CODE[10] 
+            if (t.ptr() == &copper_code_type) {
+                break;
+            }
+
             const auto size = sizeof_type(*t.ptr());
             for (uint32_t i = 0; i < len; ++i)
                 handle_data_at(addr + i * size, *t.ptr());
@@ -5646,7 +5675,7 @@ void analyzer::handle_predef_info()
 
         add_label(i.first, i.second.name, t, false);
         // Don't add root here in case better register values can be inferred
-        if (&t != &code_type) {
+        if (&t != &code_type && &t != &copper_code_ptr) {
             const auto sz = &t == &unknown_type ? 1 : sizeof_type(t);
             if (i.first >= max_mem || i.first + sz > max_mem) {
                 throw std::runtime_error { "Definition of " + i.second.name + " is outside valid memory" };
@@ -5789,9 +5818,9 @@ struct patch_list_item {
     { "AW", {} },
     { "AL", {} },
     { "DATA", {} },
-    { "ORB", {} },
-    { "ORW", {} },
-    { "ORL", {} },
+    { "ORB", { base_data_type::code_, base_data_type::byte_ } },
+    { "ORW", { base_data_type::code_, base_data_type::word_ } },
+    { "ORL", { base_data_type::code_, base_data_type::long_ } },
     { "GA", {} },
     { "BKPT", {} },
     { "BELL", {} },
@@ -6071,7 +6100,7 @@ std::string hunk_type_string(uint32_t hunk_type)
         HTS(HUNK_ABSRELOC16);
 #undef HTS
     }
-    return "Unknown hunk type " + std::to_string(hunk_type);
+    return "Unknown hunk type " + std::to_string(hunk_type) + " $" + hexstring(hunk_type);
 }
 
 constexpr uint8_t EXT_SYMB	    = 0;    // symbol table
@@ -6385,7 +6414,7 @@ void hunk_file::read_hunk_exe()
                 }
                 break;
             case HUNK_END:
-                break;
+                goto next;
             case HUNK_OVERLAY: {
                 // HACK: Just skip everything after HUNK_OVERLAY for now...
                 // See http://aminet.net/package/docs/misc/Overlay for more info
@@ -6401,15 +6430,16 @@ void hunk_file::read_hunk_exe()
                 throw std::runtime_error { "Unsupported HUNK type " + hunk_type_string(ht) + " in executable" };
             }
         }
-
+next:
         ++table_index;
     }
 
     if (table_index != table_size)
         throw std::runtime_error { "Only " + std::to_string(table_index) + " out of " + std::to_string(table_size) + " hunks read" };
 
-    if (pos_ != data_.size())
-        throw std::runtime_error { "File not done pos=$" + hexstring(pos_) + " size=" + hexstring(data_.size(), 8) };
+    // E.g. ZeeWolf contains extra junk bytes at end
+    //if (pos_ != data_.size())
+    //    throw std::runtime_error { "File not done pos=$" + hexstring(pos_) + " size=" + hexstring(data_.size(), 8) };
 
     if (!a_) {
         for (uint32_t i = 0; i < table_size; ++i) {
@@ -6734,7 +6764,7 @@ int main(int argc, char* argv[])
             if (argc > 2)
                 throw std::runtime_error { "Too many arguments" };
             read_hunk(data, a.get());
-        } else if (a && data.size() >= 1024 && data[0] == 'D' && data[1] == 'O' && data[2] == 'S' && validate_bootchecksum(data)) {
+        } else if (argc == 2 && a && data.size() >= 1024 && data[0] == 'D' && data[1] == 'O' && data[2] == 'S' && validate_bootchecksum(data)) {
             // Bootblock (analyzed)
             const auto base = 0x200000;
             a->write_data(base, data.data(), 1024);
