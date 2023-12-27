@@ -948,7 +948,7 @@ public:
                 const auto diff = offset - f.offset();
                 if (f.t().struct_def() && (!address_op || diff)) {
                     if (const auto n = f.t().struct_def()->field_name(diff, address_op); n) {
-                        return { name + "_" + *n };
+                        return { name + "+" + *n };
                     }
                 }
                 if (diff)
@@ -3238,8 +3238,13 @@ public:
             // Don't add if already predefined as non-code
             if (auto info = find_predef_into(addr); info && info->t != &code_type) {
                 // Special case for CODE at offset 0 in struct..
-                if (!(info->t->struct_def() && &info->t->struct_def()->field_at(0).first->t() == &code_type))
+                if (info->t->struct_def()) {
+                    auto [field, offset] = info->t->struct_def()->field_at(0);
+                    if (!field || &field->t() != &code_type)
+                        return;
+                } else {
                     return;
+                }
             }
 
             auto root_regs = regs;
@@ -3797,11 +3802,11 @@ public:
                                             extra << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
                                         extra << " (" << t << ")";
                                     }
-                                    //std::cout << li->name;
-                                    //if (lofs)
-                                    //    std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
-                                    //std::cout << "-" << lit->second.name << "(A" << (ea & 7) << ")";
-                                    //break;
+                                    // std::cout << li->name;
+                                    // if (lofs)
+                                    //     std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
+                                    // std::cout << "-" << lit->second.name << "(A" << (ea & 7) << ")";
+                                    // break;
                                 } else {
                                     //std::cout << li->name;
                                     //lofs -= aval.raw();
@@ -4000,7 +4005,7 @@ private:
     {
         auto it = labels_.find(pos);
         if (it != labels_.end()) {
-            const bool extra = verbose_disasm || !it->second.name.ends_with(hexstring(pos));
+            const bool extra = true; // verbose_disasm || !it->second.name.ends_with(hexstring(pos));
             if (extra)
                 std::cout << std::setw(line_width) << std::left; 
             std::cout << it->second.name;
@@ -5555,6 +5560,7 @@ void analyzer::handle_data_at(uint32_t addr, const type& t)
     case base_data_type::byte_:
     case base_data_type::word_:
     case base_data_type::long_:
+    case base_data_type::jumptab_word_:
         break;
     case base_data_type::code_:
         //assert(false);
@@ -5604,7 +5610,7 @@ void analyzer::handle_data_at(uint32_t addr, const type& t)
 
 void analyzer::handle_pointer_to(uint32_t addr, const type& t)
 {
-    if (!addr || addr + 1 >= max_mem || !written_[addr] || &t == &unknown_type)
+    if (!addr || addr == 0xffffffff || addr + 1 >= max_mem || !written_[addr] || &t == &unknown_type)
         return;
 
     switch (t.base()) {
@@ -5812,7 +5818,7 @@ struct patch_list_item {
     { "CB", {} },
     { "CW", {} },
     { "CL", {} },
-    { "PSS", {} },
+    { "PSS", { base_data_type::code_, base_data_type::code_, (base_data_type) - (int)base_data_type::word_ } },
     { "NEXT", {} }, // 17 Handled specially
     { "AB", {} },
     { "AW", {} },
@@ -6342,7 +6348,7 @@ void hunk_file::read_hunk_exe()
     }
 
     uint32_t table_index = 0;
-    while (table_index < table_size) {
+    while (table_index < table_size && pos_ < data_.size()) {
         const uint32_t hunk_num = first_hunk + table_index;
 
         const uint32_t hunk_type = read_u32() & block_id_mask;
@@ -6434,8 +6440,10 @@ next:
         ++table_index;
     }
 
-    if (table_index != table_size)
-        throw std::runtime_error { "Only " + std::to_string(table_index) + " out of " + std::to_string(table_size) + " hunks read" };
+    if (table_index != table_size) {
+        // Just make this a warning (Phenomena - Animotion)
+        std::cerr << "Warning: Only " + std::to_string(table_index) + " out of " + std::to_string(table_size) + " hunks read\n";
+    }
 
     // E.g. ZeeWolf contains extra junk bytes at end
     //if (pos_ != data_.size())
@@ -6475,13 +6483,15 @@ next:
                             a_->add_label(h.addr, "$$entry", code_type); // Add label if not already present
                         a_->add_root(h.addr, simregs {});
                     }
-                    has_code = true;
                 }
                 for (const auto& t : scan_for_rom_tags(h.data, h.addr))
                     a_->add_rom_tag(t);
+                has_code = true;
             } else {
-                const std::string t = h.flags == 1 ? "chip" : "";
-                a_->add_auto_label(h.addr, unknown_type, t + (h.type == HUNK_CODE ? "code" : h.type == HUNK_BSS ? "bss" : "data"));
+                if (!a_->find_predef_into(h.addr)) {
+                    const std::string t = h.flags == 1 ? "chip" : "";
+                    a_->add_auto_label(h.addr, unknown_type, t + (h.type == HUNK_CODE ? "code" : h.type == HUNK_BSS ? "bss" : "data"));
+                }
             }
         }
         assert(has_code);
