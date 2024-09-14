@@ -926,6 +926,15 @@ public:
         return -fields_.front().offset();
     }
 
+    std::pair<const struct_field*, int32_t> field_from_offset(int32_t offset) const
+    {
+        for (const auto& f : fields_) {
+            if (offset >= f.offset() && offset < f.end_offset())
+                return { &f, offset - f.offset() };
+        }
+        return { nullptr, 0 };
+    }
+
     std::pair<const struct_field*, int32_t> field_at(int32_t offset) const
     {
         for (const auto& f : fields_) {
@@ -3134,7 +3143,10 @@ public:
                 throw std::runtime_error { "Invalid type in " + filename + " line " + std::to_string(linenum) + ": " + line };
             auto lab = parts[2];
             if (lab == "?") {
-                lab = (t == &code_type ? "func_" : t == &hack_str_type ? "text_" :  "dat_") + hexstring(addr);
+                if (t == &hack_str_type)
+                    lab = ""; // Label added later for strings
+                else
+                    lab = (t == &code_type ? "func_" : "dat_") + hexstring(addr);
             } else if (t == &code_type) {
                 auto pos = lab.find_first_of('(');
                 if (pos != std::string::npos) {
@@ -3785,37 +3797,43 @@ public:
                                 maybe_add_reg_info(addr);
                                 if (verbose_disasm) extra << " " << desc.str() << " = $" << hexfmt(addr);
                                 break;
-                            } else if (auto [li, lofs] = find_label(addr); li) {
-                                if (auto lit = labels_.find(aval.raw()); lit != labels_.end()) {
-                                    const auto& t = *lit->second.t;
-                                    if (verbose_disasm)
-                                        extra << " A" << (ea & 7) << " = " << lit->second.name << " (" << t << ")";
-                                    if (t.struct_def()) {
-                                        if (auto name = t.struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
+                            } else if (auto [li, lofs] = find_label(addr); li && li->t->struct_def()) {
+                                // Address points inside a structure                                
+                                // addr = aval + offset
+                                // lofs = addr - label_addr
+
+                                if (auto lit = labels_.find(aval.raw()); lit != labels_.end() && lit->second.t->struct_def()) {
+                                    // Simple case: The address register points at a global structure
+                                    if (auto name = lit->second.t->struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
+                                        std::cout << *name << "(A" << (ea & 7) << ")";
+                                        break;
+                                    }
+                                    //extra << " Couldn't get field name from " << lit->second.name << " (" << *lit->second.t << ")";
+                                } else {
+                                    // Find structure type that the address register points to (if any)
+                                    // TODO: Maybe also arrays?
+                                    auto [sf, so] = li->t->struct_def()->field_from_offset(aval.raw() - (addr - lofs));
+
+                                    while (sf && so && sf->t().struct_def()) {
+                                        std::tie(sf, so) = sf->t().struct_def()->field_from_offset(so);
+                                    }
+
+                                    if (!so && sf && sf->t().struct_def()) {
+                                        // The address register points at a nested struct field
+                                        if (auto name = sf->t().struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
                                             std::cout << *name << "(A" << (ea & 7) << ")";
                                             break;
                                         }
+                                        //extra << " Could not find field at offset " << offset << " in " << sf->name() << " of type " << sf->t();
                                     }
-                                    if (verbose_disasm) {
-                                        extra << " " << desc.str() << " -> " << li->name;
-                                        if (lofs)
-                                            extra << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
-                                        extra << " (" << t << ")";
-                                    }
-                                    // std::cout << li->name;
-                                    // if (lofs)
-                                    //     std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs, 4);
-                                    // std::cout << "-" << lit->second.name << "(A" << (ea & 7) << ")";
-                                    // break;
-                                } else {
-                                    //std::cout << li->name;
-                                    //lofs -= aval.raw();
-                                    //if (lofs)
-                                    //    std::cout << (lofs > 0 ? '+' : '-') << "$" << hexfmt(lofs > 0 ? lofs : -lofs);
-                                    //std::cout << "(A" << (ea & 7) << ")";
-                                    if (verbose_disasm)
-                                        extra << " A" << (ea & 7) << " = $" << hexfmt(aval.raw());
-                                    //break;
+                                    //else if (sf) {
+                                    //    extra << " A" << (ea & 7) << " points at " << sf->name();
+                                    //    if (so)
+                                    //        extra << "+" << so;
+                                    //    extra << " (" << sf->t() << ")";
+                                    //} else {
+                                    //    extra << " Couldn't find label for areg";
+                                    //}
                                 }
                             } else {
                                 if (verbose_disasm)
@@ -4404,7 +4422,8 @@ private:
 
     uint16_t read_iword(uint32_t addr)
     {
-        if ((addr & 1) || addr < 0x80 || addr > max_mem - 2)
+        // Darkman relocates to $8.w
+        if ((addr & 1) || /*addr < 0x80 ||*/ addr > max_mem - 2)
             throw std::runtime_error { "Reading instruction word from invalid address $" + hexstring(addr) };
         return get_u16(&data_[addr]);
     }
@@ -5305,7 +5324,33 @@ private:
     void handle_bseglist_at(uint32_t addr, const std::string& name);
     void handle_predef_info();
     uint32_t check_exec_base();
+    std::string make_str_label(uint32_t addr);
 };
+
+std::string analyzer::make_str_label(uint32_t addr)
+{
+    const uint32_t start_addr = addr;
+    std::string lab;
+    uint32_t len = 0;
+    for (;  len < 32; ++len, ++addr) {
+        if (addr >= max_mem || !written_[addr])
+            break;
+        uint8_t ch = data_[addr];
+        if (!ch)
+            break;
+        if (ch < ' ' || ch > 127)
+            lab += 'x' + hexstring(ch);
+        else if (!isalnum(ch))
+            lab += '_';
+        else
+            lab.push_back(ch);
+    }
+
+    if (!len)
+        return "text_" + hexstring(start_addr);
+    return "text_" + lab;
+
+}
 
 void analyzer::add_rom_tag(const rom_tag& tag)
 {
@@ -5474,7 +5519,7 @@ void analyzer::maybe_find_string_at(uint32_t addr, const std::string& label)
         return;
 
     std::fill(data_handled_at_.begin() + start_addr, data_handled_at_.begin() + start_addr + len, true);
-    add_label(start_addr, !label.empty() ? label : "text_" + hexstring(start_addr), make_array_type(char_type, len));
+    add_label(start_addr, !label.empty() ? label : make_str_label(start_addr), make_array_type(char_type, len));
 }
 
 void analyzer::maybe_find_copper_list_at(uint32_t addr)
@@ -5932,6 +5977,8 @@ uint32_t analyzer::handle_whd_patchlist(const uint32_t pl_start, bool analyze)
             case base_data_type::word_:
                 if (!analyze) {
                     uint16_t v = get_u16(&data_[addr]);
+                    if (type == 4) // PL_S
+                        v += 2; // Offset is stored -2
                     if (is_signed)
                         std::cout << static_cast<int>(static_cast<int16_t>(v));
                     else
@@ -6302,12 +6349,11 @@ void hunk_file::read_hunk_exe()
     if (read_u32() != 0)
         throw std::runtime_error { "Hunk file contains resident libraries" };
 
+    // In overlay hunks the last_hunk is the index of last hunk to load (and the table)
+    // "table_size" is the maximum number of hunks that may reside in memory at any time
     const uint32_t table_size = read_u32();
     const uint32_t first_hunk = read_u32();
     const uint32_t last_hunk = read_u32();
-
-    if (table_size != (last_hunk - first_hunk) + 1)
-        throw std::runtime_error { "Invalid hunk file. Table size does not match first/last hunk" };
 
     uint32_t chip_ptr = 0x400;
     uint32_t fast_ptr = 0x200000;
@@ -6321,11 +6367,19 @@ void hunk_file::read_hunk_exe()
     };
     std::vector<symbol_info> symbols;
 
-    std::vector<hunk_info> hunks(table_size);
-    for (uint32_t i = 0; i < table_size; ++i) {
+    if (first_hunk != 0 || last_hunk >= table_size)
+        throw std::runtime_error{"Invalid hunk table: size=" + std::to_string(table_size) + " first=" + std::to_string(first_hunk) + " last=" + std::to_string(last_hunk)};
+
+    std::vector<hunk_info> hunks(last_hunk + 1);
+    for (uint32_t i = 0; i <= last_hunk; ++i) {
         const auto v = read_u32();
+
         auto flags = (v >> 29) & 0b110;
-        const auto size = (v & 0x3fffffff) << 2;
+        auto size = (v & 0x3fffffff) << 2;
+        if (size > 4 * 1024 * 1024) {
+            std::cerr << " LIMITING SIZE!!!\n";
+            size = 4 * 1024 * 1024;
+        }
         if (flags == 0b110) {
             flags = read_u32() & ~(1<<30);
         }
@@ -6339,18 +6393,25 @@ void hunk_file::read_hunk_exe()
         } else {
             hunks[i].addr = fast_ptr + 8;
             fast_ptr += aligned_size;
-            if (fast_ptr > 0xa00000)
-                throw std::runtime_error { "Out of fast mem" };
+            //if (fast_ptr > 0xa00000)
+            //    throw std::runtime_error { "Out of fast mem" };
         }
         hunks[i].data.resize(size);
         hunks[i].flags = flags;
         std::cerr << "Hunk " << i << " $" << hexfmt(size) << " " << (flags & 2 ? "CHIP" : flags & 4 ? "FAST" : "    ") << " @ " << hexfmt(hunks[i].addr) << "\n";
     }
 
-    uint32_t table_index = 0;
-    while (table_index < table_size && pos_ < data_.size()) {
-        const uint32_t hunk_num = first_hunk + table_index;
+    // Output mapping to "IRA-style" offsets (for use with whdload_PatchSeg)
+    for (uint32_t i = 0, logofs = 0; i <= last_hunk; ++i) {
+        std::cerr << "SEC"  << i << "OFS=$" << std::hex << hunks[i].addr << "-$" << logofs << std::dec << "\n";
+        logofs += static_cast<uint32_t>(hunks[i].data.size());
+    }
 
+    bool uses_overlay = false;
+
+    uint32_t table_index = 0;
+    while (table_index <= last_hunk && pos_ < data_.size()) {
+        const uint32_t hunk_num = first_hunk + table_index;
         const uint32_t hunk_type = read_u32() & block_id_mask;
 
         if (hunk_type == HUNK_DEBUG) {
@@ -6368,7 +6429,9 @@ void hunk_file::read_hunk_exe()
         hunks[hunk_num].loaded_size = hunk_bytes;
 
         if (hunk_bytes > hunks[hunk_num].data.size()) {
-            throw std::runtime_error { "Too much data for hunk " + std::to_string(hunk_num) };
+            if (hunk_type != HUNK_BSS)
+                throw std::runtime_error { "Too much data for hunk " + std::to_string(hunk_num) };
+            std::cerr << "WARNING TOO MUCH DATA IN BSS!!\n";
         }
 
         if (hunk_type != HUNK_BSS && hunk_bytes) {
@@ -6421,6 +6484,9 @@ void hunk_file::read_hunk_exe()
                 break;
             case HUNK_END:
                 goto next;
+            case HUNK_DEBUG:
+                read_hunk_debug();
+                break;
             case HUNK_OVERLAY: {
                 // HACK: Just skip everything after HUNK_OVERLAY for now...
                 // See http://aminet.net/package/docs/misc/Overlay for more info
@@ -6430,6 +6496,7 @@ void hunk_file::read_hunk_exe()
                 hexdump(std::cerr, &data_[pos_], overlay_table_size << 2);
                 table_index = table_size - 1;
                 pos_ = static_cast<uint32_t>(data_.size()); // Skip to end
+                uses_overlay = true;
                 break;
             }
             default:
@@ -6467,7 +6534,7 @@ next:
             const auto hunk_size = static_cast<uint32_t>(h.data.size());
             const auto hunk_name = "hunk" + std::to_string(i);
             uint8_t header[8];
-            put_u32(&header[0], hunk_size);
+            put_u32(&header[0], hunk_size + 8); // + 8 because size includes overhead (i.e. it's number of bytes allocated)
             put_u32(&header[4], (i == sz-1 ? 0 : hunks[i+1].addr - 4) >> 2); // BPTR to next hunk
             a_->add_label(h.addr - 8, hunk_name + "_size", long_type);
             a_->add_label(h.addr - 4, hunk_name + "_link", long_type);
