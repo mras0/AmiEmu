@@ -1537,7 +1537,49 @@ private:
             return;
         }
 
-        std::cerr << "[HD] Unsupported SCSI command: ";
+        if ((cmd[0] == 0x28 || cmd[0] == 0x2A) && sc.scsi_CmdLength == 10) { // READ/WRITE (10)
+            if (cmd[1] || cmd[6] || cmd[9]) {
+                std::cerr << "[HD] Unsupported command arguments \n";
+                goto err;
+            }
+
+            const uint64_t lba = static_cast<uint64_t>(get_u32(&cmd[2])) * sector_size_bytes;
+            const uint32_t len = get_u16(&cmd[7]) * sector_size_bytes;
+            if (lba > hd.size || len > hd.size || lba + len > hd.size) {
+                std::cerr << "[HD] Out of range lba = " << lba << " len = " << len << "\n";
+                goto err;
+            }
+
+            if (cmd[0] == 0x28) {
+                copy_data(disk_read(hd, lba, len), len);
+                return;
+            } else {
+                if (sc.scsi_Length != len) {
+                    std::cerr << "[HD] Invalid data length for write lba = " << lba << " len = " << len << " scis_Length = " << sc.scsi_Length  << "\n";
+                    goto err;
+                }
+
+                buffer_.resize(len);
+                for (uint32_t i = 0; i < len; i += 4)
+                    put_u32(&buffer_[i], mem_.read_u32(sc.scsi_Data + i));
+                hd.f.seekp(lba);
+                hd.f.write(reinterpret_cast<const char*>(&buffer_[0]), len);
+                if (!hd.f)
+                    throw std::runtime_error { "Error writing to " + hd.filename };
+                
+                sc.scsi_Actual = sc.scsi_Length;
+                sc.scsi_CmdActual = sc.scsi_CmdLength;
+                sc.scsi_Status = 0;
+                sc.scsi_SenseActual = 0;
+                return;
+            }
+        }
+
+        if (cmd[0] == 0x2A && sc.scsi_CmdLength == 10) { // WRITE (10)
+        }
+
+err:
+        std::cerr << "[HD] Unsupported SCSI command (len " << cmd.size() << ") : ";
         hexdump(std::cerr, cmd.data(), cmd.size());
         //#define SCSI_INVALID_COMMAND 0x20
 
