@@ -3039,7 +3039,7 @@ public:
             while (start < line.length() && isspace(line[start]))
                 ++start;
             for (size_t p = start; p < end; ++p) {
-                if (line[p] == '#') {
+                if (line[p] == '#' || line[p] == ';') {
                     end = p;
                     break;
                 }
@@ -3113,12 +3113,26 @@ public:
                 }
             }
 
-            if (parts.size() != 3)
-                throw std::runtime_error { "Error in " + filename + " line " + std::to_string(linenum) + ": " + line };
-
             const auto [ok, addr] = from_hex(parts[0]);
             if (!ok)
                 throw std::runtime_error { "Invalid address in " + filename + " line " + std::to_string(linenum) + ": " + line };
+
+            if (parts[1] == "LITDEC") {
+                annotations_.insert({ addr, annotation { annotation_type::dec, "" } });
+                continue;
+            } else if (parts[1] == "LITHEX") {
+                annotations_.insert({ addr, annotation { annotation_type::hex, "" } });
+                continue;
+            } else if (parts[1] == "LITCHARS") {
+                annotations_.insert({ addr, annotation { annotation_type::chars, "" } });
+                continue;
+            } else if (parts[1] == "COMMENT") {
+                annotations_.insert({ addr, annotation { annotation_type::comment, line.substr(line.find("COMMENT") + 8) } });
+                continue;
+            }
+
+            if (parts.size() != 3)
+                throw std::runtime_error { "Error in " + filename + " line " + std::to_string(linenum) + ": " + line };
 
             if (parts[1] == "IGNORE") {
                 const auto [ok2, iend] = from_hex(parts[2]);
@@ -3652,6 +3666,12 @@ public:
                     continue;
                 }
 
+                auto [ann_start, ann_end] = annotations_.equal_range(pos);
+                for (auto ait = ann_start; ait != ann_end; ++ait) {
+                    if (ait->second.type == annotation_type::comment)
+                        std::cout << "\t; " << ait->second.str << "\n";
+                }
+
                 maybe_print_label(pos);
                 regs_ = it->second;
                 uint16_t iwords[max_instruction_words];
@@ -3691,6 +3711,34 @@ public:
                     pos += 2;
                     continue;
                 }
+
+                auto handle_lit_annotation = [ann_start, ann_end](uint32_t val, uint8_t nbytes) {
+                    bool handled = false;
+                    for (auto ait = ann_start; !handled && ait != ann_end; ++ait) {
+                        switch (ait->second.type) {
+                        case annotation_type::dec:
+                            std::cout << static_cast<int32_t>(val);
+                            handled = true;
+                            break;
+                        case annotation_type::hex:
+                            std::cout << "$" << hexfmt(val, nbytes * 2);
+                            handled = true;
+                            break;
+                        case annotation_type::chars:
+                            std::cout << "'";
+                            for (int s = nbytes; s--;) {
+                                char v = (val >> (8 * s)) & 0xff;
+                                std::cout << v;
+                            }
+                            std::cout << "'";
+                            handled = true;
+                            break;
+                        case annotation_type::comment:
+                            break;
+                        }
+                    }
+                    return handled;
+                };
 
                 std::ostringstream extra;
                 fixed_width_line fwl { std::cout };
@@ -3887,27 +3935,24 @@ public:
                             const auto extw = ea_data_[i];
                             // Note: 68000 ignores scale in bits 9/10 and full extension word bit (8)
                             auto disp = static_cast<int8_t>(extw & 255);
-                            #if 0
-                            std::cout << "$";
-                            if (disp < 0) {
-                                std::cout << "-";
-                                disp = -disp;
-                            }
-                            std::cout << hexfmt(static_cast<uint8_t>(disp));
-                            #else
-                            print_addr(pos + 2 + disp);
-                            #endif
+                            uint32_t a = pos + 2 + disp;
+                            if (inst.nea == 2 && inst.ea[1] == ea_reglist) // reglist word comes first..
+                                a += 2;
+                            print_addr(a);
                             std::cout << "(PC,";
                             std::cout << ((extw & (1 << 15)) ? "A" : "D") << ((extw >> 12) & 7) << "." << (((extw >> 11) & 1) ? "L" : "W");
                             std::cout << ")";
                             // TODO: Handle know values..
                             break;
                         }
-                        case ea_other_imm:
+                        case ea_other_imm: {
+                            const auto val = ea_data_[i];
                             std::cout << "#";
-                            if (inst.size != opsize::l || ea_data_[i] < interrupts_end || !print_addr_maybe(ea_data_[i]))
-                                std::cout << "$" << hexfmt(ea_data_[i], opsize_bytes(inst.size) * 2);
+                            bool handled = handle_lit_annotation(val, opsize_bytes(inst.size));
+                            if (!handled && (inst.size != opsize::l || val < interrupts_end || !print_addr_maybe(val)))
+                                std::cout << "$" << hexfmt(val, opsize_bytes(inst.size) * 2);
                             break;
+                        }
                         default:
                             throw std::runtime_error { "TODO: " + ea_string(ea) };
                         }
@@ -3929,7 +3974,9 @@ public:
                         } else if (ea == ea_disp) {
                             print_addr(ea_addr_[i].raw());
                         } else {
-                            std::cout << "#" << static_cast<int>(static_cast<int8_t>(inst.data));
+                            std::cout << "#";
+                            if (!handle_lit_annotation(inst.data, 1))
+                                std::cout << static_cast<int>(static_cast<int8_t>(inst.data));
                         }
                         break;
                     }
@@ -3983,6 +4030,16 @@ private:
     std::vector<std::pair<uint32_t, std::string>> alias_or_forced_mem_;
     std::vector<std::unique_ptr<structure_definition>> struct_defs_;
     std::map<uint32_t, std::vector<uint32_t>> branch_sources_;
+
+    enum class annotation_type {
+        comment, dec, hex, chars
+    };
+    struct annotation {
+        annotation_type type;
+        std::string str;
+    };
+
+    std::multimap<uint32_t, annotation> annotations_;
 
     uint32_t fake_process_ = 0;
 
@@ -4518,7 +4575,6 @@ private:
                 }
                 case ea_other_pc_index: {
                     assert(eaw < inst.ilen);
-                    assert(eaw == 1); // Will be printed wrong since we don't know the address
                     const auto extw = iwords[eaw++];
                     const auto disp = static_cast<int8_t>(extw & 0xff);
                     ea_data_[i] = static_cast<uint32_t>(extw);
@@ -5523,7 +5579,7 @@ void analyzer::maybe_find_string_at(uint32_t addr, const std::string& label)
     }
 
     // Too many non-printable characters?
-    if (nprint * 10 > len)
+    if (nprint * 4 > len)
         return;
 
     std::fill(data_handled_at_.begin() + start_addr, data_handled_at_.begin() + start_addr + len, true);
