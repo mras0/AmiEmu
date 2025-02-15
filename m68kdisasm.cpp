@@ -3631,6 +3631,9 @@ public:
             }
         }
 
+        // Try to make function local labels
+        make_local_labels();
+
         for (const auto& area : areas_) {
             uint32_t pos = area.beg;
 
@@ -3979,6 +3982,7 @@ private:
     std::vector<delayed_forced_value> delayed_forced_values_;
     std::vector<std::pair<uint32_t, std::string>> alias_or_forced_mem_;
     std::vector<std::unique_ptr<structure_definition>> struct_defs_;
+    std::map<uint32_t, std::vector<uint32_t>> branch_sources_;
 
     uint32_t fake_process_ = 0;
 
@@ -4883,8 +4887,10 @@ private:
         return (reg >= regname::A0 ? regs.a : regs.d)[static_cast<uint8_t>(reg) & 7];
     }
 
-    void do_branch(uint32_t addr, bool is_func)
+    void do_branch(uint32_t addr, bool is_func, uint32_t src)
     {
+        branch_sources_[addr].push_back(src);
+
         auto it = functions_.find(addr);
         if (it == functions_.end()) {
             add_root(addr, regs_, false, is_func);
@@ -4936,7 +4942,7 @@ private:
         }
     }
 
-    void do_jump_table(uint32_t addr, uint32_t len)
+    void do_jump_table(uint32_t addr, uint32_t len, uint32_t src_address)
     {
         for (uint32_t i = 0; i < len; ++i) {
             const uint32_t word_addr = addr + 2 * i;
@@ -4944,12 +4950,12 @@ private:
                 int16_t offset = get_u16(&data_[word_addr]);
                 if (!offset)
                     continue;
-                do_branch(addr + offset, true);
+                do_branch(addr + offset, true, src_address);
             }
         }
     }
 
-    void check_jump_table(uint32_t addr)
+    void check_jump_table(uint32_t addr, uint32_t src_address)
     {
         if (addr + 2 >= max_mem || !written_[addr])
             return;
@@ -4960,7 +4966,7 @@ private:
         }
         auto& t = *it->second.t;
         if (t.base() == base_data_type::ptr_ && t.ptr()->base() == base_data_type::jumptab_word_ && t.len()) {
-            do_jump_table(addr, t.len());
+            do_jump_table(addr, t.len(), src_address);
             return;
         }
         if (!it->second.name.starts_with("dat"))
@@ -4992,7 +4998,7 @@ private:
             const uint32_t size = (a - addr) / 2;
             if (size) {
                 add_auto_label(addr, make_array_type(jumptab_word_type, size), "jumptab");
-                do_jump_table(addr, size);
+                do_jump_table(addr, size, src_address);
                 std::cerr << "Added jump table at $" << hexfmt(addr) << " (JTABW[" << size << "])\n";
             }
             informed[addr] = true;
@@ -5036,7 +5042,7 @@ private:
             case inst_type::BSR:
             case inst_type::BRA: {
                 assert(inst.nea == 1 && inst.ea[0] == ea_disp);
-                do_branch(ea_addr_[0].raw(), inst.type == inst_type::BSR);
+                do_branch(ea_addr_[0].raw(), inst.type == inst_type::BSR, start);
                 if (inst.type == inst_type::BRA)
                     return;
                 break;
@@ -5044,6 +5050,7 @@ private:
             case inst_type::DBcc:
                 assert(inst.nea == 2 && inst.ea[1] == ea_disp && inst.ilen == 2);
                 // don't use do_branch here
+                branch_sources_[ea_addr_[1].raw()].push_back(start);
                 add_root(ea_addr_[1].raw(), regs_, false, false);
                 break;
 
@@ -5051,11 +5058,11 @@ private:
             case inst_type::JMP:
                 assert(inst.nea == 1);
                 if (ea_addr_[0].known())
-                    do_branch(ea_addr_[0].raw(), true);
+                    do_branch(ea_addr_[0].raw(), true, start);
                 else if((inst.ea[0] >> ea_m_shift) == ea_m_A_ind_index && regs_.a[inst.ea[0] & 7].known())
-                    check_jump_table(regs_.a[inst.ea[0] & 7].raw());
+                    check_jump_table(regs_.a[inst.ea[0] & 7].raw(), start);
                 else if (inst.ea[0] == ea_pc_index)
-                    check_jump_table(start + 2 + static_cast<int8_t>(ea_data_[0] & 255));
+                    check_jump_table(start + 2 + static_cast<int8_t>(ea_data_[0] & 255), start);
                 if (inst.type == inst_type::JMP)
                     return;
                 break;
@@ -5325,6 +5332,7 @@ private:
     void handle_predef_info();
     uint32_t check_exec_base();
     std::string make_str_label(uint32_t addr);
+    void make_local_labels();
 };
 
 std::string analyzer::make_str_label(uint32_t addr)
@@ -6097,6 +6105,62 @@ void analyzer::handle_whdload(uint32_t header_address)
     }
     if (version >= 17) {
         add_string_rptr(50, "_config");
+    }
+}
+
+void analyzer::make_local_labels()
+{
+    // First find function ranges
+    const uint32_t invalid_address = ~0U;
+    uint32_t function_start = invalid_address;
+    std::vector<std::pair<uint32_t, uint32_t>> funcs;
+
+    for (const auto& [lab_addr, li] : labels_) {
+        auto end_function = [&]() {
+            if (function_start != invalid_address)
+                funcs.push_back({ function_start, lab_addr });
+            function_start = invalid_address;
+        };
+
+        if (li.t != &code_type) {
+            if (li.name[0] != '.')
+                end_function();
+            continue;
+        }
+
+        if (li.name[0] != '.' && !li.name.starts_with("lab_")) {
+            end_function();
+            function_start = lab_addr;
+            continue;
+        }
+    }
+
+    for (const auto [start_addr, end_addr] : funcs) {
+        auto first_it = labels_.lower_bound(start_addr + 1);
+        auto end_it = labels_.lower_bound(end_addr - 1);
+
+        bool can_rename = true;
+        for (auto it = first_it; it != end_it && can_rename; ++it) {
+            auto it2 = branch_sources_.find(it->first);
+            if (it2 == branch_sources_.end())
+                continue;
+            for (const auto src : it2->second) {
+                if (src < start_addr || src > end_addr) {
+                    can_rename = false;
+                    break;
+                }
+            }
+        }
+
+        if (!can_rename)
+            continue;
+
+        //std::cout << labels_.find(start_addr)->second.name << "\t" << hexfmt(start_addr) << "-" << hexfmt(end_addr) << "\n";
+        uint32_t label_cnt = 0;
+        for (auto it = first_it; it != end_it; ++it) {
+            if (it->second.name[0] != '.')
+                it->second.name = ".L" + std::to_string(++label_cnt);
+        }
     }
 }
 
