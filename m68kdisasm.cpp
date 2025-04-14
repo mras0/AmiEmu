@@ -835,6 +835,17 @@ const type& type_from_size(opsize s)
     }
 }
 
+const structure_definition* get_struct_type(const type& t)
+{
+    if (auto st = t.struct_def())
+        return st;
+
+    if (auto pt = t.ptr(); pt && t.len())
+        return pt->struct_def();
+
+    return nullptr;
+}
+
 class struct_field {
 public:
     struct_field(const char* name, const type& t, int32_t offset = auto_offset)
@@ -3828,6 +3839,7 @@ public:
                         desc << "$";
                         desc << hexfmt(static_cast<uint16_t>(n));
                         desc << "(A" << (ea & 7) << ")";
+
                         if (aval.known()) {
                             const int32_t offset = static_cast<int16_t>(ea_data_[i]);
                             const auto addr = aval.raw() + offset;
@@ -3848,22 +3860,32 @@ public:
                                 maybe_add_reg_info(addr);
                                 if (verbose_disasm) extra << " " << desc.str() << " = $" << hexfmt(addr);
                                 break;
-                            } else if (auto [li, lofs] = find_label(addr); li && li->t->struct_def()) {
-                                // Address points inside a structure                                
+                            } else if (auto [li, lofs] = find_label(addr); li && get_struct_type(*li->t)) {
+                                // Address points inside a structure
                                 // addr = aval + offset
                                 // lofs = addr - label_addr
+                                const uint32_t label_addr = addr - lofs;
 
-                                if (auto lit = labels_.find(aval.raw()); lit != labels_.end() && lit->second.t->struct_def()) {
-                                    // Simple case: The address register points at a global structure
-                                    if (auto name = lit->second.t->struct_def()->field_name(offset, inst.type == inst_type::LEA); name) {
+                                auto st = get_struct_type(*li->t);
+                                if (li->t->ptr() && (aval.raw() - label_addr) % st->size() == 0) {
+                                    // Array of structures where "aval" points cleanly at an entry
+                                    if (auto name = st->field_name(offset, inst.type == inst_type::LEA); name) {
                                         std::cout << *name << "(A" << (ea & 7) << ")";
                                         break;
                                     }
-                                    //extra << " Couldn't get field name from " << lit->second.name << " (" << *lit->second.t << ")";
+                                } else if (auto lit = labels_.find(aval.raw()); lit != labels_.end() && get_struct_type(*lit->second.t)) {
+                                    auto st2 = get_struct_type(*lit->second.t);
+
+                                    // Simple case: The address register points at a global structure
+                                    if (auto name = st2->field_name(offset, inst.type == inst_type::LEA); name) {
+                                        std::cout << *name << "(A" << (ea & 7) << ")";
+                                        break;
+                                    }
+                                    // extra << " Couldn't get field name from " << lit->second.name << " (" << *lit->second.t << ")";
                                 } else {
                                     // Find structure type that the address register points to (if any)
-                                    // TODO: Maybe also arrays?
-                                    auto [sf, so] = li->t->struct_def()->field_from_offset(aval.raw() - (addr - lofs));
+                                    // TODO: Mismatched arrays..
+                                    auto [sf, so] = st->field_from_offset(aval.raw() - (addr - lofs));
 
                                     while (sf && so && sf->t().struct_def()) {
                                         std::tie(sf, so) = sf->t().struct_def()->field_from_offset(so);
@@ -3875,16 +3897,16 @@ public:
                                             std::cout << *name << "(A" << (ea & 7) << ")";
                                             break;
                                         }
-                                        //extra << " Could not find field at offset " << offset << " in " << sf->name() << " of type " << sf->t();
+                                        // extra << " Could not find field at offset " << offset << " in " << sf->name() << " of type " << sf->t();
                                     }
-                                    //else if (sf) {
-                                    //    extra << " A" << (ea & 7) << " points at " << sf->name();
-                                    //    if (so)
-                                    //        extra << "+" << so;
-                                    //    extra << " (" << sf->t() << ")";
-                                    //} else {
-                                    //    extra << " Couldn't find label for areg";
-                                    //}
+                                    // else if (sf) {
+                                    //     extra << " A" << (ea & 7) << " points at " << sf->name();
+                                    //     if (so)
+                                    //         extra << "+" << so;
+                                    //     extra << " (" << sf->t() << ")";
+                                    // } else {
+                                    //     extra << " Couldn't find label for areg";
+                                    // }
                                 }
                             } else {
                                 if (verbose_disasm)
@@ -5239,6 +5261,15 @@ private:
             if (auto lit = labels_.find(addr); lit != labels_.end() && lit->second.t == &code_ptr) {
                 //throw std::runtime_error { "TODO: CodePtr at " + hexstring(addr) + " updated to " + hexstring(val.raw()) };
                 add_root(rv, simregs {});
+            }
+        }
+
+        if (size == opsize::l) {
+            if (auto [li, lofs] = find_label(addr); li && get_struct_type(*li->t)) {
+                auto st = get_struct_type(*li->t);
+                if (const auto [field, field_offset] = st->field_at(lofs % st->size()); field && &field->t() == &code_ptr) {
+                    add_root(val.raw(), simregs {});
+                }
             }
         }
 
