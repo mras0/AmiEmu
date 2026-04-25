@@ -130,7 +130,7 @@ public:
             *debug_stream << name_ << " New cyl = " << (int)s_.cyl << " side = " << (s_.side ? "lower" : "upper") << " direction = " << (s_.seek_dir ? "out (towards 0)" : "in (towards 79)") << "\n";
     }
 
-    void read_mfm_track(uint8_t* dest)
+    void read_mfm_track(uint8_t* dest, uint32_t& track_len)
     {
         if (!s_.motor)
             throw std::runtime_error { name_ + " Reading while motor is not on" };
@@ -149,7 +149,7 @@ public:
         if (disk_activity_handler_)
             disk_activity_handler_(tracknum, false);
 
-        data_->read_mfm_track(tracknum, dest);
+        data_->read_mfm_track(tracknum, dest, track_len);
     }
 
     void write_mfm_track(const uint8_t* src)
@@ -244,9 +244,9 @@ void disk_drive::dir_step()
     impl_->dir_step();
 }
 
-void disk_drive::read_mfm_track(uint8_t* dest)
+void disk_drive::read_mfm_track(uint8_t* dest, uint32_t& track_len)
 {
-    impl_->read_mfm_track(dest);
+    impl_->read_mfm_track(dest, track_len);
 }
 
 void disk_drive::write_mfm_track(const uint8_t* src)

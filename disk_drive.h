@@ -36,7 +36,7 @@ public:
     void set_motor(bool enabled);
     void set_side_dir(bool side, bool dir);
     void dir_step();
-    void read_mfm_track(uint8_t* dest); // Need to be able to hold MFM_TRACK_SIZE words
+    void read_mfm_track(uint8_t* dest, uint32_t& track_len); // Need to be able to hold MFM_TRACK_SIZE words
     void write_mfm_track(const uint8_t* src); // Buffer must contain MFM_TRACK_SIZE words
     void set_disk_activity_handler(const disk_activity_handler& handler);
     void show_debug_state(std::ostream& os);

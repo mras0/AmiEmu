@@ -818,6 +818,7 @@ struct custom_state {
     uint16_t dskbyt;
     uint16_t dskpos;
     uint32_t mfm_pos;
+    uint32_t mfm_track_len;
     uint8_t mfm_track[MFM_TRACK_SIZE_WORDS * 2];
 
     uint32_t copper_pt;
@@ -988,8 +989,7 @@ struct custom_state {
     uint16_t get_mfm_word() const
     {
         const uint32_t b = mfm_pos / 8;
-        const uint32_t track_size = MFM_TRACK_SIZE_WORDS * 2;
-        const uint32_t dat = mfm_track[b % track_size] << 16 | mfm_track[(b + 1) % track_size] << 8 | mfm_track[(b + 2) % track_size];
+        const uint32_t dat = mfm_track[b % mfm_track_len] << 16 | mfm_track[(b + 1) % mfm_track_len] << 8 | mfm_track[(b + 2) % mfm_track_len];
         return static_cast<uint16_t>(dat >> (8 - mfm_pos % 8));
     }
 
@@ -1801,7 +1801,7 @@ public:
                 if (DEBUG_DISK)
                     DBGOUT << "Reading track\n";
                 assert(s_.dskpos == 0);
-                cia_.active_drive().read_mfm_track(s_.mfm_track);
+                cia_.active_drive().read_mfm_track(s_.mfm_track, s_.mfm_track_len);
                 s_.dskread = true;
                 s_.dskwait = 0;
 

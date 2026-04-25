@@ -139,8 +139,9 @@ public:
         return csum == 0xffffffff;
     }
 
-    void read_mfm_track(uint8_t tracknum, uint8_t* dest) const override
+    void read_mfm_track(uint8_t tracknum, uint8_t* dest, uint32_t& track_len) const override
     {
+        track_len = 2 * MFM_TRACK_SIZE_WORDS;
         format_std_track(dest, tracknum, &data_[tracknum * NUMSECS * TD_SECTOR]);
     }
 
@@ -260,20 +261,20 @@ public:
         return false;
     }
 
-    void read_mfm_track(uint8_t tracknum, uint8_t* dest) const override
+    void read_mfm_track(uint8_t tracknum, uint8_t* dest, uint32_t& track_len) const override
     {
         assert(tracknum < info_.size());
         const auto& ti = info_[tracknum];
 
         if (!ti.type) {
+            track_len = 2 * MFM_TRACK_SIZE_WORDS;
             format_std_track(dest, tracknum, &data_[ti.offset]);
             return;
         }
 
-        const auto nbytes = (ti.num_bits + 7) / 8;
-        assert(nbytes <= MFM_TRACK_SIZE_WORDS * 2);
-        memcpy(dest, &data_[ti.offset], nbytes);
-        memset(dest + nbytes, 0xaa, MFM_TRACK_SIZE_WORDS * 2 - nbytes); // Should actually adjust MFM data etc. but don't bother for now
+        track_len = (ti.num_bits + 7) / 8;
+        assert(track_len <= MFM_TRACK_SIZE_WORDS * 2);
+        memcpy(dest, &data_[ti.offset], track_len);
     }
 
     void write_mfm_track(uint8_t tracknum, const uint8_t* src) override

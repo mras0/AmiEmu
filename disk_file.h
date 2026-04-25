@@ -14,7 +14,7 @@ public:
     virtual uint8_t num_cylinders() const = 0;
     virtual bool ofs_bootable() const = 0;
 
-    virtual void read_mfm_track(uint8_t tracknum, uint8_t* dest) const = 0; // Need to be able to hold MFM_TRACK_SIZE words
+    virtual void read_mfm_track(uint8_t tracknum, uint8_t* dest, uint32_t& track_len) const = 0; // Need to be able to hold MFM_TRACK_SIZE words
     virtual void write_mfm_track(uint8_t tracknum, const uint8_t* src) = 0; // Buffer must contain MFM_TRACK_SIZE words
 };
 

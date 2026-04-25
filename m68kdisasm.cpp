@@ -730,6 +730,7 @@ const type bcpl_seglist_type { base_data_type::bcpl_seglist_ };
 const type patchitem_type { base_data_type::patchitem_ };
 
 const type hack_str_type { base_data_type::unknown_ };
+const type hack_plist_type { base_data_type::unknown_ };
 
 std::unordered_map<std::string, const type*> typenames {
     { "UNKNOWN", &unknown_type },
@@ -742,6 +743,7 @@ std::unordered_map<std::string, const type*> typenames {
     { "JTABW", &jumptab_word_type },
     { "BSEGLIST", &bcpl_seglist_type },
     { "STR", &hack_str_type },
+    { "PLIST", &hack_plist_type },
 };
 
 uint32_t sizeof_type(const type& t);
@@ -1143,8 +1145,18 @@ const type* parse_type(const std::string& str)
             t = &make_pointer_type(*t);
         } else if (str[p] == '[' && ++p < str.length()) {
             uint32_t len = 0;
-            while (p < str.length() && isdigit(str[p]))
-                len = len * 10 + (str[p++] - '0');
+            if (p < str.length() && str[p] == '$') {
+                ++p;
+                for (; p < str.length(); ++p) {
+                    const auto val = digitval(str[p]);
+                    if (val >= 16)
+                        break;
+                    len = len << 4 | val;
+                }
+            } else {
+                while (p < str.length() && isdigit(str[p]))
+                    len = len * 10 + (str[p++] - '0');
+            }
             if (p >= str.length() || str[p] != ']')
                 return nullptr;
             ++p;
@@ -4246,27 +4258,47 @@ private:
             const auto ir2 = get_u16(&data_[pos + 2]);
             pos += 4;
             len -= 2;
+
+            fixed_width_line fwl { std::cout };
+
+            auto start_comment = [&](bool optional) {
+                if (optional && !show_bytes)
+                    return;
+                fwl.flush(true);
+                std::cout << ";";
+                if (show_bytes) {
+                    std::cout << hexfmt(pos - 4, 6) << " " << hexfmt(ir1) << hexfmt(ir2);
+                }
+            };
+
             if (ir1 & 1) {
                 // Wait/skip
-                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ",$" << hexfmt(ir2) << "\t; ";
+                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ",$" << hexfmt(ir2);
+                start_comment(false);
                 if (ir1 == 0xffff && ir2 == 0xfffe) {
-                    std::cout << "End of copperlist\n";
+                    std::cout << " End of copperlist\n";
                 } else {
                     const auto vp = (ir1 >> 8) & 0xff;
                     const auto hp = ir1 & 0xfe;
                     const auto ve = 0x80 | ((ir2 >> 8) & 0x7f);
                     const auto he = ir2 & 0xfe;
-                    std::cout << (ir2 & 1 ? "Skip if" : "Wait for") << " vpos >= $" << hexfmt(vp & ve, 2) << " and hpos >= $" << hexfmt(hp & he, 2) << " BFD " << !!(ir2 & 0x8000) << "\n";
+                    std::cout << " " << (ir2 & 1 ? "Skip if" : "Wait for") << " vpos >= $" << hexfmt(vp & ve, 2) << " and hpos >= $" << hexfmt(hp & he, 2) << " BFD " << !!(ir2 & 0x8000) << "\n";
                 }
             } else if (ir1 >= 0x200) {
                 // Not a valid register
-                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ",$" << hexfmt(ir2) << "\n";
+                std::cout << "\tDC.W\t$" << hexfmt(ir1) << ",$" << hexfmt(ir2);
+                start_comment(true);
+                std::cout << "\n";
             } else {
                 std::ostringstream extra;
                 maybe_add_custom_bit_info(extra, ir1, ir2);
                 std::cout << "\tDC.W\t" << custom_regname[(ir1 >> 1) & 0xff] << ",$" << hexfmt(ir2);
-                if (!extra.str().empty())
-                    std::cout << "\t;" << extra.str();
+                if (!extra.str().empty()) {
+                    start_comment(false);
+                    std::cout << " " << extra.str();
+                } else {
+                    start_comment(true);
+                }
                 std::cout << "\n"; 
             }
         }
@@ -5812,9 +5844,10 @@ void analyzer::handle_predef_info()
         if (&t == &hack_str_type) {
             maybe_find_string_at(i.first, i.second.name);
             continue;
-        }
-
-        if (&t == &bcpl_seglist_type) {
+        } else if (&t == &hack_plist_type) {
+            handle_whd_patchlist(i.first, true);
+            continue;
+        } else if (&t == &bcpl_seglist_type) {
             handle_bseglist_at(i.first, i.second.name);
             continue;
         }
@@ -6026,7 +6059,7 @@ uint32_t analyzer::handle_whd_patchlist(const uint32_t pl_start, bool analyze)
             const auto taddr = pl_start + static_cast<int16_t>(get_u16(&data_[addr]));
             addr += 2;
             if (!analyze) {
-                std::cout << "\tPL_NEXT\t";
+                std::cout << "\tPL_NEXT\t"; 
                 print_addr(taddr);
                 std::cout << "\n";
             } else {
@@ -6223,6 +6256,8 @@ void analyzer::make_local_labels()
     }
 
     for (const auto [start_addr, end_addr] : funcs) {
+        if (start_addr + 1 >= end_addr - 1)
+            continue;
         auto first_it = labels_.lower_bound(start_addr + 1);
         auto end_it = labels_.lower_bound(end_addr - 1);
 
