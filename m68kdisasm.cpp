@@ -3920,6 +3920,11 @@ public:
                                     //     extra << " Couldn't find label for areg";
                                     // }
                                 }
+                            } else if (li && !lofs) {
+                                std::cout << li->name << "-";
+                                print_addr(aval.raw());
+                                std::cout << "(A" << (ea & 7) << ")";
+                                break;
                             } else {
                                 if (verbose_disasm)
                                     extra << " " << desc.str() << " = $" << hexfmt(addr);
