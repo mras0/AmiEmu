@@ -3920,7 +3920,7 @@ public:
                                     //     extra << " Couldn't find label for areg";
                                     // }
                                 }
-                            } else if (li && !lofs) {
+                            } else if (li && !lofs && addr >= 0x400) {
                                 std::cout << li->name << "-";
                                 print_addr(aval.raw());
                                 std::cout << "(A" << (ea & 7) << ")";
@@ -4385,17 +4385,23 @@ private:
                 //assert(!"TODO");
                 end_pos = next_pos;
             }
+            uint32_t last_pos = pos;
             for (const auto& f : t.struct_def()->fields()) {
                 if (f.offset() < 0)
                     continue;
                 auto p = pos + f.offset();
                 if (p >= end_pos)
                     break;
+                while (last_pos < p)
+                    handle_raw_data(last_pos, p);
                 const auto n = name + "." + f.name();
-                if (verbose_disasm)
+                //if (verbose_disasm)
                     std::cout << "; " << std::left << std::setw(line_width) << n << " $" << hexfmt(p) << " " << f.t() << "\n";
                 handle_typed_data(p, next_pos, f.t(), n);
+                last_pos = pos + f.end_offset();
             }
+            while (last_pos < end_pos)
+                handle_raw_data(last_pos, end_pos);
             pos = end_pos;
             return true;
         }
@@ -4443,6 +4449,18 @@ private:
         }
     }
 
+    void handle_raw_data(uint32_t& pos, uint32_t end)
+    {
+        // ALIGN
+        if ((pos & 1) || end == pos + 1) {
+            std::cout << "\tDC.B\t$" << hexfmt(data_[pos]) << "\n";
+            if (++pos == end)
+                return;
+        }
+
+        handle_array_range(pos, end & ~1, 2);
+    }
+
     void handle_data_area_checked(uint32_t pos, uint32_t end)
     {
         while (pos < end) {
@@ -4456,14 +4474,7 @@ private:
                 std::cout << "; $" << hexfmt(pos) << "\n";
             }
 
-            // ALIGN
-            if ((pos & 1) || next_pos == pos + 1) {
-                std::cout << "\tDC.B\t$" << hexfmt(data_[pos]) << "\n";
-                if (++pos == next_pos)
-                    continue;
-            }                
-
-            handle_array_range(pos, next_pos & ~1, 2);
+            handle_raw_data(pos, next_pos);
         }
     }
 
